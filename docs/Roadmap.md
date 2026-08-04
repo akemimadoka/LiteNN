@@ -3256,6 +3256,12 @@ Priority classes:
             KV dtype, context and decode lengths, and exact command without retaining the private model path. Run an
             adjacent LiteNN cache-hit decode over the same generated-token window; only a measured stage deficit may
             promote the next kernel or scheduler change to P0.
+            - [x] Add `benchmark/run_llama_cpp_completion_control.py` with binary/host/build fingerprints, balanced
+                  thread ordering, per-run progress and metrics, and full artifact path/prompt redaction by default.
+            - [x] Establish a clean local control: two balanced repetitions measured T2/T4/T8 at
+                  `5.080/4.810/4.115 t/s`; current LiteNN is within `0.45%` of the strongest local median.
+            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`; it remains `34.84%` faster than
+                  the locally reproducible T2 control and therefore remains the evidence gate for the next CPU P0.
       - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
             and CPU time regressed slightly.
       - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs

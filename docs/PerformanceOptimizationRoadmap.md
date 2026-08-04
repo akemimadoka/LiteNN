@@ -107,6 +107,13 @@ P0 implementation order:
     context, prompt/decode length, and the exact completion command in a redacted control artifact.
   - Compare actual completion decode, not only `llama-bench`, and run an adjacent LiteNN cache-hit control with the same
     generated-token window. Promote only the measured stage difference to P0.
+  - [x] Add a repository-owned actual-completion control runner. `benchmark/run_llama_cpp_completion_control.py`
+    captures binary/host/build/runtime fingerprints, alternates thread order, emits live progress, parses per-run eval
+    timing, and redacts model, executable, prompt-by-default, extra absolute paths, and raw stdout/stderr artifacts.
+  - [x] Establish the clean local actual-completion baseline. Two balanced repetitions measured T2/T4/T8 at
+    `5.080/4.810/4.115 t/s`; LiteNN's `5.057 t/s` is within `0.45%` of the strongest local control.
+  - [ ] Obtain and reproduce the exact external build and runtime configuration. The unresolved `6.85 t/s` control is
+    `34.84%` faster than the local llama.cpp T2 median and remains the evidence gate for another kernel P0.
 - [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
   noise and CPU time slightly regressed, so the uncommitted route was removed.
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,

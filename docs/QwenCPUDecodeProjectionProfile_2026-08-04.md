@@ -215,3 +215,46 @@ Two follow-up experiments were rejected:
 
 The next performance gate is to reproduce the stronger `6.85 t/s` external control configuration. Until then, retain
 the current kernels and semaphore worker path, and require a fresh stage difference before another CPU P0 change.
+
+## Repository-Owned Actual-Completion Control
+
+`benchmark/run_llama_cpp_completion_control.py` now makes the actual prompt/decode control repeatable without retaining
+the private model path. It records the executable SHA-256, llama.cpp version and compiler, selected CMake feature
+flags, host CPU and OS, runtime ISA report, prompt hash, context and decode lengths, KV types, thread/affinity/polling
+policy, mmap/repack/warmup settings, redacted command arrays, every run, and per-thread medians. Sanitized stdout and
+stderr are retained beside the JSON, including JSON-escaped Windows paths. The older `llama-bench` control now applies
+the same path redaction to its raw logs and command summary.
+
+The validating command shape was:
+
+```powershell
+python311 benchmark/run_llama_cpp_completion_control.py `
+  --model <model.gguf> `
+  --llama-completion <llama-completion> `
+  --output-json build/llama_completion_control.json `
+  --output-md build/llama_completion_control.md `
+  --prompt hello --keep-prompt `
+  --threads 2 4 8 --repetitions 2 --predict 32 --context-size 256
+```
+
+The runner alternates forward and reverse thread order between repetitions to reduce monotonic frequency/thermal bias.
+On the same Ryzen 9 9950X host and llama.cpp `b81c2cdd7` Release CPU-only binary, the balanced actual-completion result
+was:
+
+| Threads | Runs | Median latency | Median throughput | Throughput range |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 2 | `196.900 ms/token` | `5.080 t/s` | `5.07-5.09 t/s` |
+| 4 | 2 | `207.905 ms/token` | `4.810 t/s` | `4.80-4.82 t/s` |
+| 8 | 2 | `242.925 ms/token` | `4.115 t/s` | `4.10-4.13 t/s` |
+
+This independently confirms the earlier T2/T8 control. Against the strongest local T2 median, LiteNN's current
+`197.748 ms/token` and `5.057 t/s` are `0.43%` slower by latency and `0.45%` slower by throughput: local parity, not a
+material lead or deficit. The external `6.85 t/s` result is still `34.84%` faster than this locally reproducible
+llama.cpp control, so its exact build and runtime configuration remains the unresolved comparison target.
+
+A first five-thread matrix was excluded from evidence after its parent command had previously been force-terminated at
+the tool timeout boundary. It reported only `3.32 t/s` at T2, while an immediate isolated T2 rerun returned `5.12 t/s`
+and the clean alternating matrix returned `5.07-5.09 t/s`. Because an overlapping or resource-retaining child process
+could not be ruled out, the slower matrix is diagnostic evidence about benchmark orchestration, not runtime evidence.
+The runner now prints the start, wall duration, latency, and throughput of every repetition so such interference is
+visible while the control is running.
