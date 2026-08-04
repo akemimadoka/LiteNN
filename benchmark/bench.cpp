@@ -90,6 +90,23 @@ extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" void litenn_cpu_swiglu_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
+                                      std::int64_t gateRows, std::int64_t gateColumns, std::int64_t gateRowStride,
+                                      std::int64_t gateColumnStride, const float*, const float* upAligned,
+                                      std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns,
+                                      std::int64_t upRowStride, std::int64_t upColumnStride, float*, float* outAligned,
+                                      std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+                                      std::int64_t outRowStride, std::int64_t outColumnStride);
+
+extern "C" void litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+    const float*, const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows, std::int64_t gateColumns,
+    std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*, const float* upAligned,
+    std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns, std::int64_t upRowStride,
+    std::int64_t upColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned, std::int64_t rhsOffset,
+    std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned, std::int64_t outOffset,
+    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+    std::uint64_t formatValue, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
 extern "C" void litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
     const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows, std::int64_t lhsColumns,
     std::int64_t lhsRowStride, std::int64_t lhsColumnStride, const std::uint8_t*, const std::uint8_t* rhs0Aligned,
@@ -1678,10 +1695,20 @@ namespace
 		std::size_t packedBytes;
 	};
 
+	enum class GGMLProjectionStreamActivationMode
+	{
+		Distinct,
+		Shared,
+		SwiGLUMaterialized,
+		SwiGLUFused,
+		SwiGLUPaired,
+	};
+
 	void BMGGMLFieldInterleavedV4ColdProjectionStream(benchmark::State& state,
 	                                                  std::span<const QuantizedBlockFormat> formats,
 	                                                  std::size_t inputWidth, std::size_t outputWidth,
-	                                                  std::uint64_t threadCount, bool uniqueActivations)
+	                                                  std::uint64_t threadCount,
+	                                                  GGMLProjectionStreamActivationMode activationMode)
 	{
 		constexpr std::size_t packedAlignment = 64;
 		const auto alignPackedOffset = [](std::size_t value) {
@@ -1728,22 +1755,57 @@ namespace
 		}
 
 		std::vector<std::uint8_t> packed(allocationBytes);
+		const auto usesSwiGLU = activationMode == GGMLProjectionStreamActivationMode::SwiGLUMaterialized ||
+		                        activationMode == GGMLProjectionStreamActivationMode::SwiGLUFused ||
+		                        activationMode == GGMLProjectionStreamActivationMode::SwiGLUPaired;
+		const auto fusedSwiGLU = activationMode == GGMLProjectionStreamActivationMode::SwiGLUFused;
+		const auto pairedSwiGLU = activationMode == GGMLProjectionStreamActivationMode::SwiGLUPaired;
+		const auto sharedActivation = activationMode == GGMLProjectionStreamActivationMode::Shared;
 		std::mt19937 activationRng(0);
 		std::uniform_real_distribution<float> activationDist(-1.0F, 1.0F);
-		const auto activationCount = uniqueActivations ? entries.size() : std::size_t{ 1 };
+		const auto activationCount = sharedActivation ? std::size_t{ 1 } : entries.size();
 		std::vector<float> activations(activationCount * inputWidth);
-		for (auto& value : activations)
+		std::vector<float> gates;
+		std::vector<float> ups;
+		if (usesSwiGLU)
 		{
-			value = activationDist(activationRng);
+			gates.resize(activationCount * inputWidth);
+			ups.resize(activationCount * inputWidth);
+			for (auto& value : gates)
+			{
+				value = activationDist(activationRng);
+			}
+			for (auto& value : ups)
+			{
+				value = activationDist(activationRng);
+			}
+			for (std::size_t i = 0; i < activationCount; ++i)
+			{
+				litenn_cpu_swiglu_f32(nullptr, gates.data() + i * inputWidth, 0, 1,
+				                      static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1,
+				                      nullptr, ups.data() + i * inputWidth, 0, 1, static_cast<std::int64_t>(inputWidth),
+				                      static_cast<std::int64_t>(inputWidth), 1, nullptr,
+				                      activations.data() + i * inputWidth, 0, 1, static_cast<std::int64_t>(inputWidth),
+				                      static_cast<std::int64_t>(inputWidth), 1);
+			}
+		}
+		else
+		{
+			for (auto& value : activations)
+			{
+				value = activationDist(activationRng);
+			}
 		}
 		std::vector<float> stagedReference(outputWidth);
 		std::vector<float> output(outputWidth);
 		float maxAbsDelta = 0.0F;
 		std::array<bool, 2> validatedFormats{};
 		const auto activationForEntry = [&](std::size_t entryIndex) {
-			const auto activationIndex = uniqueActivations ? entryIndex : std::size_t{ 0 };
+			const auto activationIndex = sharedActivation ? std::size_t{ 0 } : entryIndex;
 			return activations.data() + activationIndex * inputWidth;
 		};
+		const auto gateForEntry = [&](std::size_t entryIndex) { return gates.data() + entryIndex * inputWidth; };
+		const auto upForEntry = [&](std::size_t entryIndex) { return ups.data() + entryIndex * inputWidth; };
 		for (std::size_t i = 0; i < entries.size(); ++i)
 		{
 			const auto& entry = entries[i];
@@ -1766,26 +1828,68 @@ namespace
 				    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
 				    static_cast<std::uint64_t>(entry.format), threadCount,
 				    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
-				litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
-				    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth),
-				    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data() + entry.offset, 0,
-				    static_cast<std::int64_t>(entry.packedBytes), 1, nullptr, output.data(), 0, 1,
-				    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
-				    static_cast<std::uint64_t>(entry.format), threadCount,
-				    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+				if (fusedSwiGLU || pairedSwiGLU)
+				{
+					litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+					    nullptr, gateForEntry(i), 0, 1, static_cast<std::int64_t>(inputWidth),
+					    static_cast<std::int64_t>(inputWidth), 1, nullptr, upForEntry(i), 0, 1,
+					    static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1, nullptr,
+					    packed.data() + entry.offset, 0, static_cast<std::int64_t>(entry.packedBytes), 1, nullptr,
+					    output.data(), 0, 1, static_cast<std::int64_t>(outputWidth),
+					    static_cast<std::int64_t>(outputWidth), 1, static_cast<std::uint64_t>(entry.format),
+					    threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+				}
+				else
+				{
+					litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+					    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth),
+					    static_cast<std::int64_t>(inputWidth), 1, nullptr, packed.data() + entry.offset, 0,
+					    static_cast<std::int64_t>(entry.packedBytes), 1, nullptr, output.data(), 0, 1,
+					    static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+					    static_cast<std::uint64_t>(entry.format), threadCount,
+					    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+				}
 				maxAbsDelta = std::max(maxAbsDelta, MaxAbsDifference(output, stagedReference));
 				validatedFormats[validationIndex] = true;
 			}
 		}
 
-		const auto invoke = [&](const GGMLPackedProjectionStreamEntry& entry, std::size_t entryIndex) {
-			const auto* activation = activationForEntry(entryIndex);
+		const auto invokeFused = [&](const GGMLPackedProjectionStreamEntry& entry, std::size_t entryIndex) {
+			litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, gateForEntry(entryIndex), 0, 1, static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, upForEntry(entryIndex), 0, 1,
+			    static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1, nullptr,
+			    packed.data() + entry.offset, 0, static_cast<std::int64_t>(entry.packedBytes), 1, nullptr,
+			    output.data(), 0, 1, static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
+			    static_cast<std::uint64_t>(entry.format), threadCount,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+		const auto invokeMaterialized = [&](const GGMLPackedProjectionStreamEntry& entry, std::size_t entryIndex) {
+			auto* activation = activationForEntry(entryIndex);
+			if (usesSwiGLU)
+			{
+				litenn_cpu_swiglu_f32(nullptr, gateForEntry(entryIndex), 0, 1, static_cast<std::int64_t>(inputWidth),
+				                      static_cast<std::int64_t>(inputWidth), 1, nullptr, upForEntry(entryIndex), 0, 1,
+				                      static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth), 1,
+				                      nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth),
+				                      static_cast<std::int64_t>(inputWidth), 1);
+			}
 			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
 			    nullptr, activation, 0, 1, static_cast<std::int64_t>(inputWidth), static_cast<std::int64_t>(inputWidth),
 			    1, nullptr, packed.data() + entry.offset, 0, static_cast<std::int64_t>(entry.packedBytes), 1, nullptr,
 			    output.data(), 0, 1, static_cast<std::int64_t>(outputWidth), static_cast<std::int64_t>(outputWidth), 1,
 			    static_cast<std::uint64_t>(entry.format), threadCount,
 			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+		};
+		const auto invoke = [&](const GGMLPackedProjectionStreamEntry& entry, std::size_t entryIndex) {
+			if (fusedSwiGLU)
+			{
+				invokeFused(entry, entryIndex);
+			}
+			else
+			{
+				invokeMaterialized(entry, entryIndex);
+			}
 		};
 
 		const auto measureMedianHotCall = [&](std::size_t index) {
@@ -1820,18 +1924,50 @@ namespace
 		for (std::size_t i = 0; i < entries.size(); ++i)
 		{
 			invoke(entries[i], i);
+			if (pairedSwiGLU)
+			{
+				invokeFused(entries[i], i);
+			}
 		}
 
-		double measuredSeconds = 0.0;
-		for (auto _ : state)
-		{
+		const auto measureSequence = [&](const auto& callback) {
 			const auto begin = std::chrono::steady_clock::now();
 			for (std::size_t i = 0; i < entries.size(); ++i)
 			{
-				invoke(entries[i], i);
+				callback(entries[i], i);
 			}
 			const auto end = std::chrono::steady_clock::now();
-			const auto elapsed = std::chrono::duration<double>(end - begin).count();
+			return std::chrono::duration<double>(end - begin).count();
+		};
+		double measuredSeconds = 0.0;
+		double materializedMeasuredSeconds = 0.0;
+		double fusedMeasuredSeconds = 0.0;
+		std::size_t iterationIndex = 0;
+		for (auto _ : state)
+		{
+			double elapsed = 0.0;
+			if (pairedSwiGLU)
+			{
+				double materializedElapsed = 0.0;
+				double fusedElapsed = 0.0;
+				if ((iterationIndex++ & 1U) == 0)
+				{
+					materializedElapsed = measureSequence(invokeMaterialized);
+					fusedElapsed = measureSequence(invokeFused);
+				}
+				else
+				{
+					fusedElapsed = measureSequence(invokeFused);
+					materializedElapsed = measureSequence(invokeMaterialized);
+				}
+				materializedMeasuredSeconds += materializedElapsed;
+				fusedMeasuredSeconds += fusedElapsed;
+				elapsed = fusedElapsed;
+			}
+			else
+			{
+				elapsed = measureSequence(invoke);
+			}
 			measuredSeconds += elapsed;
 			state.SetIterationTime(elapsed);
 			benchmark::DoNotOptimize(output.data());
@@ -1848,11 +1984,25 @@ namespace
 		state.counters["effective_gbytes_per_second"] =
 		    benchmark::Counter(static_cast<double>(packedPayloadBytes) / sequenceSeconds / 1.0e9);
 		state.counters["full_sequence_ms"] = benchmark::Counter(sequenceSeconds * 1000.0);
+		state.counters["fused_swiglu"] = benchmark::Counter(fusedSwiGLU ? 1.0 : 0.0);
 		state.counters["grouped"] = benchmark::Counter(0.0);
 		state.counters["hot_call_ms"] = benchmark::Counter(weightedHotCallSeconds * 1000.0);
 		state.counters["hot_sequence_ms"] = benchmark::Counter(hotSequenceSeconds * 1000.0);
 		state.counters["max_abs_delta"] = benchmark::Counter(static_cast<double>(maxAbsDelta));
+		state.counters["materializes_swiglu"] =
+		    benchmark::Counter(activationMode == GGMLProjectionStreamActivationMode::SwiGLUMaterialized ? 1.0 : 0.0);
 		state.counters["packed_bytes"] = benchmark::Counter(static_cast<double>(packedPayloadBytes));
+		state.counters["paired_swiglu"] = benchmark::Counter(pairedSwiGLU ? 1.0 : 0.0);
+		if (pairedSwiGLU)
+		{
+			const auto materializedSequenceSeconds = materializedMeasuredSeconds / iterations;
+			const auto fusedSequenceSeconds = fusedMeasuredSeconds / iterations;
+			state.counters["materialized_sequence_ms"] = benchmark::Counter(materializedSequenceSeconds * 1000.0);
+			state.counters["fused_sequence_ms"] = benchmark::Counter(fusedSequenceSeconds * 1000.0);
+			state.counters["fusion_saved_ms"] =
+			    benchmark::Counter((materializedSequenceSeconds - fusedSequenceSeconds) * 1000.0);
+			state.counters["fusion_speedup"] = benchmark::Counter(materializedSequenceSeconds / fusedSequenceSeconds);
+		}
 		state.counters["q4_calls"] = benchmark::Counter(static_cast<double>(q4Calls));
 		state.counters["q4_hot_call_ms"] = benchmark::Counter(q4HotCallSeconds.value_or(0.0) * 1000.0);
 		state.counters["q6_calls"] = benchmark::Counter(static_cast<double>(q6Calls));
@@ -5005,21 +5155,31 @@ namespace
 		constexpr std::uint64_t projectionStreamThreadCount = 8;
 		const auto registerProjectionStream =
 		    [projectionStreamThreadCount](std::string_view name, std::span<const QuantizedBlockFormat> formats,
-		                                  bool uniqueActivations = true) {
+		                                  GGMLProjectionStreamActivationMode activationMode) {
 			    auto* benchmarkCase = benchmark::RegisterBenchmark(
 			        std::format("GGMLFieldInterleavedV4ColdProjectionStream/{}/T{}/batch:1/in:13824/out:5120", name,
 			                    projectionStreamThreadCount),
-			        [formats, uniqueActivations, projectionStreamThreadCount](benchmark::State& state) {
+			        [formats, activationMode, projectionStreamThreadCount](benchmark::State& state) {
 				        BMGGMLFieldInterleavedV4ColdProjectionStream(state, formats, 13824, 5120,
-				                                                     projectionStreamThreadCount, uniqueActivations);
+				                                                     projectionStreamThreadCount, activationMode);
 			        });
 			    benchmarkCase->UseManualTime();
 			    benchmarkCase->Unit(benchmark::kMillisecond);
 		    };
-		registerProjectionStream("qwen_q4_k_down_24", kQwenQ4KDownProjectionStream);
-		registerProjectionStream("qwen_q6_k_down_24", kQwenQ6KDownProjectionStream);
-		registerProjectionStream("qwen_q4_k_m_down_48", kQwenMixedDownProjectionStream);
-		registerProjectionStream("qwen_q4_k_m_down_48_shared_activation", kQwenMixedDownProjectionStream, false);
+		registerProjectionStream("qwen_q4_k_down_24", kQwenQ4KDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::Distinct);
+		registerProjectionStream("qwen_q6_k_down_24", kQwenQ6KDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::Distinct);
+		registerProjectionStream("qwen_q4_k_m_down_48", kQwenMixedDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::Distinct);
+		registerProjectionStream("qwen_q4_k_m_down_48_shared_activation", kQwenMixedDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::Shared);
+		registerProjectionStream("qwen_q4_k_m_down_48_swiglu_materialized", kQwenMixedDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::SwiGLUMaterialized);
+		registerProjectionStream("qwen_q4_k_m_down_48_swiglu_fused", kQwenMixedDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::SwiGLUFused);
+		registerProjectionStream("qwen_q4_k_m_down_48_swiglu_paired", kQwenMixedDownProjectionStream,
+		                         GGMLProjectionStreamActivationMode::SwiGLUPaired);
 		for (const auto format : ggmlQ8KStagedBlockFormats)
 		{
 			for (const auto threadCount : kGGMLThreadCounts)
