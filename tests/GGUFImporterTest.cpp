@@ -1164,6 +1164,24 @@ TEST(GGUFLLMGeneration, GreedySamplingKeepsLowestTokenIdForTiedLogits)
 	EXPECT_EQ(sampler.drawCount, 0u);
 }
 
+TEST(GGUFLLMGeneration, SuppressesTokenBeforeGreedySampling)
+{
+	GGUF::LLMSamplerState sampler{ .config = { .mode = GGUF::LLMSamplingMode::Greedy } };
+	const std::array<float, 4> logits{ -1.0f, 3.0f, 5.0f, 2.0f };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler, {}, 2), 1);
+}
+
+TEST(GGUFLLMGeneration, SuppressesTokenBeforeRandomTopKSampling)
+{
+	GGUF::LLMSamplerState sampler{
+		.config = { .mode = GGUF::LLMSamplingMode::Random, .temperature = 1.0f, .topK = 1, .seed = 42 }
+	};
+	const std::array<float, 4> logits{ -1.0f, 3.0f, 5.0f, 2.0f };
+
+	EXPECT_EQ(GGUF::SelectNextToken(logits, sampler, {}, 2), 1);
+}
+
 TEST(GGUFLLMGeneration, ZeroTemperatureUsesGreedySamplingWithoutAdvancingRng)
 {
 	GGUF::LLMSamplerState sampler{

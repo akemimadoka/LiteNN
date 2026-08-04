@@ -47,7 +47,8 @@ namespace LiteNN::GGUF
 		}
 
 		std::vector<Candidate> BuildCandidates(std::span<const float> logits, const LLMSamplingConfig& config,
-		                                       std::span<const std::int32_t> history)
+		                                       std::span<const std::int32_t> history,
+		                                       std::optional<std::int32_t> suppressedTokenId)
 		{
 			if (logits.empty() || logits.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
 			{
@@ -68,10 +69,18 @@ namespace LiteNN::GGUF
 					throw std::runtime_error("LLM sampling logits must be finite");
 				}
 				const auto tokenId = static_cast<std::int32_t>(i);
+				if (suppressedTokenId == tokenId)
+				{
+					continue;
+				}
 				const auto adjusted = config.repeatPenalty > 1.0f && seenTokens.contains(tokenId)
 				                          ? ApplyRepeatPenalty(logits[i], config.repeatPenalty)
 				                          : logits[i];
 				candidates.push_back({ .tokenId = tokenId, .logit = adjusted, .weight = 0.0 });
+			}
+			if (candidates.empty())
+			{
+				throw std::runtime_error("LLM sampling suppressed every candidate token");
 			}
 			std::ranges::sort(candidates, [](const Candidate& lhs, const Candidate& rhs) {
 				if (lhs.logit == rhs.logit)
@@ -88,7 +97,8 @@ namespace LiteNN::GGUF
 		}
 
 		std::int32_t SelectGreedyToken(std::span<const float> logits, const LLMSamplingConfig& config,
-		                               std::span<const std::int32_t> history)
+		                               std::span<const std::int32_t> history,
+		                               std::optional<std::int32_t> suppressedTokenId)
 		{
 			if (logits.empty() || logits.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
 			{
@@ -101,6 +111,7 @@ namespace LiteNN::GGUF
 			}
 			std::int32_t bestToken = 0;
 			float bestLogit = -std::numeric_limits<float>::infinity();
+			bool foundCandidate = false;
 			for (std::size_t i = 0; i < logits.size(); ++i)
 			{
 				if (!std::isfinite(logits[i]))
@@ -108,6 +119,10 @@ namespace LiteNN::GGUF
 					throw std::runtime_error("LLM sampling logits must be finite");
 				}
 				const auto tokenId = static_cast<std::int32_t>(i);
+				if (suppressedTokenId == tokenId)
+				{
+					continue;
+				}
 				const auto adjusted = config.repeatPenalty > 1.0f && seenTokens.contains(tokenId)
 				                          ? ApplyRepeatPenalty(logits[i], config.repeatPenalty)
 				                          : logits[i];
@@ -115,7 +130,12 @@ namespace LiteNN::GGUF
 				{
 					bestLogit = adjusted;
 					bestToken = tokenId;
+					foundCandidate = true;
 				}
+			}
+			if (!foundCandidate)
+			{
+				throw std::runtime_error("LLM sampling suppressed every candidate token");
 			}
 			return bestToken;
 		}
@@ -261,14 +281,19 @@ namespace LiteNN::GGUF
 	}
 
 	std::int32_t SelectNextToken(std::span<const float> logits, LLMSamplerState& sampler,
-	                             std::span<const std::int32_t> history)
+	                             std::span<const std::int32_t> history, std::optional<std::int32_t> suppressedTokenId)
 	{
 		ValidateSamplingConfig(sampler.config);
+		if (suppressedTokenId &&
+		    (*suppressedTokenId < 0 || static_cast<std::size_t>(*suppressedTokenId) >= logits.size()))
+		{
+			throw std::runtime_error("LLM sampling suppressed token id is outside the logits vocabulary");
+		}
 		if (sampler.config.mode == LLMSamplingMode::Greedy || sampler.config.temperature == 0.0f)
 		{
-			return SelectGreedyToken(logits, sampler.config, history);
+			return SelectGreedyToken(logits, sampler.config, history, suppressedTokenId);
 		}
-		auto candidates = BuildCandidates(logits, sampler.config, history);
+		auto candidates = BuildCandidates(logits, sampler.config, history, suppressedTokenId);
 
 		const auto maxLogit = candidates.front().logit;
 		double totalWeight = 0.0;
@@ -317,9 +342,9 @@ namespace LiteNN::GGUF
 	}
 
 	std::int32_t SelectNextToken(const Tensor<CPU>& logits, LLMSamplerState& sampler,
-	                             std::span<const std::int32_t> history)
+	                             std::span<const std::int32_t> history, std::optional<std::int32_t> suppressedTokenId)
 	{
-		return SelectNextToken(LastTokenLogitsView(logits), sampler, history);
+		return SelectNextToken(LastTokenLogitsView(logits), sampler, history, suppressedTokenId);
 	}
 
 	std::int32_t StepGeneration(LLMGenerationState& generation, std::span<const float> logits, LLMSamplerState& sampler)

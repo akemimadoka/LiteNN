@@ -71,7 +71,8 @@ it writes both lists to that file. The decode loop defaults to greedy sampling;
 `--sample random` enables seedable temperature/top-k/top-p sampling with an
 optional repeat penalty. Generation stops early on `tokenizer.ggml.eos_token_id`
 when present; pass `--ignore-eos` to force the requested number of generated
-tokens. The loop also rejects prompts whose prompt-plus-generated length exceeds
+tokens by suppressing EOS during sampling, matching llama.cpp. The loop also
+rejects prompts whose prompt-plus-generated length exceeds
 the model context length.
 `--logits-output` can be added to any decode-loop command to write the final
 step's last-token logits as `index: value` lines, matching the prefill dump

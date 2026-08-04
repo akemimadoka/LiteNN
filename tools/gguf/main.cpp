@@ -2213,7 +2213,11 @@ namespace
 			}
 			else
 			{
-				currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history);
+				const auto suppressedEosToken =
+				    !options.stopAtEos && tokenizer.eosTokenId
+				        ? std::optional<std::int32_t>{ static_cast<std::int32_t>(*tokenizer.eosTokenId) }
+				        : std::nullopt;
+				currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history, suppressedEosToken);
 				history.push_back(currentToken);
 				++generatedTokenCount;
 				if (options.stopAtEos && tokenizer.eosTokenId &&
