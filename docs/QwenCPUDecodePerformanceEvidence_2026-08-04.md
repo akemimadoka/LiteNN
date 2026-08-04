@@ -102,7 +102,8 @@ same matrix remains hot, so a broad kernel rewrite is not the first evidence-bac
 
 `GGMLFieldInterleavedV4ColdProjectionStream` rotates through prepared weights larger than the host's aggregate LLC.
 The production row follows the observed 24 Q4_K plus 24 Q6_K Down order. Distinct-activation rows force the same Q8_K
-activation cache miss and preparation path as decode; the shared-activation control changes only activation reuse.
+activation cache miss and preparation path as decode; the shared-activation control changes activation identity and
+all prepared-block caching implied by that reuse.
 
 Release T8, three-repetition medians:
 
@@ -117,16 +118,28 @@ The isolated Q4_K and Q6_K sequences are respectively `8.7%` and `12.5%` above t
 This is sufficiently close to use the cold stream as the immediate optimization gate. Reference comparison reported
 maximum absolute deltas of `8.55e-4` for Q4_K and `4.15e-3` for Q6_K.
 
-## Isolated Activation-Handoff Cost
+## Controlled SwiGLU Fusion A/B
 
-The real-order distinct-activation stream is `32.661 ms`, or `51.0%` of the shared-control time, slower than the same
-weight stream with a reused activation. The changed path performs a Float32 activation comparison and copy and then
-regenerates Q8_K blocks for each layer before entering the same prepared projection kernel.
+The distinct/shared control above does not isolate activation materialization. Reusing one activation also reuses its
+prepared Q8_K blocks and changes the cache and access pattern of all 48 calls. The `32.661 ms` difference therefore
+measures the combined effect of activation identity and prepared-block reuse; it is not a valid estimate of the cost
+that a SwiGLU-to-Down fusion can remove.
 
-If the complete `32.661 ms` transferred to end-to-end decode, eliminating it would produce an optimistic bound of
-`223.955 ms/token` or `4.465 token/s`. That would close `60.0%` of the observed end-to-end gap but would still leave
-LiteNN about `10.7%` slower by latency. This is a prioritization bound, not a forecast: AOT codegen, cache behavior, and
-the fused implementation must be measured in the full model.
+The compiler now marks only rank-2 Float32 SwiGLU values with one non-public consumer and lowers compatible
+field-interleaved-v4 Q4_K/Q6_K Down projections to a fused runtime helper. Runtime, object import/load, and AOT execution
+parity pass for both formats. A paired benchmark alternates the materialized and fused sequences in each iteration over
+the same 48 prepared weights, gate values, and up values:
+
+| Paired T8 run | Materialized mean | Fused mean | Materialized - fused | Result |
+| --- | ---: | ---: | ---: | --- |
+| 5 repetitions | `83.3715 ms` | `83.0530 ms` | `+0.3185 ms` (`+0.38%`) | Small apparent fused win |
+| 7 repetitions | `80.9137 ms` | `80.9833 ms` | `-0.0696 ms` (`-0.09%`) | Sign reversal |
+
+The sequence means are stable within each run, but the paired delta is smaller than run-to-run noise and changes sign.
+The maximum output delta against the staged reference was about `6.71e-4`. The supported conclusion is that the fusion
+is performance-neutral at this scale. It remains useful for a cleaner compiler-owned dataflow and removes redundant
+materialization checks, but it does not explain or close the FFN-Down gap. The previous `223.955 ms/token` optimistic
+bound is invalidated.
 
 ## Conclusions
 
@@ -136,30 +149,33 @@ the fused implementation must be measured in the full model.
 2. The deficit is concentrated in Q4_K/Q6_K activation-plus-Down, while grouped Gate/Up is comparatively close.
 3. Cache-hot Up and Down rows are nearly direction-neutral, so hot helper throughput does not predict model latency.
 4. The production-sized cold stream reproduces the real Down helper totals within `12.5%`.
-5. Activation turnover adds `32.661 ms` to an otherwise identical 48-matrix stream. This is the largest directly
-   isolated and currently actionable surcharge.
+5. The controlled SwiGLU fusion is performance-neutral within measurement noise; activation materialization is not the
+   owner of the remaining FFN-Down gap.
+6. The `32.661 ms` distinct/shared difference combines Q8_K prepared-block reuse and cache/access-pattern changes and
+   must not be treated as removable handoff cost.
 
 ### Supported but not yet proven
 
-1. Producing Q8_K activation blocks at the single-consumer SwiGLU boundary and consuming them directly in Down should
-   remove more latency than speculative kernel tuning.
-2. The remaining shared-activation rate of `37.08 GB/s` versus the stage-control lower bounds suggests additional
-   worker scheduling, memory concurrency, or kernel issues after activation fusion.
+1. The remaining `23-30 GB/s` production projection rate versus the llama.cpp lower bounds suggests worker scheduling,
+   memory concurrency, cache/DRAM behavior, or kernel scheduling inside the projection path.
+2. Low-overhead worker and phase timing should identify which of those mechanisms owns enough time to justify the next
+   implementation change.
 
 ### Not established
 
 1. PMU evidence does not yet distinguish LLC/DRAM stalls from dispatch imbalance on Windows.
-2. The full `32.661 ms` isolated surcharge is not guaranteed to disappear in end-to-end execution.
+2. The distinct/shared `32.661 ms` difference has not been decomposed into prepared-block reuse, cache residency, and
+   memory-level parallelism effects.
 3. Wider SIMD, more threads, prefetch, or a new prepared layout has not shown a cold-stream and full-model win yet.
 
 ## Decision Record
 
 | Priority | Decision | Evidence gate |
 | --- | --- | --- |
-| P0 | Fuse single-consumer SwiGLU preparation with field-v4 Q4_K/Q6_K Down | Runtime parity, AOT artifact routing, cold-stream A/B |
+| Done | Fuse single-consumer SwiGLU preparation with field-v4 Q4_K/Q6_K Down | Correctness passes; paired A/B is neutral |
+| P0 | Attribute residual projection time | Activation, dispatch, useful work, task balance, and barrier phases |
+| P0 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
 | P0 | Re-run full-model stage and no-profile controls | Identical generated tokens and alternating T8 medians |
-| P1 | Attribute residual shared-activation time | Activation, dispatch, useful work, and barrier phases |
-| P1 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
 | P2 | Add optional PMU evidence | Clean fallback on hosts without profiling privileges |
 
 The implementation order and completion state are maintained in `PerformanceOptimizationRoadmap.md`; the high-level

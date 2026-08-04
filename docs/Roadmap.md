@@ -3221,13 +3221,15 @@ Priority classes:
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,
             reference delta, and per-shape totals. Median Q4_K x24, Q6_K x24, and real mixed x48 times were `41.175`,
             `53.221`, and `96.726 ms`; the same mixed weights with one shared activation took `64.065 ms`.
-      - [ ] Eliminate the measured FFN activation-handoff tax. The distinct/shared activation control isolates
-            `32.661 ms` in Float32 activation cache comparison/copy and Q8_K regeneration. Produce a compiler-owned
-            prepared activation at the SwiGLU boundary and consume it directly in Down without changing graph-visible
-            SwiGLU behavior.
-            - [ ] Mark only single-consumer SwiGLU values that are not public results before bufferization.
-            - [ ] Lower the marked pair to the fused field-v4 Q4_K/Q6_K runtime helper and verify object imports.
-            - [ ] Pass runtime, artifact-load, and AOT execution parity, then measure a fused mixed-format cold stream.
+      - [x] Implement and evaluate FFN SwiGLU-to-Down fusion. The compiler marks only single-consumer, non-public
+            rank-2 Float32 SwiGLU values and lowers compatible field-v4 Q4_K/Q6_K consumers to the fused helper.
+            Runtime, object import/load, and AOT execution parity pass. Two independent paired mixed-stream runs changed
+            sign (`+0.3185 ms` and `-0.0696 ms` materialized-minus-fused), so fusion is neutral within noise. The earlier
+            `32.661 ms` distinct/shared difference also included prepared Q8_K reuse and cache/access changes and is no
+            longer treated as removable handoff cost.
+            - [x] Mark only single-consumer SwiGLU values that are not public results before bufferization.
+            - [x] Lower the marked pair to the fused field-v4 Q4_K/Q6_K runtime helper and verify object imports.
+            - [x] Pass runtime, artifact-load, and AOT execution parity and complete a paired mixed-format cold stream.
       - [ ] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead, then establish whether
             the residual shared-activation gap comes from helper fixed cost, task imbalance, or insufficient concurrent
             streams. Include activation lookup/copy/quantization as separate phases.

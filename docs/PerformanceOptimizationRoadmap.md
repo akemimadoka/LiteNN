@@ -51,23 +51,24 @@ P0 implementation order:
   - The 2026-08-04 T8 medians were `41.175 ms` for Q4_K x24, `53.221 ms` for Q6_K x24, `96.726 ms` for the real mixed
     x48 distinct-activation stream, and `64.065 ms` for its shared-activation control. Prepared/source was `1.0113x`
     for the mixed stream. Existing cache-hot rows remain separately labelled instruction-throughput evidence.
-- [ ] Eliminate the measured activation-handoff tax before speculative kernel work.
-  - The real-order distinct/shared activation A/B isolates `32.661 ms` (`51.0%` of the shared-control time) in the path
-    that compares/copies the new Float32 activation and regenerates Q8_K blocks for every Down helper.
-  - Add a fused SwiGLU-to-Q8_K preparation helper or compiler-owned prepared activation value so Down skips the second
-    cache lookup, Float32 comparison/copy, and quantization pass.
-  - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs; validate Q4_K/Q6_K parity,
-    mixed-format 48-layer schedules, state aliases, artifact load, and generated text.
-  - [ ] Establish an explicit single-consumer, non-public-result fusion contract before bufferization; do not infer
+- [x] Implement and evaluate direct single-consumer SwiGLU-to-Down fusion.
+  - The original distinct/shared activation A/B differed by `32.661 ms`, but it also changed prepared Q8_K reuse and the
+    48-call cache/access pattern. The controlled fusion A/B invalidated its interpretation as activation-handoff tax.
+  - The fused helper lets Down skip a second Float32 materialization check while preserving standalone SwiGLU behavior.
+  - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs; validate Q4_K/Q6_K runtime parity,
+    object import/load, AOT execution, and the mixed-format 48-layer schedule.
+  - [x] Establish an explicit single-consumer, non-public-result fusion contract before bufferization; do not infer
     ownership from post-bufferization memref aliases.
-  - [ ] Lower the marked pair to the fused field-v4 helper and verify the generated object imports the fused symbol.
-  - [ ] Add runtime, serialized-artifact, and loaded-execution parity for both Q4_K and Q6_K.
-  - [ ] Add a distinct-gate/up cold-stream row and require a measured reduction against the `96.726 ms` ordinary
-    mixed-format baseline before routing production AOT decode through the fused path.
+  - [x] Lower the marked pair to the fused field-v4 helper and verify the generated object imports the fused symbol.
+  - [x] Add runtime, object-import, and loaded-execution parity for both Q4_K and Q6_K.
+  - [x] Add a paired materialized/fused mixed-format cold stream. Independent paired runs measured `+0.3185 ms`
+    (`+0.38%`) and `-0.0696 ms` (`-0.09%`) materialized-minus-fused, so the optimization is neutral within noise and
+    is retained for compiler dataflow cleanliness rather than counted toward CPU parity.
 - [ ] Attribute the residual single-projection bandwidth loss before changing the kernel.
   - Add opt-in low-overhead timestamps for activation lookup/copy/quantization, helper dispatch, each worker's useful
     interval, bytes assigned, task claims, and final barrier wait.
-  - Compare ordinary Down, hidden/output, grouped Gate/Up, and the llama.cpp stage control under alternating runs.
+  - Compare ordinary Down, hidden/output, grouped Gate/Up, and the llama.cpp stage control under alternating runs. Treat
+    prepared Q8_K reuse and Float32 activation identity as separate variables.
   - Exit when the evidence distinguishes fixed dispatch cost, task imbalance, cache/DRAM stalls, and insufficient
     memory-level parallelism well enough to predict a benchmark change.
 - [ ] Raise FFN-Down cold-stream throughput.
@@ -86,9 +87,8 @@ P0 implementation order:
   - Require no fallback, unchanged generated tokens, Q4_K/Q6_K Down cold-stream throughput of at least `40 GB/s`, FFN
     latency within `10%` of the corresponding llama.cpp block, and total latency within `5%` of the same-run llama.cpp
     median.
-  - Treat `223.955 ms/token` as an optimistic activation-fusion bound, not an acceptance target. A result materially
-    above it triggers residual phase attribution; a result near it still requires closing the remaining approximately
-    `10.7%` latency gap.
+  - Do not reuse the invalidated activation-fusion bound. Forecasts must be derived from a controlled paired benchmark
+    whose changed variable matches the proposed implementation.
 
 P1 follow-up after the P0 gate:
 
