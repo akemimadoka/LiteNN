@@ -47,6 +47,7 @@ PROFILE_FIELDS = {
     "warmup",
     "cache_type_k",
     "cache_type_v",
+    "binary",
 }
 
 
@@ -76,6 +77,7 @@ def parse_profile(raw: str, defaults: argparse.Namespace) -> dict[str, object]:
         "warmup": defaults.default_warmup,
         "cache_type_k": defaults.default_cache_type_k,
         "cache_type_v": defaults.default_cache_type_v,
+        "binary": defaults.default_binary,
     }
     seen = set()
     for assignment in parts[1:]:
@@ -114,6 +116,20 @@ def profile_namespace(args: argparse.Namespace, profile: dict[str, object]) -> a
     return result
 
 
+def parse_binary_registry(entries: list[str], default: Path) -> dict[str, Path]:
+    binaries = {"default": default}
+    for entry in entries:
+        name, separator, value = entry.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if not separator or not PROFILE_NAME_RE.fullmatch(name) or not value:
+            raise SystemExit(f"invalid --binary value {entry!r}; expected NAME=PATH")
+        if name in binaries:
+            raise SystemExit(f"duplicate binary name {name!r}")
+        binaries[name] = resolve_completion(Path(value))
+    return binaries
+
+
 def summarize_profile(profile: dict[str, object], runs: list[dict[str, object]]) -> dict[str, object]:
     profile_runs = [run for run in runs if run["profile"] == profile["name"]]
     throughputs = [float(run["metrics"]["eval_tokens_per_second"]) for run in profile_runs]  # type: ignore[index]
@@ -144,22 +160,31 @@ def summarize_profile(profile: dict[str, object], runs: list[dict[str, object]])
 
 
 def write_markdown(path: Path, document: dict[str, object]) -> None:
-    binary = document["binary"]
+    binaries = document["binaries"]
     host = document["host"]
     gate = document["gate"]
     lines = [
         "# llama.cpp Actual-Completion Configuration Sweep",
         "",
         f"- Host: `{host['cpu_model']}` ({host['logical_cpus']} logical CPUs)",  # type: ignore[index]
-        f"- Binary SHA-256: `{binary['sha256']}`",  # type: ignore[index]
         f"- Prompt SHA-256: `{document['prompt']['sha256']}`",  # type: ignore[index]
         f"- Repetitions: `{document['configuration']['repetitions']}`",  # type: ignore[index]
         f"- Variance threshold: `{document['configuration']['variance_threshold_percent']}%`",  # type: ignore[index]
         f"- Power policy: `{document['power_policy']['value']}`",  # type: ignore[index]
         "",
-        "| Rank | Profile | Threads | Mask/strict | Poll | Priority | MHz | Median ms/token | Median t/s | CV |",
-        "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "Binaries:",
+        "",
     ]
+    for name, binary in binaries.items():  # type: ignore[union-attr]
+        version = str(binary["version"]).splitlines()[1] if "\n" in str(binary["version"]) else binary["version"]
+        lines.append(f"- `{name}`: `{binary['sha256']}`; {version}")
+    lines.extend(
+        [
+            "",
+            "| Rank | Profile | Binary | Threads | Mask/strict | Poll | Priority | MHz | ms/token | t/s | CV |",
+            "| ---: | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
     for rank, summary in enumerate(document["ranking"], 1):  # type: ignore[union-attr]
         config = summary["configuration"]
         throughput = summary["tokens_per_second"]
@@ -168,7 +193,8 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         mask = config["cpu_mask"] or "default"
         frequency_text = f"{frequency['median']:.0f}" if frequency is not None else "n/a"
         lines.append(
-            f"| {rank} | {summary['name']} | {config['threads']} | {mask}/{config['cpu_strict']} | "
+            f"| {rank} | {summary['name']} | {config['binary']} | {config['threads']} | "
+            f"{mask}/{config['cpu_strict']} | "
             f"{config['poll']} | {config['priority']} | {frequency_text} | {latency['median']:.3f} | "
             f"{throughput['median']:.3f} | {throughput['coefficient_of_variation_percent']:.2f}% |"
         )
@@ -195,13 +221,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--llama-completion", type=Path)
+    parser.add_argument("--binary", action="append", default=[], metavar="NAME=PATH")
     parser.add_argument("--output-json", required=True, type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument(
         "--profile",
         action="append",
         required=True,
-        help="NAME;threads=N;cpu_mask=HEX;cpu_strict=0|1;poll=0..100;priority=-1..3;...",
+        help="NAME;binary=NAME;threads=N;cpu_mask=HEX;cpu_strict=0|1;poll=0..100;priority=-1..3;...",
     )
     parser.add_argument("--repetitions", default=3, type=positive_int)
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
@@ -231,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--default-warmup", choices=["on", "off"], default="on")
     parser.add_argument("--default-cache-type-k", default="f16")
     parser.add_argument("--default-cache-type-v", default="f16")
+    parser.set_defaults(default_binary="default")
     return parser
 
 
@@ -238,6 +266,8 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.repetitions < 3:
         raise SystemExit("configuration sweep requires at least three repetitions")
+    completion = resolve_completion(args.llama_completion)
+    binaries = parse_binary_registry(args.binary, completion)
     try:
         profiles = [parse_profile(raw, args) for raw in args.profile]
     except argparse.ArgumentTypeError as exc:
@@ -245,8 +275,10 @@ def main() -> int:
     profile_names = [str(profile["name"]) for profile in profiles]
     if len(set(profile_names)) != len(profile_names):
         raise SystemExit("profile names must be unique")
+    unknown_binaries = sorted({str(profile["binary"]) for profile in profiles} - binaries.keys())
+    if unknown_binaries:
+        raise SystemExit(f"profiles reference unknown binaries: {', '.join(unknown_binaries)}")
 
-    completion = resolve_completion(args.llama_completion)
     model = args.model.resolve()
     if not model.is_file():
         raise SystemExit(f"model file not found: {args.model}")
@@ -257,28 +289,28 @@ def main() -> int:
 
     replacements = {
         str(model): "<model>",
-        str(completion): "<llama-completion>",
         str(Path.cwd()): "<repo>",
         args.prompt: "<prompt>",
     }
+    replacements.update({str(path): f"<llama-completion:{name}>" for name, path in binaries.items()})
     replacements.update({argument: "<path>" for argument in args.extra_arg if is_absolute_path(argument)})
     commands: dict[str, list[str]] = {}
     raw_commands: dict[str, list[str]] = {}
     for profile in profiles:
         namespace = profile_namespace(args, profile)
-        command = build_command(namespace, completion, model, int(profile["threads"]))
+        command = build_command(namespace, binaries[str(profile["binary"])], model, int(profile["threads"]))
         raw_commands[str(profile["name"])] = command
         commands[str(profile["name"])] = redact_command(command, replacements)
 
-    binary = version_metadata(completion)
-    binary["cmake"].update(parse_metadata(args.build_metadata))  # type: ignore[union-attr]
+    binary_documents = {name: version_metadata(path) for name, path in binaries.items()}
+    binary_documents["default"]["cmake"].update(parse_metadata(args.build_metadata))  # type: ignore[union-attr]
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "tool": "llama-completion-configuration-sweep",
         "status": "running",
         "host": host_metadata(),
         "power_policy": power_policy(),
-        "binary": binary,
+        "binaries": binary_documents,
         "model": {"filename": "<model>", "size_bytes": model.stat().st_size},
         "prompt": prompt_metadata(args.prompt, args.keep_prompt),
         "configuration": {
