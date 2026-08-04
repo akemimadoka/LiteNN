@@ -3214,25 +3214,30 @@ Priority classes:
       `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. Projection/worker phase
       evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; controlled build/runtime
       evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead matched-stage evidence is in
-      `docs/QwenCPUDecodeStageControl_2026-08-04.md`. The earlier GNU/OpenMP stage attribution remains historical and
-      no longer selects implementation work. The accepted stronger paired control places LiteNN `5.49%` behind
-      Clang/no-OpenMP. A matched cumulative-cut run reproduced the reference near `166 ms/token`, but its
+      `docs/QwenCPUDecodeStageControl_2026-08-04.md`; the completed Down experiment and FFN re-ranking are in
+      `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. The earlier GNU/OpenMP stage attribution remains
+      historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
+      `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut run reproduced the reference near `166 ms/token`, but its
       `10.53-82.51%` stage CV rejected fine attribution. Stable LiteNN accounting measured `176.063 ms/token` module
       time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement exact-token,
       non-synchronizing aggregate control passes with `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%` stage CV;
-      it selects FFN activation + Down as the largest accepted deficit (`54.057` versus `41.165 ms/token`).
-      The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
-      2026-08-04 FFN-Down closure tranche.
-      - [ ] Follow the evidence-backed order: use the completed low-overhead reference-stage counters and closed
-            RMSNorm-to-grouped-Q8_K rejection; execute the selected Down-kernel tranche; reproduce the external
-            `6.85 token/s` provenance; then extend controls to sustained decode and long-context tiers.
-            Rejected synchronized stage deltas and cache-hot-only wins must not reorder this sequence.
+      it selects the composite FFN activation + Down stage as the largest accepted deficit (`54.057` versus
+      `41.165 ms/token`). LiteNN's subsequent split measured `42.723 ms` in Q4_K/Q6_K Down projections and
+      `11.043 ms` in standalone SwiGLU. The reference does not yet split those components, so the composite deficit
+      cannot select another Down rewrite by itself. The implementation checklist is maintained in
+      `docs/PerformanceOptimizationRoadmap.md` under the 2026-08-04 CPU decode gap closure tranche.
+      - [ ] Follow the evidence-backed order: use the completed low-overhead reference-stage counters, closed
+            RMSNorm-to-grouped-Q8_K rejection, and rejected Down-kernel tranche; split activation from Down and
+            evaluate the selected SwiGLU path; reproduce the external `6.85 token/s` provenance; then extend controls
+            to sustained decode and long-context tiers. Rejected synchronized stage deltas and cache-hot-only wins
+            must not reorder this sequence.
       - [x] Add benchmark-only non-synchronizing llama.cpp CPU stage counters in a detached worktree, exact prompt/decode
             replay, clean-vs-instrumented binary pairing, aggregate coverage, and strict overhead/variance gates. The
             accepted T8 control measured `-0.21%` overhead and `0.16-0.98%` stage CV without production linkage.
       - [ ] P0: close the accepted FFN activation + Down deficit. LiteNN's helper-only lower bound is `54.057 ms/token`
             with `2.97%` CV versus the complete Clang/no-OpenMP stage at `41.165 ms/token` with `0.16%` CV, a conservative
-            `12.892 ms` (`31.32%`) gap. Require cache-cold and full-decode gains before retaining a kernel variant.
+            `12.892 ms` (`31.32%`) composite gap. The first Down tranche is closed; the active work now splits and
+            reduces activation before any new projection rewrite.
             - [x] Re-evaluate the existing Q4_K AVX2 x16 tile only for contraction-shaped Down rows. Three alternating
                   binary pairs produced a `+1.51%` Q4_K-only median but a `-3.41%` real mixed-stream median; the variant
                   was removed. Do not reuse the logits-oriented x16 tile for Down without a different decomposition.
@@ -3318,8 +3323,8 @@ Priority classes:
                         cuts held whole-token drift between `-0.08%` and `+2.32%`, but stage CV remained
                         `10.53-82.51%`; the fine-stage result is rejected and documented in
                         `docs/QwenCPUDecodeStageControl_2026-08-04.md`.
-                  - [ ] Replace callback differencing with non-synchronizing samples or in-kernel aggregate counters;
-                        require below `3%` total overhead and below `15%` CV for every promoted stage.
+                  - [x] Replace callback differencing with non-synchronizing in-kernel aggregate counters. The accepted
+                        Clang/no-OpenMP control measured `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%` stage CV.
             - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
                   tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
@@ -3359,9 +3364,20 @@ Priority classes:
             - [x] Close broad projection-wrapper ABI work until new low-overhead evidence exists. The remaining
                   `3.124 ms/token` row surrounds external helper calls and is an instrumented upper bound, not proof of
                   removable wrapper cost; do not revive broad CallNode inlining or an ABI rewrite from timer boundaries.
-      - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
-            Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
-            helper benchmark.
+      - [x] Implement and reject the bounded Down-path tranche: interleaved output-group streams, software prefetch,
+            Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection all failed the production-shaped mixed-stream
+            gate and were removed. The production Q4_K x8/Q6_K AVX-512 x16 routes remain selected.
+      - [ ] P0: split and reduce the FFN activation/Down composite stage.
+            - [ ] Split reference SwiGLU from Q4_K/Q6_K Down with non-synchronizing aggregate counters and the accepted
+                  overhead, coverage, and variance gates.
+            - [ ] Add a real imported-plan/generated-artifact regression for SwiGLU-to-field-v4 Down fusion. The
+                  profiled artifact issued 48 standalone SwiGLU calls and no fused-helper calls; prove and repair the
+                  likely source-layout versus selected-prepared-layout eligibility mismatch.
+            - [ ] Benchmark strict scalar, exact SIMD, and explicitly bounded fast-math SwiGLU policies over the
+                  production 48-layer shape, including contiguous/strided and special-value correctness evidence.
+            - [ ] Promote a candidate to full decode only after at least `2x` or `5 ms/token` activation savings; retain
+                  it only after three exact-token/no-fallback alternating pairs improve median token latency by at
+                  least `3%` and preserve the adjacent reference stage/whole-token gates.
       - [ ] Re-run alternating LiteNN/llama.cpp full-decode and stage profiles using each runtime's measured production
             thread policy. Acceptance requires no fallback, unchanged generated output, prepared weights no larger
             than `1.03x` source quantized bytes, the promoted stage within `10%`, and total latency within `5%` of the

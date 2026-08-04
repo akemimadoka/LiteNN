@@ -40,13 +40,17 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/PerformanceAnalysis_2026-08-04.md`; projection phase evidence:
 `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; stronger build/runtime control:
 `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead stage-control evidence:
-`docs/QwenCPUDecodeStageControl_2026-08-04.md`. The earlier GNU/OpenMP T8 stage attribution is retained as historical
-profiling evidence but no longer selects implementation work. The accepted stronger paired control places LiteNN
+`docs/QwenCPUDecodeStageControl_2026-08-04.md`; FFN activation/Down re-ranking:
+`docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. The earlier GNU/OpenMP T8 stage attribution is retained
+as historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places LiteNN
 `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near `166 ms/token`,
 but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting measured
 `176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement
 non-synchronizing exact-token aggregate control passes with `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%`
-stage CV; it promotes FFN activation + Down as the largest accepted deficit (`54.057` versus `41.165 ms/token`).
+stage CV; it promotes the composite FFN activation + Down stage as the largest accepted deficit (`54.057` versus
+`41.165 ms/token`). The subsequent LiteNN split measured `42.723 ms` in Q4_K/Q6_K Down projections and `11.043 ms`
+in standalone SwiGLU. Because the reference still combines those two components, the composite deficit no longer
+selects a Down microkernel rewrite by itself.
 
 P0 implementation order:
 
@@ -57,9 +61,12 @@ P0 implementation order:
   - [x] Complete the bounded single-consumer RMSNorm-to-grouped-Q8_K staging A/B. Three exact-token, no-fallback pairs
     measured `-3.23%`, `+4.14%`, and `-0.19%`, for a `-0.19%` median. The experimental lowering and helper ABIs were
     removed; keep only the standalone RMSNorm compiler-size improvement.
+  - [x] Open and close the first FFN-Down kernel/prefetch tranche after the aggregate profile measured a composite
+    `12.892 ms` (`31.32%`) deficit. All bounded variants failed the cache-cold mixed-stream gate, and the later
+    activation/projection split proved that the composite row cannot select projection work alone.
+  - [ ] Split reference activation from Down, repair real-artifact fusion eligibility, and evaluate SwiGLU SIMD under
+    the exact-token gates before reopening projection work.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
-  - [x] Open FFN-Down kernel/prefetch work after the accepted aggregate profile measured a conservative `12.892 ms`
-    (`31.32%`) LiteNN deficit. Require cache-cold plus full-decode improvement rather than a cache-hot-only win.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
 
@@ -238,10 +245,12 @@ P0 implementation order:
   - [x] Close broad projection-wrapper ABI work. Node timers surround external helper calls, so the `3.124 ms/token`
     row remains an upper bound contaminated by profile boundaries. With both standalone and fused RMSNorm controls
     below the runtime gate, do not revive broad CallNode inlining or wrapper rewrites without new low-overhead evidence.
-- [ ] P0 active: raise FFN-Down cold-stream throughput.
+- [x] P0: evaluate FFN-Down cold-stream throughput candidates. Closed as rejected on 2026-08-04.
   - Accepted exact-token evidence: LiteNN Q4_K/Q6_K Down plus SwiGLU is `54.057 ms/token` with `2.97%` CV; the complete
     Clang/no-OpenMP reference stage is `41.165 ms/token` with `0.16%` CV. The conservative deficit is `12.892 ms`
-    (`31.32%`) and explains at least 63% of the profiled module difference.
+    (`31.32%`) and explains at least 63% of the profiled module difference. The later LiteNN decomposition measured
+    Q4_K/Q6_K projection helpers at `42.723 ms` and standalone SwiGLU at `11.043 ms`. Since the reference row still
+    combines activation and projection, the complete `12.892 ms` cannot be assigned to the Down kernels.
   - [x] Evaluate two independent Q4_K output-group streams per worker with the accepted x8 pair-sum/scale folding.
     Three alternating binary pairs regressed Q4_K by `6.91%` median and mixed Q4_K_M by `2.80%`; every Q4_K and mixed
     pair was negative. The implementation was removed. The shorter cache-hot instruction path does not survive the
@@ -259,6 +268,26 @@ P0 implementation order:
     AVX-512 x16 remains selected.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
+- [ ] P0 active: split and reduce the FFN activation/Down composite deficit.
+  - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. Do not reopen a projection
+    microkernel branch until the reference-side activation cost is separated or PMU evidence selects that branch.
+  - [ ] Split llama.cpp SwiGLU from Q4_K/Q6_K Down with the accepted non-synchronizing aggregate-counter method.
+    Preserve at most `3%` instrumentation overhead, `95-102%` coverage, at most `3%` whole-run CV, and at most `15%`
+    CV for every promoted substage.
+  - [ ] Add an imported-plan and generated-artifact fusion regression. The profiled real artifact called standalone
+    `litenn_cpu_swiglu_f32` 48 times and never imported the fused field-v4 helper. Prove whether source-layout gating
+    prevents fusion when field-interleaved-v4 is selected only as the prepared layout, then key the contract to the
+    layout actually emitted.
+  - [ ] Add production-shaped standalone and fused SwiGLU benchmark rows that report scalar/SIMD math policy,
+    contiguous/strided layout, calls, elements, latency, throughput, maximum absolute/relative error, and special-value
+    behavior.
+  - [ ] Evaluate an exact SIMD SwiGLU path before approximate math. If scalar `std::exp` remains dominant, evaluate a
+    separately named bounded fast-exp policy with an explicit numerical contract; never silently change the strict
+    helper's semantics.
+  - [ ] Require at least `2x` or `5 ms/token` savings in the 48-layer SwiGLU benchmark before an exact-token full-model
+    run. Retention then requires three alternating cache-hit pairs, at least `3%` median full-token improvement,
+    unchanged token ids/text, no fallback, FFN activation + Down within `10%`, and whole-token latency within `5%` of
+    the adjacent Clang/no-OpenMP control.
 - [ ] Close with controlled full-model evidence.
   - Alternate at least three LiteNN and three CPU-only llama.cpp runs using each runtime's measured production thread
     policy; capture actual frequency to control host state and filesystem-cache variance.
