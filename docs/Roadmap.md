@@ -3236,9 +3236,15 @@ Priority classes:
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
             negligible. FFN-Down quantization alone accounts for `32.893 ms/step`. Exact-size microbenchmarks agree with
             production quantization within `7.1%`, so Q8_K preparation is now the first measured implementation owner.
-      - [ ] Replace scalar Q8_K rounding and reductions with byte-exact optimized and SIMD paths, extend phase timing to
-            grouped Gate/Up helpers, then verify that the stable production `45.2007 ms/step` lower bound falls with
-            unchanged tokens and no fallback.
+      - [x] Replace scalar Q8_K rounding with a byte-exact nearest-integer path. Exact 5120/13824-element Release
+            medians improved from `235/640 us` to `5.59/15.3 us` (`41.8-42.0x`); all 19 focused quantized-execution
+            tests pass. The real cache-hit profile reduced ordinary-projection quantization from `45.2007` to
+            `1.1865 ms/step`, profiled stable latency from `266.887` to `184.275 ms/token`, and preserved the token
+            sequence with no fallback. Three no-helper-profile stable averages were `197.748`, `195.874`, and
+            `200.156 ms/token`, a `22.94%` median reduction from the preceding `256.616 ms/token` baseline.
+      - [ ] Re-rank grouped Gate/Up, Q6_K Down, Q4_K Down, hidden/output, and logits against a fresh CPU-only llama.cpp
+            stage control before selecting the next kernel. Manual activation-quantizer SIMD is deferred because only
+            `1.1865 ms/step` remains in the structured phase and is no longer P0.
       - [ ] Amortize the measured `14.9425 ms/step` dispatch floor across compatible helper sequences. Lock and barrier
             tuning remain secondary unless a new profile changes their ranking.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,

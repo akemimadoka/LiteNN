@@ -75,15 +75,26 @@ P0 implementation order:
     `640 us` at 13824) agree with production per-call measurements within `7.1%`, making them the first acceptance gate.
   - The 97 structured events cover ordinary projections; grouped Gate/Up preparation remains outside this table, so
     `45.2007 ms/step` is a lower bound for complete-schedule Q8_K preparation.
-- [ ] Accelerate Q8_K activation preparation before further thread-policy work.
-  - [ ] Replace scalar `std::nearbyint` in the Q8_K quantizer with a parity-proven nearest-integer implementation and
+- [x] Accelerate Q8_K activation preparation before further thread-policy work.
+  - [x] Replace scalar `std::nearbyint` in the Q8_K quantizer with a parity-proven nearest-integer implementation and
     cover signed maxima, ties, clamping, block sums, strided inputs, and multiple blocks with byte-exact tests.
-  - [ ] Add AVX2 and, where profitable, AVX-512 max/quantize/block-sum paths with a scalar fallback. Retain only paths
-    that improve both exact Qwen rows stably and preserve byte-exact helper output.
-  - [ ] Extend structured activation timing to grouped Gate/Up helpers and identify same-activation reuse opportunities;
-    do not infer total preparation cost from the ordinary-projection lower bound.
-  - [ ] Re-run the cache-hit production profile and require a corresponding reduction from the `45.2007 ms/step`
-    baseline with unchanged tokens and no fallback.
+    Exact 5120/13824-element medians improved from `235/640 us` to `5.59/15.3 us` (`41.8-42.0x`). All 19 focused
+    quantized-execution tests pass, including the new byte-level reference test.
+  - [x] Re-run the cache-hit production profile and require a corresponding reduction from the `45.2007 ms/step`
+    baseline with unchanged tokens and no fallback. Ordinary-projection quantization fell to `1.1865 ms/step`
+    (`-97.37%`), profiled stable latency fell from `266.887` to `184.275 ms/token`, and identical tokens were generated.
+    Three no-helper-profile stable averages were `197.748`, `195.874`, and `200.156 ms/token`; their median is `22.94%`
+    below the preceding `256.616 ms/token` baseline.
+  - [ ] Extend structured activation timing to grouped Gate/Up helpers only if a later profile needs to separate its
+    remaining `~67.8 ms/step` compute from the now-small quantization cost.
+  - [ ] P2: Add manual AVX2/AVX-512 preparation only if a future profile makes the remaining `1.1865 ms/step` material.
+    The parity-safe scalar source now permits effective compiler optimization and has removed the P0 bottleneck.
+- [ ] Re-rank residual projection work against a fresh CPU-only llama.cpp stage control.
+  - The post-quantizer helper profile is led by grouped Q4_K Gate/Up (`~67.8 ms/step`), followed by Q6_K Down,
+    Q4_K Down, hidden/output projections, and logits. Absolute helper rank alone is insufficient: optimize the largest
+    measured cross-runtime stage gap, not merely the largest LiteNN stage.
+  - Use alternating cache-warm T8 stage controls and preserve exact token/no-fallback gates before selecting the next
+    kernel or scheduling change.
 - [ ] Reduce the measured per-helper dispatch floor.
   - Batch compatible projection work or amortize worker wake-up across helper sequences before changing lock policy.
   - Use `14.9425 ms/step` across 97 ordinary projections as the baseline; keep uncontended-lock and affinity tuning

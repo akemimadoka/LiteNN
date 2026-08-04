@@ -116,3 +116,45 @@ expensive full-model rerun.
 - Require unchanged generated tokens, no fallback, and a lower stable no-profile token median before retaining a
   full-model optimization.
 - Keep phase profiling opt-in; the default runtime path must not pay per-task timestamps or profile aggregation.
+
+## Q8_K Nearest-Integer Optimization Result
+
+The scalar `std::nearbyint` conversion prevented the compiler from optimizing the otherwise contiguous Q8_K
+preparation loop. Replacing it with the bounded IEEE-754 nearest-integer construction used by ggml/llama.cpp retained
+the existing signed-max, clamp, and block-sum semantics.
+
+Correctness evidence:
+
+- A byte-level scalar-reference test covers positive and negative signed maxima, half-integer rounding boundaries,
+  multiple blocks, an all-zero block, and non-contiguous source strides.
+- All 19 `GGUFLLaMAQuantizedExecution.*` tests pass.
+- The old and new real-model runs generated the same 16-token sequence with no fallback.
+
+Exact-shape Release benchmark medians improved as follows:
+
+| Shape | Before | After | Speedup | Reduction |
+| --- | ---: | ---: | ---: | ---: |
+| 5120 elements | `235 us` | `5.59 us` | `42.0x` | `97.62%` |
+| 13824 elements | `640 us` | `15.3 us` | `41.8x` | `97.61%` |
+
+The same cache-hit production profile and stable-step window measured:
+
+| Metric | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Profiled token latency | `266.887 ms` | `184.275 ms` | `-82.612 ms` (`-30.95%`) |
+| Helper time | `256.184 ms` | `172.525 ms` | `-83.659 ms` (`-32.66%`) |
+| Ordinary-projection Q8_K quantization | `45.201 ms` | `1.187 ms` | `-44.014 ms` (`-97.37%`) |
+| Ordinary-projection parallel wall | `77.785 ms` | `69.177 ms` | `-8.608 ms` (`-11.07%`) |
+| Final barrier wait | `3.846 ms` | `3.662 ms` | `-0.184 ms` (`-4.78%`) |
+
+The end-to-end improvement is larger than the previously visible `45.2 ms` quantization lower bound because grouped
+Gate/Up helpers use the same quantizer but were not included in the structured ordinary-projection phase table.
+
+Three cache-hit runs without helper profiling produced identical tokens. Their stable generated-step averages were
+`197.748`, `195.874`, and `200.156 ms/token`, for `5.057`, `5.105`, and `4.996 tokens/s`. The median stable latency is
+`197.748 ms/token`, `22.94%` below the previous adjacent `256.616 ms/token` baseline. Profiled and unprofiled absolute
+latencies must not be compared directly because host frequency and first-touch state differed between the run batches.
+
+Manual AVX2/AVX-512 activation quantization is no longer a P0 item: the remaining structured Q8_K preparation is only
+about `1.19 ms/step`. The next profile decision must instead compare the now-dominant grouped Gate/Up and Q6_K Down
+work against the same-run CPU-only llama.cpp stage control, then target the largest remaining cross-runtime gap.
