@@ -41,6 +41,13 @@ def resolve_evidence_path(raw: object, manifest: Path) -> Path:
     return manifest.parent / path
 
 
+def last_match(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+    match = None
+    for match in pattern.finditer(text):
+        pass
+    return match
+
+
 def litenn_row(path: Path) -> dict[str, object]:
     report = load_json(path)
     if not isinstance(report, dict) or report.get("schema") not in (
@@ -53,22 +60,22 @@ def litenn_row(path: Path) -> dict[str, object]:
         raise SystemExit(f"LiteNN smoke report has no successful decode step: {path}")
     stdout = resolve_evidence_path(step.get("stdout"), path)
     stdout_text = stdout.read_text(encoding="utf-8")
-    run_match = RUN_MS_RE.search(stdout_text)
-    tokens_match = GENERATED_TOKENS_RE.search(stdout_text)
+    run_match = last_match(RUN_MS_RE, stdout_text)
+    tokens_match = last_match(GENERATED_TOKENS_RE, stdout_text)
     if run_match is None or tokens_match is None:
         raise SystemExit(f"LiteNN decode stdout has no run_ms/generated_tokens metrics: {stdout}")
     run_ms = float(run_match.group("value"))
     token_count = int(tokens_match.group("value"))
     if run_ms <= 0 or token_count <= 0:
         raise SystemExit(f"LiteNN decode metrics must be positive: {stdout}")
-    backend_match = BACKEND_RE.search(stdout_text)
-    decode_mode_match = DECODE_MODE_RE.search(stdout_text)
-    fallback_match = FALLBACK_RE.search(stdout_text)
-    fallback_count_match = FALLBACK_COUNT_RE.search(stdout_text)
-    ms_per_token_match = MS_PER_GENERATED_TOKEN_RE.search(stdout_text)
-    tokens_per_second_match = GENERATED_TOKENS_PER_SECOND_RE.search(stdout_text)
-    prompt_replay_ms_match = PROMPT_REPLAY_MS_RE.search(stdout_text)
-    generation_ms_match = GENERATION_MS_RE.search(stdout_text)
+    backend_match = last_match(BACKEND_RE, stdout_text)
+    decode_mode_match = last_match(DECODE_MODE_RE, stdout_text)
+    fallback_match = last_match(FALLBACK_RE, stdout_text)
+    fallback_count_match = last_match(FALLBACK_COUNT_RE, stdout_text)
+    ms_per_token_match = last_match(MS_PER_GENERATED_TOKEN_RE, stdout_text)
+    tokens_per_second_match = last_match(GENERATED_TOKENS_PER_SECOND_RE, stdout_text)
+    prompt_replay_ms_match = last_match(PROMPT_REPLAY_MS_RE, stdout_text)
+    generation_ms_match = last_match(GENERATION_MS_RE, stdout_text)
     tokens_per_second = (
         float(tokens_per_second_match.group("value"))
         if tokens_per_second_match is not None
@@ -339,6 +346,79 @@ def llama_rows(path: Path) -> list[dict[str, object]]:
     return rows
 
 
+def llama_completion_rows(path: Path) -> list[dict[str, object]]:
+    document = load_json(path)
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != 1
+        or document.get("tool") != "llama-completion"
+    ):
+        raise SystemExit(f"unsupported llama-completion control report: {path}")
+    configuration = document.get("configuration")
+    summaries = document.get("summary")
+    if not isinstance(configuration, dict) or not isinstance(summaries, list):
+        raise SystemExit(f"llama-completion control report has no configuration/summary: {path}")
+    token_count = as_int(configuration.get("predict"))
+    if token_count <= 0:
+        raise SystemExit(f"llama-completion control report has no positive predict count: {path}")
+
+    rows = []
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        threads = as_int(summary.get("threads"))
+        tokens_per_second = as_float(summary.get("median_tokens_per_second"))
+        ms_per_token = as_float(summary.get("median_ms_per_token"))
+        if threads <= 0 or tokens_per_second <= 0.0 or ms_per_token <= 0.0:
+            continue
+        config = (
+            f"T={threads},runs={as_int(summary.get('runs'))},"
+            f"strict={configuration.get('cpu_strict', 'n/a')},"
+            f"mask={configuration.get('cpu_mask') or 'default'},"
+            f"poll={configuration.get('poll', 'n/a')},"
+            f"priority={configuration.get('priority', 'n/a')},"
+            f"kv={configuration.get('cache_type_k', 'n/a')}/{configuration.get('cache_type_v', 'n/a')},"
+            f"mmap={configuration.get('mmap', 'n/a')},"
+            f"repack={configuration.get('repack', 'n/a')}"
+        )
+        rows.append(
+            {
+                "implementation": "llama.cpp",
+                "backend": "cpu",
+                "decodeMode": "actual-completion",
+                "config": config,
+                "tokens": token_count,
+                "totalMs": token_count * ms_per_token,
+                "promptReplayMs": None,
+                "generationMs": token_count * ms_per_token,
+                "msPerToken": ms_per_token,
+                "tokensPerSecond": tokens_per_second,
+                "fallbackUsed": False,
+                "fallbackCount": 0,
+                "topHelper": None,
+                "helperSharePercent": None,
+                "topOperator": None,
+                "operatorSharePercent": None,
+                "residualSharePercent": None,
+                "topNode": None,
+                "topNodeKind": None,
+                "topFormat": None,
+                "topActivation": None,
+                "topResolvedThreads": threads,
+                "moduleRunMs": None,
+                "moduleRunSharePercent": None,
+                "moduleNonHelperMs": None,
+                "moduleNonHelperSharePercent": None,
+                "hostOverheadMs": None,
+                "hostOverheadSharePercent": None,
+                "source": str(path),
+            }
+        )
+    if not rows:
+        raise SystemExit(f"llama-completion control report has no valid summary rows: {path}")
+    return rows
+
+
 def pytorch_rows(path: Path) -> list[dict[str, object]]:
     document = load_json(path)
     entries = document.get("rows") if isinstance(document, dict) else document
@@ -499,6 +579,7 @@ def main() -> int:
     parser.add_argument("--litenn-smoke-report", action="append", type=Path, default=[])
     parser.add_argument("--litenn-profile-summary", action="append", type=Path, default=[])
     parser.add_argument("--llama-bench-json", action="append", type=Path, default=[])
+    parser.add_argument("--llama-completion-json", action="append", type=Path, default=[])
     parser.add_argument("--pytorch-json", action="append", type=Path, default=[])
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
@@ -507,6 +588,8 @@ def main() -> int:
         rows.extend(litenn_profile_summary_rows(path))
     for path in args.llama_bench_json:
         rows.extend(llama_rows(path))
+    for path in args.llama_completion_json:
+        rows.extend(llama_completion_rows(path))
     for path in args.pytorch_json:
         rows.extend(pytorch_rows(path))
     if not rows:
