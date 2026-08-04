@@ -190,6 +190,15 @@ extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
     std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
     std::uint64_t affinityPolicyValue);
 
+extern "C" void litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+    const float*, const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows, std::int64_t gateColumns,
+    std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*, const float* upAligned,
+    std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns, std::int64_t upRowStride,
+    std::int64_t upColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned, std::int64_t rhsOffset,
+    std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned, std::int64_t outOffset,
+    std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride,
+    std::uint64_t formatValue, std::uint64_t requestedThreadCount, std::uint64_t affinityPolicyValue);
+
 extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes();
 
 extern "C" void litenn_cpu_ggml_prepare_q8k_activation_f32(const float*, const float* lhsAligned,
@@ -2488,6 +2497,82 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4Q8KHelperMatchesStagedWithFu
 			}
 			inputValues[0] = originalInput;
 		}
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, FusedSwiGLUFieldInterleavedV4HelperMatchesMaterializedActivation)
+{
+	constexpr std::size_t rows = 2;
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 15;
+	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
+	};
+
+	std::vector<float> gate(rows * inFeatures);
+	std::vector<float> up(rows * inFeatures);
+	for (std::size_t i = 0; i < gate.size(); ++i)
+	{
+		gate[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.0625F;
+		up[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.09375F;
+	}
+
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		SCOPED_TRACE(name);
+		std::vector<float> weightValues(outFeatures * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>(i % 27) - 13) * 0.125F;
+		}
+		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+		const auto& storage = quantizedWeight->Data();
+		const auto* storageBytes = static_cast<const std::uint8_t*>(storage.UnsafeRawData());
+		const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(static_cast<std::uint64_t>(blockFormat),
+		                                                                    static_cast<std::int64_t>(outFeatures),
+		                                                                    static_cast<std::int64_t>(inFeatures));
+		std::vector<std::uint8_t> packed(packedBytes);
+		litenn_cpu_ggml_prepack_field_interleaved_v4(
+		    nullptr, storageBytes, 0, static_cast<std::int64_t>(storage.NumElements()), 1,
+		    static_cast<std::int64_t>(outFeatures), static_cast<std::int64_t>(inFeatures),
+		    static_cast<std::uint64_t>(blockFormat), nullptr, packed.data(), 0,
+		    static_cast<std::int64_t>(packed.size()), 1);
+
+		const auto runCase = [&] {
+			std::vector<float> materialized(rows * inFeatures);
+			for (std::size_t i = 0; i < materialized.size(); ++i)
+			{
+				materialized[i] = gate[i] / (1.0F + std::exp(-gate[i])) * up[i];
+			}
+			std::vector<float> expected(rows * outFeatures);
+			std::vector<float> fused(rows * outFeatures, std::numeric_limits<float>::quiet_NaN());
+			litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, materialized.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(), 0,
+			    static_cast<std::int64_t>(packed.size()), 1, nullptr, expected.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+			    nullptr, gate.data(), 0, static_cast<std::int64_t>(rows), static_cast<std::int64_t>(inFeatures),
+			    static_cast<std::int64_t>(inFeatures), 1, nullptr, up.data(), 0, static_cast<std::int64_t>(rows),
+			    static_cast<std::int64_t>(inFeatures), static_cast<std::int64_t>(inFeatures), 1, nullptr, packed.data(),
+			    0, static_cast<std::int64_t>(packed.size()), 1, nullptr, fused.data(), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(outFeatures),
+			    static_cast<std::int64_t>(outFeatures), 1, static_cast<std::uint64_t>(blockFormat), 2,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+			for (std::size_t i = 0; i < expected.size(); ++i)
+			{
+				EXPECT_NEAR(fused[i], expected[i], 1.0e-4F) << "at element " << i;
+			}
+		};
+
+		runCase();
+		gate[0] += 1.25F;
+		runCase();
+		gate[0] -= 1.25F;
 	}
 }
 

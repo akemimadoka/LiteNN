@@ -1989,6 +1989,36 @@ namespace
 			return blocks_.data();
 		}
 
+		const float* PrepareSwiGLU(const float* gate, std::int64_t gateOffset, std::int64_t rows, std::int64_t columns,
+		                           std::int64_t gateRowStride, std::int64_t gateColumnStride, const float* up,
+		                           std::int64_t upOffset, std::int64_t upRowStride, std::int64_t upColumnStride)
+		{
+			const auto elementCount = static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns);
+			const auto blockCount = static_cast<std::size_t>(columns / 256);
+			source_.resize(elementCount);
+			blocks_.resize(static_cast<std::size_t>(rows) * blockCount);
+			for (std::int64_t row = 0; row < rows; ++row)
+			{
+				auto* sourceRow = source_.data() + static_cast<std::size_t>(row * columns);
+				for (std::size_t block = 0; block < blockCount; ++block)
+				{
+					const auto columnBase = static_cast<std::int64_t>(block * 256);
+					for (std::int64_t lane = 0; lane < 256; ++lane)
+					{
+						const auto column = columnBase + lane;
+						const auto gateValue = gate[gateOffset + row * gateRowStride + column * gateColumnStride];
+						const auto upValue = up[upOffset + row * upRowStride + column * upColumnStride];
+						sourceRow[column] = gateValue / (1.0F + std::exp(-gateValue)) * upValue;
+					}
+					QuantizeGGMLQ8KActivationBlock(sourceRow + block * 256, 1,
+					                               blocks_[static_cast<std::size_t>(row) * blockCount + block]);
+				}
+			}
+			rows_ = rows;
+			columns_ = columns;
+			return source_.data();
+		}
+
 	private:
 		bool Matches(const float* lhs, std::int64_t rows, std::int64_t columns, std::int64_t rowStride,
 		             std::int64_t columnStride, std::size_t elementCount) const
@@ -2022,12 +2052,17 @@ namespace
 		std::vector<GGMLQ8KActivationBlock> blocks_;
 	};
 
+	GGMLQ8KActivationThreadCache& GetGGMLQ8KActivationThreadCache()
+	{
+		thread_local GGMLQ8KActivationThreadCache cache;
+		return cache;
+	}
+
 	const GGMLQ8KActivationBlock* PrepareCachedGGMLQ8KActivation(const float* lhs, std::int64_t rows,
 	                                                             std::int64_t columns, std::int64_t rowStride,
 	                                                             std::int64_t columnStride)
 	{
-		thread_local GGMLQ8KActivationThreadCache cache;
-		return cache.Prepare(lhs, rows, columns, rowStride, columnStride);
+		return GetGGMLQ8KActivationThreadCache().Prepare(lhs, rows, columns, rowStride, columnStride);
 	}
 
 	extern "C" std::uint64_t litenn_cpu_ggml_q8k_activation_block_bytes()
@@ -4727,6 +4762,44 @@ namespace
 			return;
 		}
 		LiteNNCPUParallelFor(0, outputGroups, grain, body, &context, threadCount, affinityPolicy, waitPolicy);
+	}
+
+	extern "C" void litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+	    const float*, const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows,
+	    std::int64_t gateColumns, std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*,
+	    const float* upAligned, std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns,
+	    std::int64_t upRowStride, std::int64_t upColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+	    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+	    std::uint64_t affinityPolicyValue)
+	{
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || (format != QuantizedBlockFormat::GGML_Q4_K && format != QuantizedBlockFormat::GGML_Q6_K) ||
+		    !gateAligned || !upAligned || !rhsAligned || !outAligned || gateOffset < 0 || upOffset < 0 ||
+		    gateRows <= 0 || gateColumns <= 0 || gateRows != upRows || gateColumns != upColumns ||
+		    gateRows != outRows || outColumns <= 0 || gateRowStride <= 0 || gateColumnStride <= 0 || upRowStride <= 0 ||
+		    upColumnStride <= 0 || static_cast<std::uint64_t>(gateColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+
+		const float* activation = nullptr;
+		{
+			CPUAOTHelperProfileTimer profileTimer(
+			    "litenn_cpu_swiglu_prepare_q8k_activation_f32",
+			    CompiledModuleCPUHelperProfilerAccess::Enabled()
+			        ? std::format("gate={}x{} up={}x{}", gateRows, gateColumns, upRows, upColumns)
+			        : std::string{});
+			activation = GetGGMLQ8KActivationThreadCache().PrepareSwiGLU(gateAligned, gateOffset, gateRows, gateColumns,
+			                                                             gateRowStride, gateColumnStride, upAligned,
+			                                                             upOffset, upRowStride, upColumnStride);
+		}
+		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+		    nullptr, activation, 0, gateRows, gateColumns, gateColumns, 1, nullptr, rhsAligned, rhsOffset, rhsBytes,
+		    rhsStride, nullptr, outAligned, outOffset, outRows, outColumns, outRowStride, outColumnStride, formatValue,
+		    requestedThreadCount, affinityPolicyValue);
 	}
 
 	struct GGMLFieldInterleavedV4MatMulProjection
@@ -10286,6 +10359,9 @@ namespace
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_prepack_field_interleaved_v4));
 		RegisterJITRuntimeSymbol("litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32));
+		RegisterJITRuntimeSymbol(
+		    "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
+		    reinterpret_cast<void*>(&litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32));
 		RegisterJITRuntimeSymbol(
 		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
 		    reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32));
