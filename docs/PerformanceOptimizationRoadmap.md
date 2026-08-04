@@ -110,10 +110,19 @@ P0 implementation order:
   - [x] Add a repository-owned actual-completion control runner. `benchmark/run_llama_cpp_completion_control.py`
     captures binary/host/build/runtime fingerprints, alternates thread order, emits live progress, parses per-run eval
     timing, and redacts model, executable, prompt-by-default, extra absolute paths, and raw stdout/stderr artifacts.
-  - [x] Establish the clean local actual-completion baseline. Two balanced repetitions measured T2/T4/T8 at
-    `5.080/4.810/4.115 t/s`; LiteNN's `5.057 t/s` is within `0.45%` of the strongest local control.
+  - [x] Establish the clean local raw-prompt actual-completion baseline. Two balanced repetitions measured T2/T4/T8
+    at `5.080/4.810/4.115 t/s`; LiteNN's earlier stable-window `5.057 t/s` is within `0.45%`, but the boundaries are
+    not identical and this row is no longer the primary cross-runtime conclusion.
+  - [x] Align prompt formatting and decode windows. Chat mode produces the same 9-token Qwen template; llama.cpp's 15
+    eval calls are compared with LiteNN's 15 post-first-generation module calls. Bracketing llama.cpp controls both
+    measured `5.500 t/s`; fresh LiteNN runs measured `5.640/5.112/5.718 t/s`, median `5.640 t/s` (`+2.54%`) with a
+    material slow-run variance. The first 9 generated tokens match before the runtimes' ignore-EOS policies diverge.
+  - [ ] Match llama.cpp `--ignore-eos` semantics by suppressing EOS during LiteNN sampling, and require complete greedy
+    token-sequence parity before treating the aligned timing row as final evidence.
+  - [ ] Automate paired alternating LiteNN/llama.cpp controls and capture host frequency/power-state evidence. Require
+    a repeatable variance bound before claiming a lead or promoting a stage difference to P0.
   - [ ] Obtain and reproduce the exact external build and runtime configuration. The unresolved `6.85 t/s` control is
-    `34.84%` faster than the local llama.cpp T2 median and remains the evidence gate for another kernel P0.
+    `24.55%` faster than the aligned local llama.cpp T2 median and remains the evidence gate for another kernel P0.
 - [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
   noise and CPU time slightly regressed, so the uncommitted route was removed.
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,

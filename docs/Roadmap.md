@@ -3258,10 +3258,18 @@ Priority classes:
             promote the next kernel or scheduler change to P0.
             - [x] Add `benchmark/run_llama_cpp_completion_control.py` with binary/host/build fingerprints, balanced
                   thread ordering, per-run progress and metrics, and full artifact path/prompt redaction by default.
-            - [x] Establish a clean local control: two balanced repetitions measured T2/T4/T8 at
-                  `5.080/4.810/4.115 t/s`; current LiteNN is within `0.45%` of the strongest local median.
-            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`; it remains `34.84%` faster than
-                  the locally reproducible T2 control and therefore remains the evidence gate for the next CPU P0.
+            - [x] Establish a clean raw-prompt control: two balanced repetitions measured T2/T4/T8 at
+                  `5.080/4.810/4.115 t/s`. This is retained as a reproducibility row rather than the primary comparison.
+            - [x] Align Qwen chat formatting and the 15-token steady module/eval boundary. Bracketing llama.cpp runs
+                  both measured `5.500 t/s`; LiteNN measured `5.640/5.112/5.718 t/s`, with a `5.640 t/s` median
+                  (`+2.54%`) but materially higher run variance. The first 9 generated tokens match before ignore-EOS
+                  semantics diverge.
+            - [ ] Suppress EOS during LiteNN `--ignore-eos` sampling to match llama.cpp, then require full greedy
+                  token-sequence parity before accepting the final paired timing result.
+            - [ ] Automate paired alternating controls with host frequency/power-state capture and a variance gate
+                  before claiming a stable lead or selecting another kernel from a residual difference.
+            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`; it remains `24.55%` faster than
+                  the aligned local llama.cpp T2 control and therefore remains the evidence gate for the next CPU P0.
       - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
             and CPU time regressed slightly.
       - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs

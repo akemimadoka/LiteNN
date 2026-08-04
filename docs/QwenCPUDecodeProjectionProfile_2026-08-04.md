@@ -258,3 +258,44 @@ and the clean alternating matrix returned `5.07-5.09 t/s`. Because an overlappin
 could not be ruled out, the slower matrix is diagnostic evidence about benchmark orchestration, not runtime evidence.
 The runner now prints the start, wall duration, latency, and throughput of every repetition so such interference is
 visible while the control is running.
+
+## Prompt- and Window-Aligned Correction
+
+The raw-prompt 32-token control above is retained as a reproducible historical baseline, but it is not the strongest
+cross-runtime comparison. LiteNN applies the Qwen chat template, while that llama.cpp command decoded `hello` as raw
+text. It also compared LiteNN's post-first-token stable window with all 32 raw completion eval calls.
+
+The control runner now has an explicit `--conversation-mode chat`. For Qwen it produced the same 9-token formatted
+prompt used by LiteNN and normal assistant text. With `--predict 16`, llama.cpp charges the first generated token to
+prompt evaluation and reports 15 subsequent eval calls. `gguf_decode_compare.py --include-litenn-steady-generation`
+therefore compares those calls with LiteNN's 15 post-first-generation `module_run_ms` values, excluding sampling from
+both boundaries.
+
+The aligned llama.cpp T2 controls bracketed the LiteNN runs:
+
+| Control | Per-run throughput | Median latency | Median throughput |
+| --- | --- | ---: | ---: |
+| llama.cpp before LiteNN | `5.50 / 5.40 / 5.51 t/s` | `181.660 ms/token` | `5.500 t/s` |
+| llama.cpp after LiteNN | `5.50 / 5.41 / 5.50 t/s` | `181.740 ms/token` | `5.500 t/s` |
+| LiteNN steady module | `5.640 / 5.112 / 5.718 t/s` | `177.319 ms/token` | `5.640 t/s` |
+
+All LiteNN rows used the current Release binary, an enforced AOT cache hit, T8 adaptive workers, LLVM opt level 0,
+field-interleaved-v4 prepared weights, a fixed 16-token count, and no fallback. The first 9 generated tokens match
+llama.cpp, after which the current `--ignore-eos` semantics diverge: llama.cpp suppresses EOS, while LiteNN samples EOS
+and continues. The reusable command additions are `--conversation-mode chat --threads 2 --repetitions 3 --predict 16`
+for the llama.cpp control and `--include-litenn-steady-generation --llama-completion-json <control.json>` for
+`gguf_decode_compare.py`.
+
+The two llama.cpp brackets are stable and agree exactly at the displayed throughput. LiteNN's median is `2.54%`
+faster by throughput and `2.39%` faster by latency, but its slow run is about `10.1%` below its median. The defensible
+conclusion is therefore local parity with a small median LiteNN lead and materially higher LiteNN run variance, not a
+stable performance win. The next benchmark task is paired alternation with host frequency/power-state evidence and a
+variance gate.
+
+Token-sequence parity after EOS suppression is a correctness prerequisite for the final paired performance gate. The
+current timing comparison remains useful because shapes and helper schedules are unchanged, but it is not yet a
+same-token execution proof.
+
+The external `6.85 t/s` observation remains unresolved. It is `24.55%` faster than the aligned local llama.cpp median
+and `21.45%` faster than the aligned LiteNN median. Its exact build and runtime configuration must still be reproduced
+before using that difference to select another kernel.
