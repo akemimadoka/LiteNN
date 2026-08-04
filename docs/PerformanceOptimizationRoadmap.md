@@ -120,10 +120,20 @@ P0 implementation order:
   - [x] Match llama.cpp `--ignore-eos` semantics by suppressing EOS during LiteNN greedy/random sampling. The post-fix
     16-token Qwen run produced byte-identical text, no fallback, `5.685 t/s` full generation, and `5.765 t/s` aligned
     steady-module throughput versus the local llama.cpp `5.500 t/s` median.
-  - [ ] Automate paired alternating LiteNN/llama.cpp controls and capture host frequency/power-state evidence. Require
-    a repeatable variance bound before claiming a lead or promoting a stage difference to P0.
+  - [x] Automate paired alternating LiteNN/llama.cpp controls and capture host frequency/power-state evidence. The new
+    `benchmark/run_paired_gguf_decode_control.py` enforces prompt/eval-window parity, byte-identical text, no fallback,
+    alternating order, binary identity, path redaction, and a per-runtime CV gate. Two independent three-pair batches
+    passed the 3% gate: combined medians were `5.585 t/s` for LiteNN and `5.470 t/s` for llama.cpp, with a `+2.26%`
+    median paired LiteNN difference. Evidence: `docs/QwenCPUDecodePairedControl_2026-08-04.md`.
   - [ ] Obtain and reproduce the exact external build and runtime configuration. The unresolved `6.85 t/s` control is
-    `24.55%` faster than the aligned local llama.cpp T2 median and remains the evidence gate for another kernel P0.
+    `25.23%` faster than the combined aligned local llama.cpp median and `22.64%` faster than LiteNN. It remains the
+    evidence gate for another kernel P0.
+    - [ ] Capture the exact external commit, compiler, native/explicit ISA flags, thread affinity/strictness, polling,
+      priority, mmap/repack/warmup, KV dtype, prompt template, context, and decode command in a redacted artifact.
+    - [ ] Replay it through the paired runner with `--require-variance-gate`; require two accepted batches before
+      treating the result as a stable cross-runtime gap.
+    - [ ] If the gap persists, collect matched Attention/FFN/logits boundaries and promote only the largest measured
+      deficit to CPU P0.
 - [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
   noise and CPU time slightly regressed, so the uncommitted route was removed.
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,
@@ -155,7 +165,12 @@ P0 implementation order:
 P1 follow-up after the P0 gate:
 
 - [ ] Add optional PMU/platform sampling for LLC misses, memory stalls, and effective bandwidth. The profile bundle must
-  degrade cleanly when Windows policy or CI privileges do not permit system profiling.
+  degrade cleanly when Windows policy or CI privileges do not permit system profiling. The paired control now records
+  Windows power policy and processor-power frequency, but the constant 4300 MHz result is policy metadata rather than
+  effective-cycle or residency evidence.
+- [ ] Extend paired actual-decode controls from the current 15-call window to sustained 128- and 512-token windows, then
+  cover 2K/32K/128K/1M context tiers as paged-KV capacity becomes production-ready. Preserve byte-identical text,
+  no-fallback, AOT-cache-hit, alternating-order, and variance gates.
 - [ ] Preserve a reproducible out-of-tree llama.cpp stage-control recipe without adding llama.cpp runtime linkage to
   LiteNN production targets.
 - [ ] Add non-gating warm/cold benchmark trend output and alert when a cache-hot win regresses the cold-stream or

@@ -287,17 +287,16 @@ command additions are `--conversation-mode chat --threads 2 --repetitions 3 --pr
 and `--include-litenn-steady-generation --llama-completion-json <control.json>` for `gguf_decode_compare.py`.
 
 The two llama.cpp brackets are stable and agree exactly at the displayed throughput. LiteNN's median is `2.54%`
-faster by throughput and `2.39%` faster by latency, but its slow run is about `10.1%` below its median. The defensible
-conclusion is therefore local parity with a small median LiteNN lead and materially higher LiteNN run variance, not a
-stable performance win. The next benchmark task is paired alternation with host frequency/power-state evidence and a
-variance gate.
+faster by throughput and `2.39%` faster by latency, but its slow run is about `10.1%` below its median. This historical
+batch therefore established local parity rather than a stable win. The subsequent paired alternation and variance gate
+are recorded separately in `QwenCPUDecodePairedControl_2026-08-04.md`.
 
 The post-fix real-model run produced byte-identical 16-token text in both runtimes:
 `Hello! How can I assist you today? Feel free to ask any questions or`. LiteNN had no fallback and measured
 `5.685 t/s` over the full generation plus `5.765 t/s` over the aligned steady-module window, respectively `3.37%` and
-`4.82%` above the llama.cpp `5.500 t/s` median. This single run closes the correctness gate but does not supersede the
-three-run variance conclusion; paired alternating repetitions remain required before claiming a stable lead.
+`4.82%` above the llama.cpp `5.500 t/s` median. This single run closes the correctness gate but is not itself the final
+performance claim; the later paired report supplies the repeatability evidence.
 
-The external `6.85 t/s` observation remains unresolved. It is `24.55%` faster than the aligned local llama.cpp median
-and `21.45%` faster than the aligned LiteNN median. Its exact build and runtime configuration must still be reproduced
+The external `6.85 t/s` observation remains unresolved. Against the subsequent six-run paired medians it is `25.23%`
+above local llama.cpp and `22.64%` above LiteNN. Its exact build and runtime configuration must still be reproduced
 before using that difference to select another kernel.

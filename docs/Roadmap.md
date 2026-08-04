@@ -3267,10 +3267,22 @@ Priority classes:
             - [x] Suppress EOS during LiteNN `--ignore-eos` greedy/random sampling to match llama.cpp. A real post-fix
                   Qwen run produced byte-identical 16-token text, no fallback, `5.685 t/s` full generation, and
                   `5.765 t/s` aligned steady-module throughput versus llama.cpp's `5.500 t/s` median.
-            - [ ] Automate paired alternating controls with host frequency/power-state capture and a variance gate
-                  before claiming a stable lead or selecting another kernel from a residual difference.
-            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`; it remains `24.55%` faster than
-                  the aligned local llama.cpp T2 control and therefore remains the evidence gate for the next CPU P0.
+            - [x] Automate paired alternating controls with host frequency/power-state capture and a variance gate.
+                  `benchmark/run_paired_gguf_decode_control.py` now enforces the aligned 9-prompt/15-eval window,
+                  byte-identical output, no fallback, binary identity, redaction, alternating order, and a 3% CV gate.
+                  Two independent three-pair batches passed: combined medians were LiteNN `5.585 t/s` and llama.cpp
+                  `5.470 t/s`, with a `+2.26%` median paired difference. See
+                  `docs/QwenCPUDecodePairedControl_2026-08-04.md`.
+            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`. Against the new six-run medians
+                  it is `25.23%` above local llama.cpp and `22.64%` above LiteNN, so it remains the evidence gate for
+                  the next CPU P0.
+                  - [ ] Capture exact build/ISA/thread/affinity/polling/mmap/KV/context settings in a redacted artifact.
+                  - [ ] Require two paired batches to pass the variance, output-parity, and no-fallback gates.
+                  - [ ] If the gap persists, profile matched Attention/FFN/logits boundaries before selecting a kernel.
+            - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
+                  tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
+            - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
+                  frequency remains policy metadata and must not be treated as proof of equal effective clocks.
       - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
             and CPU time regressed slightly.
       - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs
@@ -3651,6 +3663,15 @@ These improvements do not require a compatibility break and should not block vNe
   use it as the production execution path.
 
 ## Date Notes
+
+### 2026-08-04
+
+- Added the paired alternating LiteNN/llama.cpp actual-decode control with text/no-fallback/variance gates, power-policy
+  sampling, binary identities, and path-redacted evidence.
+- Recorded two accepted three-pair Qwen 14B CPU batches. LiteNN's combined `5.585 t/s` median is locally at parity with
+  and slightly above llama.cpp's `5.470 t/s`; the unresolved external `6.85 t/s` configuration remains the next CPU P0
+  evidence target instead of speculative microkernel changes.
+- Added sustained decode/context tiers and effective-cycle/cache/memory counters as follow-up evidence requirements.
 
 ### 2026-06-20
 
