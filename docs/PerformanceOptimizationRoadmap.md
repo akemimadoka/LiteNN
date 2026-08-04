@@ -35,7 +35,8 @@ Priority classes for the GGUF/Qwen decode work:
 
 ### 2026-08-04 CPU Decode Gap Closure Tranche
 
-Evidence owner: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`; detailed profiling narrative:
+Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026-08-04.md`; detailed evidence owner:
+`docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`; detailed profiling narrative:
 `docs/PerformanceAnalysis_2026-08-04.md`; projection phase evidence:
 `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; stronger build/runtime control:
 `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead stage-control evidence:
@@ -46,6 +47,17 @@ but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stab
 `176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
 
 P0 implementation order:
+
+- [ ] Execute the decision gates in the recorded order; do not select work from rejected synchronized stage deltas.
+  - [ ] First, replace reference callback differencing with non-synchronizing aggregate counters and accept a stage
+    only below `3%` whole-token overhead and `15%` stage CV.
+  - [ ] In parallel with that evidence work, complete the bounded single-consumer RMSNorm-to-grouped-Q8_K staging A/B;
+    retain it as a runtime optimization only at or above the `2%` paired full-token gate.
+  - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
+  - [ ] Open FFN-Down kernel/prefetch work only when the new stage evidence selects it, and require cache-cold plus
+    full-decode improvement rather than a cache-hot-only win.
+  - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
+    2K/32K/128K/1M context tiers.
 
 - [x] Build a cache-cold GGML projection-stream benchmark.
   - `GGMLFieldInterleavedV4ColdProjectionStream` covers isolated Q4_K/Q6_K `13824 -> 5120` Down streams, the observed

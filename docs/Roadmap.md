@@ -3208,7 +3208,9 @@ Priority classes:
       T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
       for controlled experiments but is not the production default.
 - [ ] P0: Close the remaining CPU decode gap against the strongest controlled CPU-only llama.cpp reference:
-      `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical evidence record and
+      `docs/QwenCPUDecodeCrossRuntimeDecision_2026-08-04.md` freezes the measured cross-runtime data, supported
+      conclusions, and ordered decision gates. `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical
+      detailed evidence record and
       `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. Projection/worker phase
       evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; controlled build/runtime
       evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead matched-stage evidence is in
@@ -3219,6 +3221,10 @@ Priority classes:
       time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
+      - [ ] Follow the evidence-backed order: add low-overhead matched reference-stage counters; complete the bounded
+            RMSNorm-to-grouped-Q8_K fusion A/B; reproduce the external `6.85 token/s` provenance; open Down-kernel work
+            only if selected by accepted stage data; then extend controls to sustained decode and long-context tiers.
+            Rejected synchronized stage deltas and cache-hot-only wins must not reorder this sequence.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
             observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,
