@@ -175,6 +175,23 @@ Positive values mean the x16 executable was faster. The Q4_K-only effect is smal
 mixed sequence regresses. The prototype was removed without a full-model run. A direct x16 reuse is therefore closed;
 Q4_K needs a different decomposition or memory-scheduling change.
 
+### Bounded Software Prefetch Control
+
+A second contraction-only experiment prefetched four cache lines from each future field-v4 weight block into the
+shared cache hierarchy. Q4_K x8 used one stream and Q6_K x16 used both independent packed-group streams. Distances of
+2, 4, and 8 quantization blocks were tested without changing arithmetic, scheduling, or the prepared layout ABI.
+
+| Prefetch distance | Q4_K x24 median | Q6_K x24 median | Mixed x48 median |
+| ---: | ---: | ---: | ---: |
+| 2 blocks | `21.263 ms` | `31.916 ms` | `52.019 ms` |
+| 4 blocks | `19.283 ms` | `29.685 ms` | `47.574 ms` |
+| 8 blocks | `20.112 ms` | `28.220 ms` | `47.873 ms` |
+| Clean alternating-run range | `18.72-20.67 ms` | `26.06-27.76 ms` | `42.87-45.87 ms` |
+
+No distance beats the clean mixed-stream range, and Q6_K regresses most consistently. The prefetch code was removed.
+The current sequential block access is already served effectively by hardware prefetch; adding sparse software hints
+increases instruction and cache pressure instead of closing the cold-stream deficit.
+
 ## Controlled SwiGLU Fusion A/B
 
 The distinct/shared control above does not isolate activation materialization. Reusing one activation also reuses its

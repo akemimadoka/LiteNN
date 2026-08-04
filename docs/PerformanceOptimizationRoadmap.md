@@ -242,7 +242,11 @@ P0 implementation order:
   - Accepted exact-token evidence: LiteNN Q4_K/Q6_K Down plus SwiGLU is `54.057 ms/token` with `2.97%` CV; the complete
     Clang/no-OpenMP reference stage is `41.165 ms/token` with `0.16%` CV. The conservative deficit is `12.892 ms`
     (`31.32%`) and explains at least 63% of the profiled module difference.
-  - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
+  - Evaluate multiple independent output-group streams per worker.
+  - [x] Evaluate bounded software prefetch distances 2/4/8 for contraction-shaped Down rows. Mixed Q4_K_M medians
+    were `52.019/47.574/47.873 ms`, all slower than the clean alternating-run `42.87-45.87 ms` range; Q6_K also
+    regressed consistently. The hints were removed. Do not revisit block-level prefetch without PMU evidence that
+    hardware prefetch is failing.
   - [x] Re-evaluate Q4_K AVX2 x16 only for contraction-shaped cold-stream Down. Three alternating binary pairs measured
     Q4_K-only changes of `+7.35%/-10.86%/+1.51%` and mixed Q4_K_M changes of `+4.45%/-3.41%/-9.09%`; paired medians
     were `+1.51%` and `-3.41%`. The prototype was removed without a full-model run. Both selective and broad reuse of
