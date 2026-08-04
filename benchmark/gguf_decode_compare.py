@@ -21,6 +21,9 @@ MS_PER_GENERATED_TOKEN_RE = re.compile(r"\bms_per_generated_token=(?P<value>[0-9
 GENERATED_TOKENS_PER_SECOND_RE = re.compile(r"\bgenerated_tokens_per_second=(?P<value>[0-9.eE+-]+)\b")
 PROMPT_REPLAY_MS_RE = re.compile(r"\bprompt_replay_ms=(?P<value>[0-9.eE+-]+)\b")
 GENERATION_MS_RE = re.compile(r"\bgeneration_ms=(?P<value>[0-9.eE+-]+)\b")
+STREAM_GENERATION_MODULE_MS_RE = re.compile(
+    r"^stream stats\b.*\bphase=generation\b.*\bmodule_run_ms=(?P<value>[0-9.eE+-]+)\b", re.MULTILINE
+)
 
 
 def load_json(path: Path) -> object:
@@ -132,6 +135,39 @@ def litenn_row(path: Path) -> dict[str, object]:
         "hostOverheadSharePercent": None,
         "source": str(path),
     }
+
+
+def litenn_steady_generation_row(path: Path, base_row: dict[str, object]) -> dict[str, object]:
+    report = load_json(path)
+    if not isinstance(report, dict):
+        raise SystemExit(f"unsupported LiteNN smoke report: {path}")
+    step = find_step(report, "litenn_decode_token_ids") or find_step(report, "litenn_replay_from_golden")
+    if step is None:
+        raise SystemExit(f"LiteNN smoke report has no decode step: {path}")
+    stdout = resolve_evidence_path(step.get("stdout"), path)
+    stdout_text = stdout.read_text(encoding="utf-8")
+    module_times = [
+        float(match.group("value")) for match in STREAM_GENERATION_MODULE_MS_RE.finditer(stdout_text)
+    ]
+    if len(module_times) < 2:
+        raise SystemExit(f"LiteNN decode stdout needs at least two stream-stats generation steps: {stdout}")
+    steady_times = module_times[1:]
+    total_ms = sum(steady_times)
+    row = dict(base_row)
+    row.update(
+        {
+            "decodeMode": f"{base_row.get('decodeMode', 'decode')}-steady-module",
+            "config": f"{base_row.get('config', 'n/a')},boundary=module,window=exclude-first-generation",
+            "tokens": len(steady_times),
+            "totalMs": total_ms,
+            "promptReplayMs": None,
+            "generationMs": total_ms,
+            "msPerToken": total_ms / len(steady_times),
+            "tokensPerSecond": len(steady_times) * 1000.0 / total_ms,
+            "source": f"{path}#steady-generation-module",
+        }
+    )
+    return row
 
 
 def as_float(value: object, default: float = 0.0) -> float:
@@ -358,8 +394,8 @@ def llama_completion_rows(path: Path) -> list[dict[str, object]]:
     summaries = document.get("summary")
     if not isinstance(configuration, dict) or not isinstance(summaries, list):
         raise SystemExit(f"llama-completion control report has no configuration/summary: {path}")
-    token_count = as_int(configuration.get("predict"))
-    if token_count <= 0:
+    configured_token_count = as_int(configuration.get("predict"))
+    if configured_token_count <= 0:
         raise SystemExit(f"llama-completion control report has no positive predict count: {path}")
 
     rows = []
@@ -367,12 +403,14 @@ def llama_completion_rows(path: Path) -> list[dict[str, object]]:
         if not isinstance(summary, dict):
             continue
         threads = as_int(summary.get("threads"))
+        token_count = as_int(summary.get("eval_tokens"), configured_token_count)
         tokens_per_second = as_float(summary.get("median_tokens_per_second"))
         ms_per_token = as_float(summary.get("median_ms_per_token"))
         if threads <= 0 or tokens_per_second <= 0.0 or ms_per_token <= 0.0:
             continue
         config = (
             f"T={threads},runs={as_int(summary.get('runs'))},"
+            f"prompt={configuration.get('conversation_mode', 'raw')},"
             f"strict={configuration.get('cpu_strict', 'n/a')},"
             f"mask={configuration.get('cpu_mask') or 'default'},"
             f"poll={configuration.get('poll', 'n/a')},"
@@ -577,13 +615,23 @@ def write_outputs(rows: list[dict[str, object]], output_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--litenn-smoke-report", action="append", type=Path, default=[])
+    parser.add_argument(
+        "--include-litenn-steady-generation",
+        action="store_true",
+        help="Also compare module time after excluding the first stream-stats generation step",
+    )
     parser.add_argument("--litenn-profile-summary", action="append", type=Path, default=[])
     parser.add_argument("--llama-bench-json", action="append", type=Path, default=[])
     parser.add_argument("--llama-completion-json", action="append", type=Path, default=[])
     parser.add_argument("--pytorch-json", action="append", type=Path, default=[])
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
-    rows = [litenn_row(path) for path in args.litenn_smoke_report]
+    rows = []
+    for path in args.litenn_smoke_report:
+        row = litenn_row(path)
+        rows.append(row)
+        if args.include_litenn_steady_generation:
+            rows.append(litenn_steady_generation_row(path, row))
     for path in args.litenn_profile_summary:
         rows.extend(litenn_profile_summary_rows(path))
     for path in args.llama_bench_json:

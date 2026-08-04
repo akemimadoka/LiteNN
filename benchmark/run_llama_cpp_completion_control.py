@@ -190,7 +190,10 @@ def redact_command(command: list[str], completion: Path, model: Path, prompt: st
 
 
 def find_cmake_build_metadata(completion: Path) -> dict[str, str]:
-    cache = next((parent / "CMakeCache.txt" for parent in completion.parents if (parent / "CMakeCache.txt").is_file()), None)
+    cache = next(
+        (parent / "CMakeCache.txt" for parent in completion.parents if (parent / "CMakeCache.txt").is_file()),
+        None,
+    )
     if cache is None:
         return {}
     allowed = {
@@ -318,13 +321,16 @@ def build_command(args: argparse.Namespace, completion: Path, model: Path, threa
         "--perf",
         "--simple-io",
         "--no-display-prompt",
-        "--no-conversation",
         "--log-colors",
         "off",
         "--no-log-timestamps",
     ]
     if args.cpu_mask:
         command.extend(("--cpu-mask", args.cpu_mask))
+    if args.conversation_mode == "chat":
+        command.extend(("--conversation", "--single-turn"))
+    else:
+        command.append("--no-conversation")
     command.append("--mmap" if args.mmap == "on" else "--no-mmap")
     command.append("--repack" if args.repack == "on" else "--no-repack")
     command.append("--warmup" if args.warmup == "on" else "--no-warmup")
@@ -340,10 +346,16 @@ def summarize_runs(runs: list[dict[str, object]]) -> list[dict[str, object]]:
         thread_runs = [run for run in runs if int(run["threads"]) == threads]
         latencies = [float(run["metrics"]["eval_ms_per_token"]) for run in thread_runs]  # type: ignore[index]
         throughputs = [float(run["metrics"]["eval_tokens_per_second"]) for run in thread_runs]  # type: ignore[index]
+        eval_counts = {int(run["metrics"]["eval_count"]) for run in thread_runs}  # type: ignore[index]
+        prompt_counts = {int(run["metrics"]["prompt_count"]) for run in thread_runs}  # type: ignore[index]
+        if len(eval_counts) != 1 or len(prompt_counts) != 1:
+            raise ValueError(f"T{threads} repetitions produced inconsistent prompt/eval token counts")
         summaries.append(
             {
                 "threads": threads,
                 "runs": len(thread_runs),
+                "prompt_tokens": next(iter(prompt_counts)),
+                "eval_tokens": next(iter(eval_counts)),
                 "median_ms_per_token": statistics.median(latencies),
                 "min_ms_per_token": min(latencies),
                 "max_ms_per_token": max(latencies),
@@ -364,15 +376,19 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         "",
         "## Reproducibility",
         "",
-        f"- Host: `{host['cpu_model']}` (`{host['logical_cpus']}` logical CPUs, `{host['platform']}`)",  # type: ignore[index]
+        f"- Host: `{host['cpu_model']}` "  # type: ignore[index]
+        f"(`{host['logical_cpus']}` logical CPUs, `{host['platform']}`)",  # type: ignore[index]
         f"- Binary SHA-256: `{binary['sha256']}`",  # type: ignore[index]
         f"- Prompt SHA-256: `{document['prompt']['sha256']}`",  # type: ignore[index]
         f"- Prompt UTF-8 bytes: `{document['prompt']['utf8_bytes']}`",  # type: ignore[index]
         f"- Predicted tokens: `{configuration['predict']}`",  # type: ignore[index]
         f"- Context: `{configuration['context_size']}`",  # type: ignore[index]
+        f"- Conversation mode: `{configuration['conversation_mode']}`",  # type: ignore[index]
         f"- KV cache: `{configuration['cache_type_k']}/{configuration['cache_type_v']}`",  # type: ignore[index]
-        f"- mmap/repack/warmup: `{configuration['mmap']}/{configuration['repack']}/{configuration['warmup']}`",  # type: ignore[index]
-        f"- CPU strict/poll/priority: `{configuration['cpu_strict']}/{configuration['poll']}/{configuration['priority']}`",  # type: ignore[index]
+        f"- mmap/repack/warmup: "
+        f"`{configuration['mmap']}/{configuration['repack']}/{configuration['warmup']}`",  # type: ignore[index]
+        f"- CPU strict/poll/priority: "
+        f"`{configuration['cpu_strict']}/{configuration['poll']}/{configuration['priority']}`",  # type: ignore[index]
         "",
         "Version:",
         "",
@@ -390,13 +406,14 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         (
             "## Results",
             "",
-            "| threads | runs | median ms/token | median tokens/s | min-max tokens/s |",
-            "| ---: | ---: | ---: | ---: | ---: |",
+            "| threads | runs | eval tokens | median ms/token | median tokens/s | min-max tokens/s |",
+            "| ---: | ---: | ---: | ---: | ---: | ---: |",
         )
     )
     for summary in document["summary"]:  # type: ignore[union-attr]
         lines.append(
-            f"| {summary['threads']} | {summary['runs']} | {summary['median_ms_per_token']:.6g} | "
+            f"| {summary['threads']} | {summary['runs']} | {summary['eval_tokens']} | "
+            f"{summary['median_ms_per_token']:.6g} | "
             f"{summary['median_tokens_per_second']:.6g} | {summary['min_tokens_per_second']:.6g}-"
             f"{summary['max_tokens_per_second']:.6g} |"
         )
@@ -419,6 +436,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", default=3, type=positive_int)
     parser.add_argument("--predict", default=32, type=positive_int)
     parser.add_argument("--context-size", default=256, type=positive_int)
+    parser.add_argument(
+        "--conversation-mode",
+        choices=["raw", "chat"],
+        default="raw",
+        help="Use the model chat template for one turn or decode the prompt as raw text",
+    )
     parser.add_argument("--batch-size", default=2048, type=positive_int)
     parser.add_argument("--ubatch-size", default=512, type=positive_int)
     parser.add_argument("--cache-type-k", default="f16")
@@ -533,6 +556,7 @@ def main() -> int:
             "repetitions": args.repetitions,
             "predict": args.predict,
             "context_size": args.context_size,
+            "conversation_mode": args.conversation_mode,
             "batch_size": args.batch_size,
             "ubatch_size": args.ubatch_size,
             "cache_type_k": args.cache_type_k,
