@@ -3239,6 +3239,9 @@ Priority classes:
             - [x] Evaluate software prefetch distances 2/4/8 over future field-v4 weight blocks. Mixed-stream medians
                   were `52.019/47.574/47.873 ms` versus the clean `42.87-45.87 ms` alternating-run range, with consistent
                   Q6_K regressions. All hints were removed; continue with output-stream organization instead.
+            - [x] Rebuild Q4_K x16 as two pair-sum-folded x8-style output streams. Three alternating binary pairs
+                  regressed Q4_K by `6.91%` median and the real mixed stream by `2.80%`; every relevant pair was
+                  negative. The implementation was removed despite its shorter cache-hot instruction path.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
             observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,

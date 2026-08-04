@@ -192,6 +192,23 @@ No distance beats the clean mixed-stream range, and Q6_K regresses most consiste
 The current sequential block access is already served effectively by hardware prefetch; adding sparse software hints
 increases instruction and cache pressure instead of closing the cold-stream deficit.
 
+### Pair-Sum-Folded Q4_K x16 Control
+
+The two-stream Q4_K x16 tile was then rebuilt around the accepted x8 reduction: each stream accumulates safe Int16
+pair sums and folds pair reduction plus scale into one `vpmaddwd`, instead of expanding every chunk to Int32 before a
+separate scale multiply. Only contraction-shaped Down rows entered the new tile. Five focused correctness tests passed,
+but three alternating baseline/variant process pairs rejected it:
+
+| Stream | Pair 1 | Pair 2 | Pair 3 | Paired median |
+| --- | ---: | ---: | ---: | ---: |
+| Q4_K Down x24 | `-6.91%` | `-18.30%` | `-4.59%` | `-6.91%` |
+| Unchanged Q6_K control x24 | `+7.63%` | `-5.18%` | `-6.36%` | `-5.18%` |
+| Real mixed Q4_K_M Down x48 | `-2.80%` | `-1.53%` | `-5.23%` | `-2.80%` |
+
+All Q4_K and mixed pairs regress despite the shorter arithmetic chain and a lower cache-hot call time. The prototype
+was removed. Interleaving two packed output-group streams increases cold-stream pressure enough to outweigh shared
+activation loads and instruction savings on this host.
+
 ## Controlled SwiGLU Fusion A/B
 
 The distinct/shared control above does not isolate activation materialization. Reusing one activation also reuses its
