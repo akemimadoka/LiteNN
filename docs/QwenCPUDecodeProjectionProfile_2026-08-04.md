@@ -158,3 +158,60 @@ latencies must not be compared directly because host frequency and first-touch s
 Manual AVX2/AVX-512 activation quantization is no longer a P0 item: the remaining structured Q8_K preparation is only
 about `1.19 ms/step`. The next profile decision must instead compare the now-dominant grouped Gate/Up and Q6_K Down
 work against the same-run CPU-only llama.cpp stage control, then target the largest remaining cross-runtime gap.
+
+## Fresh CPU-Only Control Re-Ranking
+
+Two locally built llama.cpp CPU-only `llama-bench` binaries were measured after the Q8_K change. Both used commit
+`b81c2cdd7`, Release, `GGML_NATIVE=ON`, `-march=native`, no CUDA, no BLAS, and flash attention disabled. Their best
+16-token results were at two threads:
+
+| Control | T2 | T4 | T8 | T16 | T32 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Primary `llama-bench` | `4.565 t/s` | `4.399 t/s` | `3.973 t/s` | `2.921 t/s` | `1.946 t/s` |
+| Alternate `llama-bench` | `4.717 t/s` | `4.407 t/s` | `3.920 t/s` | not run | not run |
+
+A separately built `llama-completion` from the same Release tree then measured the actual prompt/decode path over 32
+generated tokens: T2 was `198.91 ms/token` (`5.03 t/s`) and T8 was `242.77 ms/token` (`4.12 t/s`). The LiteNN
+three-run stable median of `197.748 ms/token` (`5.057 t/s`) is effectively tied with this strongest current local
+control and is faster than both `llama-bench` controls. This closes the old local `~54 ms/token` gap; it does not
+invalidate the user's independently observed `6.85 t/s`, which remains the stronger target until its exact build,
+thread, affinity, polling, and command configuration is reproduced.
+
+| Actual decode control | Threads | Latency | Throughput | LiteNN throughput difference |
+| --- | ---: | ---: | ---: | ---: |
+| LiteNN cache-hit decode | 8 | `197.748 ms/token` | `5.057 t/s` | baseline |
+| llama.cpp `llama-completion` | 2 | `198.91 ms/token` | `5.03 t/s` | LiteNN `+0.54%` |
+| llama.cpp `llama-completion` | 8 | `242.77 ms/token` | `4.12 t/s` | LiteNN `+22.74%` |
+
+The runtimes use their own best locally measured thread counts in the primary row. The T8 row is retained as a
+same-requested-thread diagnostic, not as the headline comparison. `llama-bench` is excluded from this percentage table
+because its execution boundary is not identical to the prompt/completion tools.
+
+The fresh low-boundary llama.cpp T2 profiler measured:
+
+| Stage | llama.cpp T2 |
+| --- | ---: |
+| Attention block | `65.158 ms/token` |
+| FFN prefix and Gate Q4_K | `45.099 ms/token` |
+| FFN Up Q4_K | `43.206 ms/token` |
+| Activation and Down Q4_K | `22.169 ms/token` |
+| Activation and Down Q6_K | `35.223 ms/token` |
+| Complete FFN block, coarser profile | `140.013 ms/token` |
+| Final logits | `12.893 ms/token` |
+
+The corresponding LiteNN helper totals were approximately `38.9 ms` for QKV/output projection plus attention/RoPE/KV
+update, `122.1 ms` for grouped Gate/Up plus SwiGLU plus Q4_K/Q6_K Down, and `11.49 ms` for logits. These boundaries are
+not identical enough for a percentage claim, but they provide no evidence that grouped Gate/Up or Down is currently
+slower than the bundled control. Absolute LiteNN helper rank is therefore no longer a sufficient reason to change a
+kernel.
+
+Two follow-up experiments were rejected:
+
+- Grouped Q4_K x16 reused one activation scan across adjacent output groups, but the Qwen Gate/Up median changed only
+  from `1.14` to `1.11 ms` with about `4%` run noise and slightly worse CPU time. The uncommitted path was removed.
+- Replacing per-worker binary semaphores with `atomic::wait/notify_one` reduced measured ordinary-projection dispatch
+  from `12.930` to `10.129 ms/step` (`-21.7%`), but parallel wall time increased `1.213 ms`, barrier wait increased
+  `0.580 ms`, and total profiled latency regressed `0.54%`. The uncommitted path was removed.
+
+The next performance gate is to reproduce the stronger `6.85 t/s` external control configuration. Until then, retain
+the current kernels and semaphore worker path, and require a fresh stage difference before another CPU P0 change.

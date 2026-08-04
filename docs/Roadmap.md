@@ -3242,9 +3242,24 @@ Priority classes:
             `1.1865 ms/step`, profiled stable latency from `266.887` to `184.275 ms/token`, and preserved the token
             sequence with no fallback. Three no-helper-profile stable averages were `197.748`, `195.874`, and
             `200.156 ms/token`, a `22.94%` median reduction from the preceding `256.616 ms/token` baseline.
-      - [ ] Re-rank grouped Gate/Up, Q6_K Down, Q4_K Down, hidden/output, and logits against a fresh CPU-only llama.cpp
+      - [x] Re-rank grouped Gate/Up, Q6_K Down, Q4_K Down, hidden/output, and logits against a fresh CPU-only llama.cpp
             stage control before selecting the next kernel. Manual activation-quantizer SIMD is deferred because only
             `1.1865 ms/step` remains in the structured phase and is no longer P0.
+            Completed on 2026-08-04: two bundled Release CPU-only `llama-bench` controls peaked at `4.565` and
+            `4.717 t/s` at T2, while actual `llama-completion` measured `5.03 t/s`. LiteNN's three-run stable median is
+            `5.057 t/s`, so the old local parity gap is closed. Fresh stage boundaries also did not identify a slower
+            LiteNN Attention, FFN, or logits stage. The user's independently observed `6.85 t/s` remains the stronger
+            target and must be reproduced with exact build/thread/affinity/polling/context settings before another
+            kernel is promoted to P0.
+      - [ ] Reproduce the external `6.85 t/s` CPU-only result with a redacted, repeatable actual-completion control.
+            Record the llama.cpp commit, compiler and ISA flags, thread/affinity/polling policy, mmap and priority,
+            KV dtype, context and decode lengths, and exact command without retaining the private model path. Run an
+            adjacent LiteNN cache-hit decode over the same generated-token window; only a measured stage deficit may
+            promote the next kernel or scheduler change to P0.
+      - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
+            and CPU time regressed slightly.
+      - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs
+            increased and total profiled latency regressed `0.54%`.
       - [ ] Amortize the measured `14.9425 ms/step` dispatch floor across compatible helper sequences. Lock and barrier
             tuning remain secondary unless a new profile changes their ranking.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,

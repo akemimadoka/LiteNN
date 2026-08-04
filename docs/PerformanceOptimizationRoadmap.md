@@ -89,12 +89,29 @@ P0 implementation order:
     remaining `~67.8 ms/step` compute from the now-small quantization cost.
   - [ ] P2: Add manual AVX2/AVX-512 preparation only if a future profile makes the remaining `1.1865 ms/step` material.
     The parity-safe scalar source now permits effective compiler optimization and has removed the P0 bottleneck.
-- [ ] Re-rank residual projection work against a fresh CPU-only llama.cpp stage control.
+- [x] Re-rank residual projection work against a fresh CPU-only llama.cpp stage control.
   - The post-quantizer helper profile is led by grouped Q4_K Gate/Up (`~67.8 ms/step`), followed by Q6_K Down,
     Q4_K Down, hidden/output projections, and logits. Absolute helper rank alone is insufficient: optimize the largest
     measured cross-runtime stage gap, not merely the largest LiteNN stage.
   - Use alternating cache-warm T8 stage controls and preserve exact token/no-fallback gates before selecting the next
     kernel or scheduling change.
+  - Fresh controls on 2026-08-04 found no remaining gap against the bundled llama.cpp build. Two Release CPU-only
+    `llama-bench` binaries peaked at `4.565` and `4.717 t/s` at T2; actual `llama-completion` measured `5.03 t/s` at
+    T2. LiteNN's three-run stable median is `5.057 t/s`. The old local parity gap is closed, while the user's stronger
+    independent `6.85 t/s` result remains the next reproducibility/optimization target.
+  - The fresh llama.cpp T2 stage control measured Attention `65.158 ms`, complete FFN `140.013 ms`, and logits
+    `12.893 ms/token`. Comparable LiteNN helper sums were about `38.9`, `122.1`, and `11.49 ms`; boundary differences
+    prevent a percentage claim but do not identify a slower LiteNN projection stage.
+- [ ] Reproduce the stronger external `6.85 t/s` CPU-only control before opening another kernel P0.
+  - Capture llama.cpp commit, compiler, ISA flags, thread count, CPU mask/strictness, polling, mmap, priority, KV dtype,
+    context, prompt/decode length, and the exact completion command in a redacted control artifact.
+  - Compare actual completion decode, not only `llama-bench`, and run an adjacent LiteNN cache-hit control with the same
+    generated-token window. Promote only the measured stage difference to P0.
+- [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
+  noise and CPU time slightly regressed, so the uncommitted route was removed.
+- [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,
+  but later worker arrival raised parallel wall/barrier time and total profiled latency regressed `0.54%`; the
+  semaphore implementation remains.
 - [ ] Reduce the measured per-helper dispatch floor.
   - Batch compatible projection work or amortize worker wake-up across helper sequences before changing lock policy.
   - Use `14.9425 ms/step` across 97 ordinary projections as the baseline; keep uncontended-lock and affinity tuning
