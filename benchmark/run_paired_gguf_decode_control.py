@@ -23,6 +23,7 @@ from run_llama_cpp_completion_control import (
     parse_perf_output,
     priority,
     prompt_metadata,
+    sha256_file,
     version_metadata,
 )
 
@@ -63,6 +64,7 @@ def redact_text(text: str, replacements: dict[str, str]) -> str:
             continue
         candidates[source] = destination
         try:
+            candidates[Path(source).as_posix()] = destination
             candidates[str(Path(source).resolve())] = destination
             candidates[Path(source).resolve().as_posix()] = destination
         except OSError:
@@ -269,6 +271,10 @@ def series_statistics(values: list[float]) -> dict[str, float | int]:
 def text_identity(text: str) -> dict[str, object]:
     encoded = text.encode("utf-8")
     return {"sha256": hashlib.sha256(encoded).hexdigest(), "utf8_bytes": len(encoded)}
+
+
+def binary_identity(path: Path) -> dict[str, object]:
+    return {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
 
 
 def build_llama_command(args: argparse.Namespace, model: Path, completion: Path) -> list[str]:
@@ -484,6 +490,8 @@ def main() -> int:
         str(tokenizer): "<llamacpp-tokenizer>",
         str(completion): "<llama-completion>",
         str(repo_root()): "<repo>",
+        str(Path.cwd()): "<repo>",
+        str(args.aot_cache_dir.absolute()): "<aot-cache>",
         str(cache_dir): "<aot-cache>",
         args.prompt: "<prompt>",
     }
@@ -494,6 +502,8 @@ def main() -> int:
         "host": host_metadata(),
         "power_policy": power_policy(),
         "llama_cpp_binary": version_metadata(completion),
+        "litenn_binary": binary_identity(litenn),
+        "llamacpp_tokenizer_binary": binary_identity(tokenizer),
         "model": {"filename": "<model>", "size_bytes": model.stat().st_size},
         "prompt": prompt_metadata(args.prompt, args.keep_prompt),
         "configuration": {
