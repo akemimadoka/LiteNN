@@ -15,6 +15,7 @@ import statistics
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from gguf_decode_compare import litenn_row, litenn_steady_generation_row
@@ -127,6 +128,174 @@ def windows_frequency_sample() -> dict[str, object] | None:
     }
 
 
+class WindowsPDHFrequencyMonitor:
+    PDH_FORMAT_DOUBLE = 0x00000200
+    PDH_MORE_DATA = 0x800007D2
+
+    class FormattedValue(ctypes.Structure):
+        _fields_ = [("status", wintypes.DWORD), ("double_value", ctypes.c_double)]
+
+    class FormattedItem(ctypes.Structure):
+        pass
+
+    FormattedItem._fields_ = [("name", wintypes.LPWSTR), ("value", FormattedValue)]
+
+    def __init__(self) -> None:
+        self.query = ctypes.c_void_p()
+        self.frequency_counter = ctypes.c_void_p()
+        self.utility_counter = ctypes.c_void_p()
+        self.pdh = None
+        if sys.platform != "win32":
+            return
+        try:
+            pdh = ctypes.WinDLL("pdh.dll")
+            pdh.PdhOpenQueryW.argtypes = [wintypes.LPCWSTR, ctypes.c_size_t, ctypes.POINTER(ctypes.c_void_p)]
+            pdh.PdhOpenQueryW.restype = wintypes.LONG
+            pdh.PdhAddEnglishCounterW.argtypes = [
+                ctypes.c_void_p,
+                wintypes.LPCWSTR,
+                ctypes.c_size_t,
+                ctypes.POINTER(ctypes.c_void_p),
+            ]
+            pdh.PdhAddEnglishCounterW.restype = wintypes.LONG
+            pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+            pdh.PdhCollectQueryData.restype = wintypes.LONG
+            pdh.PdhGetFormattedCounterArrayW.argtypes = [
+                ctypes.c_void_p,
+                wintypes.DWORD,
+                ctypes.POINTER(wintypes.DWORD),
+                ctypes.POINTER(wintypes.DWORD),
+                ctypes.c_void_p,
+            ]
+            pdh.PdhGetFormattedCounterArrayW.restype = wintypes.LONG
+            pdh.PdhCloseQuery.argtypes = [ctypes.c_void_p]
+            pdh.PdhCloseQuery.restype = wintypes.LONG
+            if self._status(pdh.PdhOpenQueryW(None, 0, ctypes.byref(self.query))) != 0:
+                return
+            if self._status(
+                pdh.PdhAddEnglishCounterW(
+                    self.query,
+                    r"\Processor Information(*)\Actual Frequency",
+                    0,
+                    ctypes.byref(self.frequency_counter),
+                )
+            ) != 0 or self._status(
+                pdh.PdhAddEnglishCounterW(
+                    self.query,
+                    r"\Processor Information(*)\% Processor Utility",
+                    0,
+                    ctypes.byref(self.utility_counter),
+                )
+            ) != 0:
+                pdh.PdhCloseQuery(self.query)
+                self.query = ctypes.c_void_p()
+                return
+            self.pdh = pdh
+            pdh.PdhCollectQueryData(self.query)
+        except (AttributeError, OSError):
+            self.close()
+
+    @staticmethod
+    def _status(value: int) -> int:
+        return value & 0xFFFFFFFF
+
+    @property
+    def available(self) -> bool:
+        return self.pdh is not None and bool(self.query.value)
+
+    def _formatted_values(self, counter: ctypes.c_void_p) -> dict[str, float]:
+        assert self.pdh is not None
+        size = wintypes.DWORD()
+        count = wintypes.DWORD()
+        status = self._status(
+            self.pdh.PdhGetFormattedCounterArrayW(
+                counter,
+                self.PDH_FORMAT_DOUBLE,
+                ctypes.byref(size),
+                ctypes.byref(count),
+                None,
+            )
+        )
+        if status != self.PDH_MORE_DATA or size.value == 0:
+            return {}
+        buffer = ctypes.create_string_buffer(size.value)
+        status = self._status(
+            self.pdh.PdhGetFormattedCounterArrayW(
+                counter,
+                self.PDH_FORMAT_DOUBLE,
+                ctypes.byref(size),
+                ctypes.byref(count),
+                buffer,
+            )
+        )
+        if status != 0:
+            return {}
+        items = ctypes.cast(buffer, ctypes.POINTER(self.FormattedItem))
+        return {
+            str(items[index].name): float(items[index].value.double_value)
+            for index in range(count.value)
+            if items[index].name and items[index].value.status == 0
+        }
+
+    def sample(self) -> dict[str, object] | None:
+        if not self.available or self.pdh is None:
+            return None
+        if self._status(self.pdh.PdhCollectQueryData(self.query)) != 0:
+            return None
+        frequencies = self._formatted_values(self.frequency_counter)
+        utilities = self._formatted_values(self.utility_counter)
+        names = sorted(
+            name for name in frequencies.keys() & utilities.keys() if "_Total" not in name
+        )
+        if not names:
+            return None
+        valid_names = [name for name in names if frequencies[name] > 0.0]
+        if len(valid_names) < len(names) // 2:
+            return None
+        current = [frequencies[name] for name in valid_names]
+        utility = [max(0.0, utilities[name]) for name in valid_names]
+        active = [
+            frequencies[name]
+            for name in valid_names
+            if utilities[name] >= 10.0
+        ]
+        total_utility = sum(utility)
+        weighted = (
+            sum(frequencies[name] * max(0.0, utilities[name]) for name in valid_names) / total_utility
+            if total_utility > 0.0
+            else None
+        )
+        return {
+            "source": "windows-pdh-processor-information",
+            "current_mhz": current,
+            "active_mhz": active,
+            "utility_percent": utility,
+            "weighted_actual_mhz": weighted,
+            "monotonic_ns": time.monotonic_ns(),
+        }
+
+    def close(self) -> None:
+        if self.pdh is not None and self.query.value:
+            self.pdh.PdhCloseQuery(self.query)
+        self.query = ctypes.c_void_p()
+        self.pdh = None
+
+
+class StatelessFrequencyMonitor:
+    def sample(self) -> dict[str, object] | None:
+        return frequency_sample()
+
+    def close(self) -> None:
+        pass
+
+
+def create_frequency_monitor() -> WindowsPDHFrequencyMonitor | StatelessFrequencyMonitor:
+    monitor = WindowsPDHFrequencyMonitor()
+    if monitor.available:
+        return monitor
+    return StatelessFrequencyMonitor()
+
+
 def linux_frequency_sample() -> dict[str, object] | None:
     if not sys.platform.startswith("linux"):
         return None
@@ -183,6 +352,15 @@ def summarize_frequency(samples: list[dict[str, object]]) -> dict[str, object]:
     ]
     limits = [float(value) for sample in samples for value in sample.get("limit_mhz", [])]  # type: ignore[union-attr]
     maximum = [float(value) for sample in samples for value in sample.get("max_mhz", [])]  # type: ignore[union-attr]
+    active = [float(value) for sample in samples for value in sample.get("active_mhz", [])]  # type: ignore[union-attr]
+    utility = [
+        float(value) for sample in samples for value in sample.get("utility_percent", [])  # type: ignore[union-attr]
+    ]
+    weighted = [
+        float(value)
+        for sample in samples
+        if (value := sample.get("weighted_actual_mhz")) is not None
+    ]
     if not current:
         return {"available": False, "sample_count": len(samples)}
     return {
@@ -196,6 +374,12 @@ def summarize_frequency(samples: list[dict[str, object]]) -> dict[str, object]:
         "limit_mhz_min": min(limits) if limits else None,
         "limit_mhz_max": max(limits) if limits else None,
         "hardware_max_mhz": max(maximum) if maximum else None,
+        "active_mhz_min": min(active) if active else None,
+        "active_mhz_median": statistics.median(active) if active else None,
+        "active_mhz_max": max(active) if active else None,
+        "weighted_actual_mhz_median": statistics.median(weighted) if weighted else None,
+        "utility_percent_median": statistics.median(utility) if utility else None,
+        "utility_percent_max": max(utility) if utility else None,
     }
 
 
@@ -211,20 +395,24 @@ def run_monitored(
     started = time.perf_counter()
     policy_before = power_policy()
     samples: list[dict[str, object]] = []
-    initial_sample = frequency_sample()
+    frequency_monitor = create_frequency_monitor()
+    initial_sample = frequency_monitor.sample()
     if initial_sample is not None:
         samples.append(initial_sample)
-    with raw_stdout.open("wb") as stdout_stream, raw_stderr.open("wb") as stderr_stream:
-        process = subprocess.Popen(command, stdout=stdout_stream, stderr=stderr_stream)
-        while True:
-            try:
-                process.wait(timeout=monitor_interval_seconds)
-                break
-            except subprocess.TimeoutExpired:
-                sample = frequency_sample()
-                if sample is not None:
-                    samples.append(sample)
-    final_sample = frequency_sample()
+    try:
+        with raw_stdout.open("wb") as stdout_stream, raw_stderr.open("wb") as stderr_stream:
+            process = subprocess.Popen(command, stdout=stdout_stream, stderr=stderr_stream)
+            while True:
+                try:
+                    process.wait(timeout=monitor_interval_seconds)
+                    break
+                except subprocess.TimeoutExpired:
+                    sample = frequency_monitor.sample()
+                    if sample is not None:
+                        samples.append(sample)
+        final_sample = frequency_monitor.sample()
+    finally:
+        frequency_monitor.close()
     if final_sample is not None:
         samples.append(final_sample)
     wall_seconds = time.perf_counter() - started
@@ -403,7 +591,9 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         litenn_frequency = litenn["process"]["frequency"]
 
         def frequency_value(value: dict[str, object]) -> str:
-            raw = value.get("current_mhz_median")
+            raw = value.get("weighted_actual_mhz_median") or value.get("active_mhz_median")
+            if raw is None:
+                raw = value.get("current_mhz_median")
             return f"{float(raw):.0f}" if raw is not None else "n/a"
 
         lines.append(

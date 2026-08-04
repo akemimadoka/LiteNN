@@ -121,6 +121,14 @@ def summarize_profile(profile: dict[str, object], runs: list[dict[str, object]])
     prompt_counts = {int(run["metrics"]["prompt_count"]) for run in profile_runs}  # type: ignore[index]
     eval_counts = {int(run["metrics"]["eval_count"]) for run in profile_runs}  # type: ignore[index]
     text_hashes = {str(run["text"]["sha256"]) for run in profile_runs}  # type: ignore[index]
+    weighted_frequencies = [
+        float(value)
+        for run in profile_runs
+        if (
+            value := run["process"]["frequency"].get("weighted_actual_mhz_median")  # type: ignore[index]
+        )
+        is not None
+    ]
     if len(prompt_counts) != 1 or len(eval_counts) != 1 or len(text_hashes) != 1:
         raise ValueError(f"profile {profile['name']} produced inconsistent output windows")
     return {
@@ -131,6 +139,7 @@ def summarize_profile(profile: dict[str, object], runs: list[dict[str, object]])
         "text_sha256": next(iter(text_hashes)),
         "tokens_per_second": series_statistics(throughputs),
         "ms_per_token": series_statistics(latencies),
+        "weighted_actual_mhz": series_statistics(weighted_frequencies) if weighted_frequencies else None,
     }
 
 
@@ -148,17 +157,19 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Variance threshold: `{document['configuration']['variance_threshold_percent']}%`",  # type: ignore[index]
         f"- Power policy: `{document['power_policy']['value']}`",  # type: ignore[index]
         "",
-        "| Rank | Profile | Threads | Mask/strict | Poll | Priority | Median ms/token | Median t/s | CV |",
-        "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Rank | Profile | Threads | Mask/strict | Poll | Priority | MHz | Median ms/token | Median t/s | CV |",
+        "| ---: | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for rank, summary in enumerate(document["ranking"], 1):  # type: ignore[union-attr]
         config = summary["configuration"]
         throughput = summary["tokens_per_second"]
         latency = summary["ms_per_token"]
+        frequency = summary["weighted_actual_mhz"]
         mask = config["cpu_mask"] or "default"
+        frequency_text = f"{frequency['median']:.0f}" if frequency is not None else "n/a"
         lines.append(
             f"| {rank} | {summary['name']} | {config['threads']} | {mask}/{config['cpu_strict']} | "
-            f"{config['poll']} | {config['priority']} | {latency['median']:.3f} | "
+            f"{config['poll']} | {config['priority']} | {frequency_text} | {latency['median']:.3f} | "
             f"{throughput['median']:.3f} | {throughput['coefficient_of_variation_percent']:.2f}% |"
         )
     lines.extend(
