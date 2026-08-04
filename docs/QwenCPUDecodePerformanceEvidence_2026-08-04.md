@@ -158,6 +158,23 @@ The isolated Q4_K and Q6_K sequences are respectively `8.7%` and `12.5%` above t
 This is sufficiently close to use the cold stream as the immediate optimization gate. Reference comparison reported
 maximum absolute deltas of `8.55e-4` for Q4_K and `4.15e-3` for Q6_K.
 
+### Selective Q4_K x16 Down Control
+
+After the non-synchronizing reference profile selected FFN Down, the existing AVX2 x16 Q4_K tile was re-evaluated only
+for contraction projections whose input width is at least twice the output width. This excludes the previously
+regressed Gate/Up, square hidden, and vocabulary projection classes. Separate baseline and experimental executables
+were alternated in three process pairs; each process reported the median of three T8 cold-stream repetitions.
+
+| Stream | Pair 1 | Pair 2 | Pair 3 | Paired median | Decision |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Q4_K Down x24 | `+7.35%` | `-10.86%` | `+1.51%` | `+1.51%` | Below gate |
+| Unchanged Q6_K control x24 | `-5.55%` | `+1.16%` | `+0.81%` | `+0.81%` | Host-drift control |
+| Real mixed Q4_K_M Down x48 | `+4.45%` | `-3.41%` | `-9.09%` | `-3.41%` | Regressed |
+
+Positive values mean the x16 executable was faster. The Q4_K-only effect is small and unstable, while the production
+mixed sequence regresses. The prototype was removed without a full-model run. A direct x16 reuse is therefore closed;
+Q4_K needs a different decomposition or memory-scheduling change.
+
 ## Controlled SwiGLU Fusion A/B
 
 The distinct/shared control above does not isolate activation materialization. Reusing one activation also reuses its

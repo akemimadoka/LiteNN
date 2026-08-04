@@ -3233,6 +3233,9 @@ Priority classes:
       - [ ] P0: close the accepted FFN activation + Down deficit. LiteNN's helper-only lower bound is `54.057 ms/token`
             with `2.97%` CV versus the complete Clang/no-OpenMP stage at `41.165 ms/token` with `0.16%` CV, a conservative
             `12.892 ms` (`31.32%`) gap. Require cache-cold and full-decode gains before retaining a kernel variant.
+            - [x] Re-evaluate the existing Q4_K AVX2 x16 tile only for contraction-shaped Down rows. Three alternating
+                  binary pairs produced a `+1.51%` Q4_K-only median but a `-3.41%` real mixed-stream median; the variant
+                  was removed. Do not reuse the logits-oriented x16 tile for Down without a different decomposition.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
             observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,

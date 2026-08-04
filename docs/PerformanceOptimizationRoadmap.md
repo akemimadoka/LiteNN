@@ -243,8 +243,10 @@ P0 implementation order:
     Clang/no-OpenMP reference stage is `41.165 ms/token` with `0.16%` CV. The conservative deficit is `12.892 ms`
     (`31.32%`) and explains at least 63% of the profiled module difference.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
-  - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
-    remains rejected.
+  - [x] Re-evaluate Q4_K AVX2 x16 only for contraction-shaped cold-stream Down. Three alternating binary pairs measured
+    Q4_K-only changes of `+7.35%/-10.86%/+1.51%` and mixed Q4_K_M changes of `+4.45%/-3.41%/-9.09%`; paired medians
+    were `+1.51%` and `-3.41%`. The prototype was removed without a full-model run. Both selective and broad reuse of
+    the existing x16 tile are rejected.
   - Compare Q6_K AVX2 x8/x16 and AVX-512 x16 under the same cold-stream/full-decode gate instead of assuming wider ISA
     is faster.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
