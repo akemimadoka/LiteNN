@@ -82,6 +82,34 @@ def redact_rows(rows: list[dict[str, object]], redacted_model_name: str) -> list
     return redacted
 
 
+def redact_text(
+    text: str, model: Path, redacted_model_name: str, executable: Path | None = None
+) -> str:
+    candidates = {
+        candidate: redacted_model_name
+        for candidate in {str(model), str(model.resolve()), model.as_posix(), model.resolve().as_posix()}
+    }
+    if executable is not None:
+        candidates.update(
+            {
+                candidate: "<llama-bench>"
+                for candidate in {
+                    str(executable),
+                    str(executable.resolve()),
+                    executable.as_posix(),
+                    executable.resolve().as_posix(),
+                }
+            }
+        )
+    for candidate, replacement in list(candidates.items()):
+        candidates[json.dumps(candidate)[1:-1]] = replacement
+    redacted = text
+    for candidate in sorted(candidates, key=len, reverse=True):
+        if candidate:
+            redacted = redacted.replace(candidate, candidates[candidate])
+    return redacted
+
+
 def write_markdown(path: Path, rows: list[dict[str, object]], command: list[str]) -> None:
     decode_rows = [row for row in rows if int(row.get("n_gen", 0) or 0) > 0]
     lines = [
@@ -166,8 +194,12 @@ def main() -> int:
     ]
 
     process = subprocess.run(command, text=True, capture_output=True, check=False)
-    output_json.with_suffix(output_json.suffix + ".stdout.txt").write_text(process.stdout, encoding="utf-8")
-    output_json.with_suffix(output_json.suffix + ".stderr.txt").write_text(process.stderr, encoding="utf-8")
+    output_json.with_suffix(output_json.suffix + ".stdout.txt").write_text(
+        redact_text(process.stdout, model, args.redacted_model_name, llama_bench), encoding="utf-8"
+    )
+    output_json.with_suffix(output_json.suffix + ".stderr.txt").write_text(
+        redact_text(process.stderr, model, args.redacted_model_name, llama_bench), encoding="utf-8"
+    )
     if process.returncode != 0:
         raise SystemExit(f"llama-bench failed with return code {process.returncode}")
 
@@ -177,7 +209,11 @@ def main() -> int:
     output_json.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
     if output_md is not None:
         printable_command = [
-            arg if arg != str(model) else args.redacted_model_name
+            "<llama-bench>"
+            if arg == str(llama_bench)
+            else args.redacted_model_name
+            if arg == str(model)
+            else arg
             for arg in command
         ]
         write_markdown(output_md, rows, printable_command)
