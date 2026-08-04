@@ -1,5 +1,10 @@
 # LiteNN Qwen CPU Decode Stage Analysis - 2026-08-04
 
+> Historical stage evidence: this profile used the slower GNU/OpenMP llama.cpp control. A same-commit build matrix
+> later measured `5.06 t/s` with GNU/OpenMP, `5.88 t/s` with GNU/no-OpenMP, and `6.03 t/s` with Clang/no-OpenMP.
+> Do not use the cross-runtime stage ranking below to select new work until it is repeated against the stronger build.
+> See `QwenCPUDecodeBuildControl_2026-08-04.md`.
+
 Canonical measurement tables, confidence boundaries, and the evidence-to-decision mapping are maintained in
 `QwenCPUDecodePerformanceEvidence_2026-08-04.md`. This document retains the detailed profiling narrative and source
 interpretation.

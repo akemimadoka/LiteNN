@@ -3207,10 +3207,11 @@ Priority classes:
       corrected automatic T8 ceiling measured `285.087 ms/token` under profiling. Alternating unprofiled auto/explicit
       T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
       for controlled experiments but is not the production default.
-- [ ] P0: Close the remaining CPU FFN-Down streaming gap against the CPU-only llama.cpp control:
+- [ ] P0: Close the remaining CPU decode gap against the strongest controlled CPU-only llama.cpp reference:
       `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical evidence record and
       `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. Projection/worker phase
-      evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`. The adjacent-run baseline is
+      evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; controlled build/runtime
+      evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`. The adjacent-run baseline is
       `256.616 ms/token` for LiteNN and
       `202.224 ms/token` for llama.cpp at T8. Normalized stage attribution assigns at least `46.54 ms` of the
       `54.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
@@ -3245,12 +3246,10 @@ Priority classes:
       - [x] Re-rank grouped Gate/Up, Q6_K Down, Q4_K Down, hidden/output, and logits against a fresh CPU-only llama.cpp
             stage control before selecting the next kernel. Manual activation-quantizer SIMD is deferred because only
             `1.1865 ms/step` remains in the structured phase and is no longer P0.
-            Completed on 2026-08-04: two bundled Release CPU-only `llama-bench` controls peaked at `4.565` and
-            `4.717 t/s` at T2, while actual `llama-completion` measured `5.03 t/s`. LiteNN's three-run stable median is
-            `5.057 t/s`, so the old local parity gap is closed. Fresh stage boundaries also did not identify a slower
-            LiteNN Attention, FFN, or logits stage. The user's independently observed `6.85 t/s` remains the stronger
-            target and must be reproduced with exact build/thread/affinity/polling/context settings before another
-            kernel is promoted to P0.
+            The original GNU/OpenMP comparison suggested parity, but a controlled build matrix invalidated that
+            conclusion: GNU/no-OpenMP is `16.21%` faster and Clang/no-OpenMP reaches `6.03 t/s`. A strong paired control
+            places LiteNN `5.49%` behind the Clang/no-OpenMP reference. The old stage profile remains historical because
+            it used the slower reference and must not select another kernel.
       - [ ] Reproduce the external `6.85 t/s` CPU-only result with a redacted, repeatable actual-completion control.
             Record the llama.cpp commit, compiler and ISA flags, thread/affinity/polling policy, mmap and priority,
             KV dtype, context and decode lengths, and exact command without retaining the private model path. Run an
@@ -3270,15 +3269,26 @@ Priority classes:
             - [x] Automate paired alternating controls with host frequency/power-state capture and a variance gate.
                   `benchmark/run_paired_gguf_decode_control.py` now enforces the aligned 9-prompt/15-eval window,
                   byte-identical output, no fallback, binary identity, redaction, alternating order, and a 3% CV gate.
-                  Two independent three-pair batches passed: combined medians were LiteNN `5.585 t/s` and llama.cpp
-                  `5.470 t/s`, with a `+2.26%` median paired difference. See
-                  `docs/QwenCPUDecodePairedControl_2026-08-04.md`.
-            - [ ] Reproduce the exact external configuration that measured `6.85 t/s`. Against the new six-run medians
-                  it is `25.23%` above local llama.cpp and `22.64%` above LiteNN, so it remains the evidence gate for
-                  the next CPU P0.
-                  - [ ] Capture exact build/ISA/thread/affinity/polling/mmap/KV/context settings in a redacted artifact.
+                  The earlier GNU/OpenMP batches remain harness evidence only; their positive LiteNN conclusion is
+                  superseded by `docs/QwenCPUDecodeBuildControl_2026-08-04.md`.
+            - [x] Add multi-binary runtime sweeps and compare GNU/OpenMP, GNU/no-OpenMP, and Clang/no-OpenMP from the
+                  same llama.cpp commit. Medians were `5.06`, `5.88`, and `6.03 t/s`; sampled actual frequency stayed
+                  within `5077-5086 MHz`, so OpenMP explains most of the gain and compiler choice adds `2.55%`.
+            - [x] Sweep T1/T2/T3, physical-core/same-core/cross-CCD affinity, poll, and priority controls. No positive
+                  policy change exceeded 1%; the `-36.27%` same-core SMT negative control proves masks were effective.
+            - [x] Pair the strongest local Clang/no-OpenMP reference with LiteNN. All gates passed; llama.cpp and
+                  LiteNN medians were `5.970` and `5.518 t/s`, and LiteNN's preferred paired median difference is
+                  `-5.49%`. Actual frequency does not explain the deficit.
+            - [ ] Reproduce the remaining external `6.85 t/s` difference. It is now `13.60%` above the strongest local
+                  llama.cpp sweep rather than `25.23%` above the old GNU/OpenMP reference.
+                  - [x] Capture local build/ISA/OpenMP/thread/affinity/polling/mmap/KV/context settings, hashes, and
+                        actual frequency in redacted artifacts.
+                  - [ ] Obtain the external binary or its remaining exact source/build/runtime differences.
                   - [ ] Require two paired batches to pass the variance, output-parity, and no-fallback gates.
-                  - [ ] If the gap persists, profile matched Attention/FFN/logits boundaries before selecting a kernel.
+            - [ ] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual
+                  boundaries against Clang/no-OpenMP over the same 9-prompt/15-eval window. Repeat with GNU/no-OpenMP
+                  to separate compiler and OpenMP effects; only the largest measured deficit may become implementation
+                  P0.
             - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
                   tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
@@ -3292,14 +3302,14 @@ Priority classes:
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.
-      - [ ] Re-run alternating LiteNN/llama.cpp T8 full-decode and stage profiles. Acceptance requires no fallback,
-            unchanged generated output, prepared weights no larger than `1.03x` source quantized bytes, both Down
-            formats above `40 GB/s` in cold-stream evidence, FFN within `10%`, and total latency within `5%` of the
+      - [ ] Re-run alternating LiteNN/llama.cpp full-decode and stage profiles using each runtime's measured production
+            thread policy. Acceptance requires no fallback, unchanged generated output, prepared weights no larger
+            than `1.03x` source quantized bytes, the promoted stage within `10%`, and total latency within `5%` of the
             same-run llama.cpp median.
-- [ ] P1: Harden CPU decode performance evidence after FFN-Down closure:
-      add optional PMU/platform-counter capture for cache misses and memory stalls, preserve the out-of-tree llama.cpp
-      stage control recipe, and add non-gating warm/cold trend rows so cache-hot microbenchmark regressions cannot be
-      mistaken for full-model regressions. Platform profiling must remain optional on CI hosts without privileges.
+- [ ] P1: Harden CPU decode performance evidence after controlled gap closure:
+      Windows PDH actual-frequency and utility sampling is complete. Add optional PMU/platform-counter capture for
+      cache misses, memory stalls, bandwidth, and residency; preserve the out-of-tree llama.cpp stage control recipe;
+      and add non-gating warm/cold trend rows. Platform profiling must remain optional on CI hosts without privileges.
 - [x] P1: Skip vocabulary projection on prompt replay steps that cannot be sampled:
       completed on 2026-08-02 with an `emit_logits` Bool in stateful dense and paged-reference schedules. The compiled
       `CondNode` returns zero logits during replay while still updating KV/position aliases, then executes the unchanged
@@ -3666,6 +3676,12 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-04
 
+- Added controlled llama.cpp compiler/OpenMP/runtime sweeps and actual-frequency sampling. GNU/OpenMP, GNU/no-OpenMP,
+  and Clang/no-OpenMP measured `5.06`, `5.88`, and `6.03 t/s`; OpenMP was the dominant controlled difference.
+- Superseded the earlier local-parity conclusion. The strongest three-pair control places LiteNN `5.49%` behind the
+  Clang/no-OpenMP reference, while the unexplained distance from that reference to `6.85 t/s` is reduced to `13.60%`.
+- Promoted a matched Clang/no-OpenMP stage profile to the CPU P0 evidence gate. Existing dispatch and FFN-Down ideas
+  remain candidates until that profile identifies the largest cross-runtime deficit.
 - Added the paired alternating LiteNN/llama.cpp actual-decode control with text/no-fallback/variance gates, power-policy
   sampling, binary identities, and path-redacted evidence.
 - Recorded two accepted three-pair Qwen 14B CPU batches. LiteNN's combined `5.585 t/s` median is locally at parity with

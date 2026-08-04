@@ -1,5 +1,9 @@
 # Qwen CPU Decode Performance Evidence - 2026-08-04
 
+> Historical stage evidence: the measurements below remain valid for the recorded binaries, but their cross-runtime
+> ranking predates the controlled compiler/OpenMP matrix. The current performance conclusion and next evidence gate
+> are owned by `QwenCPUDecodeBuildControl_2026-08-04.md`.
+
 This document is the evidence record for the current Qwen CPU decode optimization tranche. It separates measured
 results and supported conclusions from the implementation checklist in `PerformanceOptimizationRoadmap.md`. The more
 detailed profiling narrative remains in `PerformanceAnalysis_2026-08-04.md`.

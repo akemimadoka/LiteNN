@@ -1,5 +1,9 @@
 # Qwen CPU Decode Projection Phase Profile - 2026-08-04
 
+> Superseded cross-runtime conclusion: the local-parity statements below used a GNU/OpenMP llama.cpp binary that was
+> later measured about 16% slower than the same GNU build without OpenMP. Retain the LiteNN phase measurements, but use
+> `QwenCPUDecodeBuildControl_2026-08-04.md` for the current comparison and roadmap priority.
+
 This document records the first production-model profile that separates Q8_K activation preparation from CPU thread
 pool execution for field-interleaved-v4 Q4_K/Q6_K projections. It is a focused evidence record for the FFN-Down
 closure work; the broader LiteNN/llama.cpp comparison remains in `QwenCPUDecodePerformanceEvidence_2026-08-04.md`.

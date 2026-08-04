@@ -1,5 +1,10 @@
 # Qwen CPU Decode Paired Control - 2026-08-04
 
+> Superseded performance conclusion: the paired harness and raw measurements below remain valid, but the GNU/OpenMP
+> llama.cpp reference was later shown to be about 16% slower than a same-compiler no-OpenMP build. The stronger
+> Clang/no-OpenMP control places LiteNN about 5.5% behind by paired median. See
+> `QwenCPUDecodeBuildControl_2026-08-04.md`.
+
 This document records the first repository-owned, paired and alternating actual-completion comparison between LiteNN
 CPU AOT and a local CPU-only llama.cpp build. It is the evidence owner for the variance-gated result; implementation
 priorities derived from it live in `PerformanceOptimizationRoadmap.md` and the canonical G16.7 checklist lives in
