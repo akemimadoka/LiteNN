@@ -3211,11 +3211,12 @@ Priority classes:
       `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical evidence record and
       `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. Projection/worker phase
       evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; controlled build/runtime
-      evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`. The adjacent-run baseline is
-      `256.616 ms/token` for LiteNN and
-      `202.224 ms/token` for llama.cpp at T8. Normalized stage attribution assigns at least `46.54 ms` of the
-      `54.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
-      llama.cpp boundary. Gate/Up is comparatively close and Attention is not the immediate short-context owner.
+      evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead matched-stage evidence is in
+      `docs/QwenCPUDecodeStageControl_2026-08-04.md`. The earlier GNU/OpenMP stage attribution remains historical and
+      no longer selects implementation work. The accepted stronger paired control places LiteNN `5.49%` behind
+      Clang/no-OpenMP. A matched cumulative-cut run reproduced the reference near `166 ms/token`, but its
+      `10.53-82.51%` stage CV rejected fine attribution. Stable LiteNN accounting measured `176.063 ms/token` module
+      time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
@@ -3287,8 +3288,13 @@ Priority classes:
                   - [ ] Require two paired batches to pass the variance, output-parity, and no-fallback gates.
             - [ ] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual
                   boundaries against Clang/no-OpenMP over the same 9-prompt/15-eval window. Repeat with GNU/no-OpenMP
-                  to separate compiler and OpenMP effects; only the largest measured deficit may become implementation
-                  P0.
+                  and promote only statistically accepted deficits.
+                  - [x] Add and run an out-of-tree paired stage profiler for both no-OpenMP builds. One-sync cumulative
+                        cuts held whole-token drift between `-0.08%` and `+2.32%`, but stage CV remained
+                        `10.53-82.51%`; the fine-stage result is rejected and documented in
+                        `docs/QwenCPUDecodeStageControl_2026-08-04.md`.
+                  - [ ] Replace callback differencing with non-synchronizing samples or in-kernel aggregate counters;
+                        require below `3%` total overhead and below `15%` CV for every promoted stage.
             - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
                   tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
@@ -3297,8 +3303,13 @@ Priority classes:
             and CPU time regressed slightly.
       - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs
             increased and total profiled latency regressed `0.54%`.
-      - [ ] Amortize the measured `14.9425 ms/step` dispatch floor across compatible helper sequences. Lock and barrier
-            tuning remain secondary unless a new profile changes their ranking.
+      - [ ] P0: reconcile the `11.408 ms/token` module non-helper residual. Stable steps 10-24 measured `176.063 ms`
+            module time and `164.155 ms` timed helpers. Add low-cardinality aggregate attribution for normalization,
+            elementwise residual/bias work, views, state updates, runtime bindings, and unattributed generated code;
+            keep overhead below `3%` and reconcile the module ledger within `2%`.
+      - [ ] P0: amortize the post-quantizer `10.365 ms/step` dispatch floor across compatible helper sequences. Retain
+            workers or batch a layer sequence rather than only changing wake-up primitives. Require at least `50%`
+            lower dispatch, `3%` lower full-token latency, and no parallel-wall/barrier regression.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.
@@ -3680,8 +3691,10 @@ These improvements do not require a compatibility break and should not block vNe
   and Clang/no-OpenMP measured `5.06`, `5.88`, and `6.03 t/s`; OpenMP was the dominant controlled difference.
 - Superseded the earlier local-parity conclusion. The strongest three-pair control places LiteNN `5.49%` behind the
   Clang/no-OpenMP reference, while the unexplained distance from that reference to `6.85 t/s` is reduced to `13.60%`.
-- Promoted a matched Clang/no-OpenMP stage profile to the CPU P0 evidence gate. Existing dispatch and FFN-Down ideas
-  remain candidates until that profile identifies the largest cross-runtime deficit.
+- Added and ran low-overhead cumulative stage controls against Clang/no-OpenMP and GNU/no-OpenMP. Whole-token drift
+  stayed between `-0.08%` and `+2.32%`, but derived-stage CV reached `10.53-82.51%`, so fine attribution was rejected.
+- Promoted low-overhead module-residual attribution and projection-sequence dispatch amortization to the next CPU P0
+  evidence tranche; a projection-kernel rewrite remains blocked on an accepted matched-stage deficit.
 - Added the paired alternating LiteNN/llama.cpp actual-decode control with text/no-fallback/variance gates, power-policy
   sampling, binary identities, and path-redacted evidence.
 - Recorded two accepted three-pair Qwen 14B CPU batches. LiteNN's combined `5.585 t/s` median is locally at parity with

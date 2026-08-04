@@ -38,10 +38,12 @@ Priority classes for the GGUF/Qwen decode work:
 Evidence owner: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`; detailed profiling narrative:
 `docs/PerformanceAnalysis_2026-08-04.md`; projection phase evidence:
 `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; stronger build/runtime control:
-`docs/QwenCPUDecodeBuildControl_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
-`256.616 ms/token` and llama.cpp at `202.224 ms/token`. After correcting each profiler by its own no-profile baseline,
-FFN accounts for at least `46.54 ms` of the `54.39 ms/token` gap. Q4_K and Q6_K activation-plus-Down are approximately
-`2.04x` and `1.82x` the corresponding llama.cpp boundaries, while Gate/Up is only about `5 ms` behind.
+`docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead stage-control evidence:
+`docs/QwenCPUDecodeStageControl_2026-08-04.md`. The earlier GNU/OpenMP T8 stage attribution is retained as historical
+profiling evidence but no longer selects implementation work. The accepted stronger paired control places LiteNN
+`5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near `166 ms/token`,
+but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting measured
+`176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
 
 P0 implementation order:
 
@@ -146,17 +148,35 @@ P0 implementation order:
       treating the result as a stable cross-runtime gap.
   - [ ] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual boundaries
     against Clang/no-OpenMP using the same 9-prompt/15-eval window. Repeat against GNU/no-OpenMP to separate compiler
-    code generation from OpenMP runtime cost. Keep callback overhead below 15% and promote only the largest measured
-    LiteNN deficit to implementation P0.
+    code generation from OpenMP runtime cost. Promote only the largest statistically accepted LiteNN deficit.
+    - [x] Add an out-of-tree llama.cpp stage profiler and paired multi-build runner without linking llama.cpp into
+      LiteNN production targets. It supports coarse, FFN, selected-layer, and one-sync cumulative-cut modes and gates
+      total variance, absolute drift, and derived-stage variance.
+    - [x] Execute Clang/no-OpenMP and GNU/no-OpenMP controls. Cumulative scans kept whole-token drift between `-0.08%`
+      and `+2.32%`, but derived-stage CV was `10.53-82.51%`; the result is correctly rejected for fine attribution.
+    - [ ] Replace callback differencing with non-synchronizing sampling or counters inside reference kernels. Require
+      every promoted stage below `15%` CV and total measurement overhead below `3%`.
+- [ ] P0: reconcile LiteNN's module non-helper residual before another projection-kernel rewrite.
+  - Stable steps 10-24 measured `176.063 ms/token` module time, `164.155 ms` timed helpers, and `11.408 ms` residual.
+    The residual is large enough to explain the accepted `~9-10 ms/token` absolute cross-runtime deficit, but currently
+    combines inline AOT operations, untimed work, and instrumentation error.
+  - Add low-cardinality aggregate timers for normalization, bias/residual elementwise work, views, KV state updates,
+    runtime entry/bindings, and unattributed generated code. Reconcile categorized plus helper time to module time
+    within `2%` while keeping instrumentation overhead below `3%`.
+  - Promote only the largest reconciled category to implementation work and require at least `3%` whole-token gain.
 - [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
   noise and CPU time slightly regressed, so the uncommitted route was removed.
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,
   but later worker arrival raised parallel wall/barrier time and total profiled latency regressed `0.54%`; the
   semaphore implementation remains.
-- [ ] P1 candidate, evidence-gated: reduce the measured per-helper dispatch floor.
-  - Batch compatible projection work or amortize worker wake-up across helper sequences before changing lock policy.
-  - Use `14.9425 ms/step` across 97 ordinary projections as the baseline; keep uncontended-lock and affinity tuning
-    below this work unless a new profile changes the ranking.
+- [ ] P0 candidate, evidence-gated: reduce the measured per-helper dispatch floor.
+  - The post-quantizer stable median is `10.365 ms/step` across 97 ordinary projections, about `0.107 ms/call` and large
+    enough to affect the remaining gap. It is already included in helper/parallel-wall time and must not be added to
+    the non-helper residual.
+  - Batch compatible projection sequences or retain workers across a layer sequence before changing lock policy.
+  - Require at least `50%` lower dispatch, at least `3%` lower full-token latency, and no parallel-wall/barrier
+    regression. The rejected `atomic::wait` route demonstrates that the dispatch counter alone is not an acceptance
+    metric.
 - [ ] P1 candidate, evidence-gated: raise FFN-Down cold-stream throughput.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
