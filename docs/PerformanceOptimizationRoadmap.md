@@ -117,8 +117,9 @@ P0 implementation order:
     eval calls are compared with LiteNN's 15 post-first-generation module calls. Bracketing llama.cpp controls both
     measured `5.500 t/s`; fresh LiteNN runs measured `5.640/5.112/5.718 t/s`, median `5.640 t/s` (`+2.54%`) with a
     material slow-run variance. The first 9 generated tokens match before the runtimes' ignore-EOS policies diverge.
-  - [ ] Match llama.cpp `--ignore-eos` semantics by suppressing EOS during LiteNN sampling, and require complete greedy
-    token-sequence parity before treating the aligned timing row as final evidence.
+  - [x] Match llama.cpp `--ignore-eos` semantics by suppressing EOS during LiteNN greedy/random sampling. The post-fix
+    16-token Qwen run produced byte-identical text, no fallback, `5.685 t/s` full generation, and `5.765 t/s` aligned
+    steady-module throughput versus the local llama.cpp `5.500 t/s` median.
   - [ ] Automate paired alternating LiteNN/llama.cpp controls and capture host frequency/power-state evidence. Require
     a repeatable variance bound before claiming a lead or promoting a stage difference to P0.
   - [ ] Obtain and reproduce the exact external build and runtime configuration. The unresolved `6.85 t/s` control is

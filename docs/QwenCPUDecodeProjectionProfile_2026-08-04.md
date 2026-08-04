@@ -280,11 +280,11 @@ The aligned llama.cpp T2 controls bracketed the LiteNN runs:
 | LiteNN steady module | `5.640 / 5.112 / 5.718 t/s` | `177.319 ms/token` | `5.640 t/s` |
 
 All LiteNN rows used the current Release binary, an enforced AOT cache hit, T8 adaptive workers, LLVM opt level 0,
-field-interleaved-v4 prepared weights, a fixed 16-token count, and no fallback. The first 9 generated tokens match
-llama.cpp, after which the current `--ignore-eos` semantics diverge: llama.cpp suppresses EOS, while LiteNN samples EOS
-and continues. The reusable command additions are `--conversation-mode chat --threads 2 --repetitions 3 --predict 16`
-for the llama.cpp control and `--include-litenn-steady-generation --llama-completion-json <control.json>` for
-`gguf_decode_compare.py`.
+field-interleaved-v4 prepared weights, a fixed 16-token count, and no fallback. The initial runs matched the first 9
+generated tokens and then exposed an ignore-EOS semantic difference: llama.cpp suppressed EOS, while LiteNN sampled
+EOS and continued. Commit `340b649` fixed LiteNN to suppress EOS before greedy or random selection. The reusable
+command additions are `--conversation-mode chat --threads 2 --repetitions 3 --predict 16` for the llama.cpp control
+and `--include-litenn-steady-generation --llama-completion-json <control.json>` for `gguf_decode_compare.py`.
 
 The two llama.cpp brackets are stable and agree exactly at the displayed throughput. LiteNN's median is `2.54%`
 faster by throughput and `2.39%` faster by latency, but its slow run is about `10.1%` below its median. The defensible
@@ -292,9 +292,11 @@ conclusion is therefore local parity with a small median LiteNN lead and materia
 stable performance win. The next benchmark task is paired alternation with host frequency/power-state evidence and a
 variance gate.
 
-Token-sequence parity after EOS suppression is a correctness prerequisite for the final paired performance gate. The
-current timing comparison remains useful because shapes and helper schedules are unchanged, but it is not yet a
-same-token execution proof.
+The post-fix real-model run produced byte-identical 16-token text in both runtimes:
+`Hello! How can I assist you today? Feel free to ask any questions or`. LiteNN had no fallback and measured
+`5.685 t/s` over the full generation plus `5.765 t/s` over the aligned steady-module window, respectively `3.37%` and
+`4.82%` above the llama.cpp `5.500 t/s` median. This single run closes the correctness gate but does not supersede the
+three-run variance conclusion; paired alternating repetitions remain required before claiming a stable lead.
 
 The external `6.85 t/s` observation remains unresolved. It is `24.55%` faster than the aligned local llama.cpp median
 and `21.45%` faster than the aligned LiteNN median. Its exact build and runtime configuration must still be reproduced

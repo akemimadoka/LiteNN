@@ -3264,8 +3264,9 @@ Priority classes:
                   both measured `5.500 t/s`; LiteNN measured `5.640/5.112/5.718 t/s`, with a `5.640 t/s` median
                   (`+2.54%`) but materially higher run variance. The first 9 generated tokens match before ignore-EOS
                   semantics diverge.
-            - [ ] Suppress EOS during LiteNN `--ignore-eos` sampling to match llama.cpp, then require full greedy
-                  token-sequence parity before accepting the final paired timing result.
+            - [x] Suppress EOS during LiteNN `--ignore-eos` greedy/random sampling to match llama.cpp. A real post-fix
+                  Qwen run produced byte-identical 16-token text, no fallback, `5.685 t/s` full generation, and
+                  `5.765 t/s` aligned steady-module throughput versus llama.cpp's `5.500 t/s` median.
             - [ ] Automate paired alternating controls with host frequency/power-state capture and a variance gate
                   before claiming a stable lead or selecting another kernel from a residual difference.
             - [ ] Reproduce the exact external configuration that measured `6.85 t/s`; it remains `24.55%` faster than
