@@ -831,6 +831,52 @@ def node_kind_for_operator(operator: str, role: str) -> str:
     return "unknown"
 
 
+def classify_native_residual_node(op: str) -> str:
+    if op in {"CallNode", "CondNode", "IfNode", "WhileNode"}:
+        return "call_control"
+    if "Normalization" in op or "NormNode" in op:
+        return "normalization"
+    if op in {
+        "UnaryOpNode",
+        "BinaryOpNode",
+        "ComparisonNode",
+        "LogicalNode",
+        "WhereNode",
+        "CastNode",
+    }:
+        return "elementwise"
+    if "MatMulNode" in op or op in {"LinearNode", "ConvNode", "ConvTransposeNode"}:
+        return "projection_wrapper"
+    if op in {
+        "ActivePrefixAttentionNode",
+        "GroupedActivePrefixAttentionNode",
+        "PagedAttentionNode",
+        "GroupedPagedAttentionNode",
+        "RoPENode",
+        "ScatterNode",
+        "PagedKVAppendNode",
+    }:
+        return "attention_position_state"
+    if op in {
+        "BroadcastNode",
+        "ConcatNode",
+        "ExpandNode",
+        "FlattenNode",
+        "GatherNode",
+        "PadNode",
+        "ReshapeNode",
+        "SliceNode",
+        "SqueezeNode",
+        "TileNode",
+        "TransposeNode",
+        "UnsqueezeNode",
+    }:
+        return "view_data_movement"
+    if op in {"GetRowsNode", "QuantizedGetRowsNode", "EmbeddingNode"}:
+        return "embedding"
+    return "other"
+
+
 def parse_gguf_decode_logs(results: Iterable[LogEvidence]) -> GGUFDecodeAnalysis:
     steps_by_id: dict[int, GGUFDecodeStep] = {}
     helpers: list[GGUFHelperEvent] = []
@@ -1293,6 +1339,91 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
     for node in ranked_native_nodes:
         node["percent_of_native_self"] = helper_percent(float(node["self_ms"]), total_native_self_ms)
 
+    native_residual_categories_by_step: dict[int, dict[str, float]] = {}
+    emitted_native_self_by_step: dict[int, float] = {}
+    for node in analysis.nodes:
+        step_categories = native_residual_categories_by_step.setdefault(node.step, {})
+        category = classify_native_residual_node(node.op)
+        step_categories[category] = step_categories.get(category, 0.0) + node.self_ms
+        emitted_native_self_by_step[node.step] = emitted_native_self_by_step.get(node.step, 0.0) + node.self_ms
+
+    native_residual_ledger: list[dict[str, object]] = []
+    for phase in ("all", "prompt_replay", "generation"):
+        selected_steps = [
+            step
+            for step in analysis.steps
+            if phase == "all" or step.phase == phase
+        ]
+        measured_steps = [
+            step
+            for step in selected_steps
+            if step.module_non_helper_ms is not None
+            and step.node_self_total_ms is not None
+            and step.node_instrumentation_ms is not None
+            and step.module_unattributed_ms is not None
+        ]
+        if not measured_steps:
+            continue
+        category_totals: dict[str, float] = {}
+        for step in measured_steps:
+            for category, milliseconds in native_residual_categories_by_step.get(step.step, {}).items():
+                category_totals[category] = category_totals.get(category, 0.0) + milliseconds
+            emitted_self = emitted_native_self_by_step.get(step.step, 0.0)
+            category_totals["unemitted_node_self"] = category_totals.get("unemitted_node_self", 0.0) + max(
+                0.0, float(step.node_self_total_ms) - emitted_self
+            )
+            category_totals["node_instrumentation"] = category_totals.get("node_instrumentation", 0.0) + float(
+                step.node_instrumentation_ms
+            )
+            category_totals["module_unattributed"] = category_totals.get("module_unattributed", 0.0) + float(
+                step.module_unattributed_ms
+            )
+        module_non_helper_ms = sum(float(step.module_non_helper_ms) for step in measured_steps)
+        module_run_ms = sum(float(step.module_run_ms or 0.0) for step in measured_steps)
+        accounted_ms = sum(category_totals.values())
+        closure_error_ms = module_non_helper_ms - accounted_ms
+        closure_error_percent = helper_percent(abs(closure_error_ms), module_non_helper_ms)
+        instrumentation_percent = helper_percent(category_totals.get("node_instrumentation", 0.0), module_run_ms)
+        categories = [
+            {
+                "category": category,
+                "total_ms": total_ms,
+                "avg_ms_per_step": total_ms / len(measured_steps),
+                "percent_of_module_non_helper": helper_percent(total_ms, module_non_helper_ms),
+                "attribution": (
+                    "native_node_self"
+                    if category not in {"unemitted_node_self", "node_instrumentation", "module_unattributed"}
+                    else category
+                ),
+            }
+            for category, total_ms in sorted(category_totals.items(), key=lambda item: (-item[1], item[0]))
+        ]
+        native_residual_ledger.append(
+            {
+                "phase": phase,
+                "steps": len(measured_steps),
+                "module_non_helper_ms": module_non_helper_ms,
+                "avg_module_non_helper_ms": module_non_helper_ms / len(measured_steps),
+                "accounted_ms": accounted_ms,
+                "closure_error_ms": closure_error_ms,
+                "closure_error_percent": closure_error_percent,
+                "instrumentation_percent_of_module": instrumentation_percent,
+                "gate": {
+                    "closure_within_2_percent": closure_error_percent is not None and closure_error_percent <= 2.0,
+                    "instrumentation_within_3_percent": (
+                        instrumentation_percent is not None and instrumentation_percent <= 3.0
+                    ),
+                    "accepted": (
+                        closure_error_percent is not None
+                        and closure_error_percent <= 2.0
+                        and instrumentation_percent is not None
+                        and instrumentation_percent <= 3.0
+                    ),
+                },
+                "categories": categories,
+            }
+        )
+
     summary = {
         "step_count": len(analysis.steps),
         "helper_event_count": len(analysis.helpers),
@@ -1321,6 +1452,7 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         "helpers": ranked_helpers,
         "operators": ranked_operators,
         "native_node_operators": ranked_native_nodes,
+        "native_residual_ledger": native_residual_ledger,
         "residual_buckets": residual_buckets,
         "runtime_buckets": runtime_buckets,
         "top_residual_steps": top_residual_steps[:20],
@@ -1528,6 +1660,42 @@ def write_gguf_decode_analysis(out_dir: Path, analysis: GGUFDecodeAnalysis) -> d
         )
     if not ranked_native_nodes:
         md_lines.append("| `none` | 0 | 0.000 | 0.000 | 0.000 | n/a |")
+    md_lines.extend(
+        [
+            "",
+            "## Native Residual Ledger",
+            "",
+            "| Phase | Steps | Category | Total ms | Avg ms/step | % of module non-helper | Attribution |",
+            "| --- | ---: | --- | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for ledger in native_residual_ledger:
+        for category in ledger["categories"]:
+            percent = category["percent_of_module_non_helper"]
+            md_lines.append(
+                f"| `{ledger['phase']}` | {ledger['steps']} | `{category['category']}` | "
+                f"{float(category['total_ms']):.3f} | {float(category['avg_ms_per_step']):.3f} | "
+                f"{'n/a' if percent is None else f'{float(percent):.2f}%'} | `{category['attribution']}` |"
+            )
+    if not native_residual_ledger:
+        md_lines.append("| `none` | 0 | `none` | 0.000 | 0.000 | n/a | `none` |")
+    md_lines.extend(
+        [
+            "",
+            "| Phase | Module non-helper ms | Accounted ms | Closure error ms | Closure error | Marker % of module | Accepted |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for ledger in native_residual_ledger:
+        closure_percent = ledger["closure_error_percent"]
+        instrumentation_percent = ledger["instrumentation_percent_of_module"]
+        md_lines.append(
+            f"| `{ledger['phase']}` | {float(ledger['module_non_helper_ms']):.3f} | "
+            f"{float(ledger['accounted_ms']):.3f} | {float(ledger['closure_error_ms']):.3f} | "
+            f"{'n/a' if closure_percent is None else f'{float(closure_percent):.2f}%'} | "
+            f"{'n/a' if instrumentation_percent is None else f'{float(instrumentation_percent):.2f}%'} | "
+            f"`{str(bool(ledger['gate']['accepted'])).lower()}` |"
+        )
     md_lines.extend(
         [
             "",
