@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -2811,6 +2812,103 @@ TEST(GGUFLLaMAQuantizedExecution, Q8KPreparedActivationHelperMatchesInternalStag
 		for (std::size_t i = 0; i < internal.size(); ++i)
 		{
 			EXPECT_NEAR(prepared[i], internal[i], 1.0e-4F);
+		}
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, Q8KActivationPreparationMatchesScalarReferenceAtRoundingBoundaries)
+{
+	struct ReferenceBlock
+	{
+		float d{};
+		std::int8_t qs[256]{};
+		std::int16_t bsums[16]{};
+	};
+	static_assert(sizeof(ReferenceBlock) == 292);
+
+	const auto quantizeReference = [](const float* values, std::int64_t stride) {
+		ReferenceBlock block;
+		float signedMax = 0.0F;
+		float absMax = 0.0F;
+		for (std::size_t lane = 0; lane < std::size(block.qs); ++lane)
+		{
+			const auto value = values[static_cast<std::int64_t>(lane) * stride];
+			const auto absValue = std::fabs(value);
+			if (absValue > absMax)
+			{
+				absMax = absValue;
+				signedMax = value;
+			}
+		}
+		if (absMax == 0.0F)
+		{
+			return block;
+		}
+
+		const auto inverseScale = -127.0F / signedMax;
+		for (std::size_t lane = 0; lane < std::size(block.qs); ++lane)
+		{
+			const auto value = values[static_cast<std::int64_t>(lane) * stride];
+			auto quant = static_cast<int>(std::nearbyint(inverseScale * value));
+			block.qs[lane] = static_cast<std::int8_t>(std::clamp(quant, -127, 127));
+		}
+		for (std::size_t group = 0; group < std::size(block.bsums); ++group)
+		{
+			int sum = 0;
+			for (std::size_t lane = 0; lane < 16; ++lane)
+			{
+				sum += block.qs[group * 16 + lane];
+			}
+			block.bsums[group] = static_cast<std::int16_t>(sum);
+		}
+		block.d = 1.0F / inverseScale;
+		return block;
+	};
+
+	constexpr std::int64_t rows = 2;
+	constexpr std::int64_t columns = 512;
+	constexpr std::int64_t columnStride = 2;
+	constexpr std::int64_t rowStride = columns * columnStride + 7;
+	std::vector<float> input(static_cast<std::size_t>(rows * rowStride), 1234.0F);
+	for (std::int64_t row = 0; row < rows; ++row)
+	{
+		for (std::int64_t column = 0; column < columns; ++column)
+		{
+			const auto centered = static_cast<int>(column % 253) - 126;
+			const auto half = static_cast<float>(centered) + (column % 3 == 0 ? 0.5F : -0.5F);
+			input[static_cast<std::size_t>(row * rowStride + column * columnStride)] =
+			    (row == 0 ? half / 127.0F : -half / 63.5F);
+		}
+	}
+	input[0] = -1.0F;
+	input[static_cast<std::size_t>(rowStride)] = 2.0F;
+	for (std::int64_t column = 256; column < columns; ++column)
+	{
+		input[static_cast<std::size_t>(rowStride + column * columnStride)] = 0.0F;
+	}
+
+	const auto blockBytes = litenn_cpu_ggml_q8k_activation_block_bytes();
+	ASSERT_EQ(blockBytes, sizeof(ReferenceBlock));
+	constexpr std::size_t blocksPerRow = columns / 256;
+	std::vector<std::uint8_t> staged(static_cast<std::size_t>(rows) * blocksPerRow * blockBytes);
+	litenn_cpu_ggml_prepare_q8k_activation_f32(nullptr, input.data(), 0, rows, columns, rowStride, columnStride,
+	                                           nullptr, staged.data(), 0, static_cast<std::int64_t>(staged.size()), 1);
+
+	for (std::int64_t row = 0; row < rows; ++row)
+	{
+		for (std::size_t blockIndex = 0; blockIndex < blocksPerRow; ++blockIndex)
+		{
+			const auto* source =
+			    input.data() + row * rowStride + static_cast<std::int64_t>(blockIndex * 256) * columnStride;
+			const auto expected = quantizeReference(source, columnStride);
+			ReferenceBlock actual;
+			std::memcpy(&actual,
+			            staged.data() + (static_cast<std::size_t>(row) * blocksPerRow + blockIndex) * blockBytes,
+			            sizeof(actual));
+			SCOPED_TRACE(std::format("row={} block={}", row, blockIndex));
+			EXPECT_FLOAT_EQ(actual.d, expected.d);
+			EXPECT_TRUE(std::ranges::equal(actual.qs, expected.qs));
+			EXPECT_TRUE(std::ranges::equal(actual.bsums, expected.bsums));
 		}
 	}
 }

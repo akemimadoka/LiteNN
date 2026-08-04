@@ -1992,6 +1992,13 @@ namespace
 	}
 #endif
 
+	int RoundGGMLQ8KValue(float value)
+	{
+		constexpr float roundToNearestBias = 12582912.0F;
+		const auto bits = std::bit_cast<std::int32_t>(value + roundToNearestBias);
+		return (bits & 0x007fffff) - 0x00400000;
+	}
+
 	void QuantizeGGMLQ8KActivationBlock(const float* lhs, std::int64_t lhsStride, GGMLQ8KActivationBlock& out)
 	{
 		float signedMax = 0.0F;
@@ -2019,7 +2026,7 @@ namespace
 		for (std::uint64_t lane = 0; lane < 256; ++lane)
 		{
 			const auto value = lhs[static_cast<std::int64_t>(lane) * lhsStride];
-			auto quant = static_cast<int>(std::nearbyint(inverseScale * value));
+			auto quant = RoundGGMLQ8KValue(inverseScale * value);
 			quant = std::clamp(quant, -127, 127);
 			out.qs[lane] = static_cast<std::int8_t>(quant);
 		}
