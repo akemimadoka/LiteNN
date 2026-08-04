@@ -19,6 +19,7 @@ using namespace litenn;
 
 namespace
 {
+	constexpr llvm::StringLiteral kSwiGLUDownFusionIdAttr = "litenn.swiglu_down_fusion_id";
 
 	//===----------------------------------------------------------------------===//
 	// Helpers
@@ -352,6 +353,10 @@ namespace
 			if (kind == BinaryOpKind::SwiGLU && elemType.isF32())
 			{
 				generic->setAttr("litenn.swiglu_f32", rewriter.getUnitAttr());
+				if (const auto fusionId = op->getAttr(kSwiGLUDownFusionIdAttr))
+				{
+					generic->setAttr(kSwiGLUDownFusionIdAttr, fusionId);
+				}
 			}
 			rewriter.replaceOp(op, generic.getResult(0));
 			return success();

@@ -4,6 +4,7 @@
 
 #include <LiteNN/ExecutablePlan.h>
 #include <LiteNN/Graph.h>
+#include <LiteNN/OpSchema.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/Validation/GraphValidator.h>
 
@@ -179,6 +180,7 @@ namespace litenn
 		constexpr std::int64_t kGGMLPreparedLayoutFieldInterleavedV4 = 4;
 		constexpr std::size_t kGGMLCompactBlockGroupedHeaderBytes = 64;
 		constexpr std::size_t kGGMLFieldInterleavedV4HeaderBytes = 64;
+		constexpr llvm::StringLiteral kSwiGLUDownFusionIdAttr = "litenn.swiglu_down_fusion_id";
 
 		std::optional<std::size_t> GGMLCompactBlockGroupedBytes(QuantizedBlockFormat format, std::size_t rows,
 		                                                        std::size_t columns)
@@ -471,6 +473,64 @@ namespace litenn
 			Value getVal(const std::vector<SmallVector<Value>>& valueMap, NodeOutput output)
 			{
 				return valueMap[output.node][output.port];
+			}
+
+			std::optional<NodeId> getFusableSwiGLUDownConsumer(const PlanSubgraphView& sg, NodeId swigluNodeId) const
+			{
+				const NodeOutput swigluOutput{ swigluNodeId, 0 };
+				if (swigluNodeId >= sg.NodeCount() || sg.subgraph.nodes[swigluNodeId].outputs.size() != 1)
+				{
+					return std::nullopt;
+				}
+				const auto* swiglu = std::get_if<BinaryOpNode>(&sg.subgraph.nodes[swigluNodeId].node);
+				if (!swiglu || swiglu->op != LiteNN::BinaryOp::SwiGLU)
+				{
+					return std::nullopt;
+				}
+				const auto gateInfo = sg.GetOutputInfo(swiglu->lhs);
+				const auto upInfo = sg.GetOutputInfo(swiglu->rhs);
+				const auto outputInfo = sg.GetOutputInfo(swigluOutput);
+				if (gateInfo.dtype != DataType::Float32 || upInfo.dtype != DataType::Float32 ||
+				    outputInfo.dtype != DataType::Float32 || outputInfo.shape.size() != 2 ||
+				    gateInfo.shape != outputInfo.shape || upInfo.shape != outputInfo.shape)
+				{
+					return std::nullopt;
+				}
+				if (llvm::is_contained(sg.Results(), swigluOutput))
+				{
+					return std::nullopt;
+				}
+
+				std::optional<NodeId> consumer;
+				for (NodeId candidateId = 0; candidateId < sg.NodeCount(); ++candidateId)
+				{
+					for (const auto input : NodeInputs(sg.subgraph.nodes[candidateId].node))
+					{
+						if (input != swigluOutput)
+						{
+							continue;
+						}
+						if (consumer)
+						{
+							return std::nullopt;
+						}
+						consumer = candidateId;
+					}
+				}
+				if (!consumer)
+				{
+					return std::nullopt;
+				}
+
+				const auto* down = std::get_if<QuantizedMatMulNode>(&sg.subgraph.nodes[*consumer].node);
+				if (!down || down->lhs != swigluOutput || !down->transposeRhs ||
+				    down->params.storageLayout != QuantizedStorageLayout::GGMLFieldInterleavedV4 ||
+				    (down->params.blockFormat != QuantizedBlockFormat::GGML_Q4_K &&
+				     down->params.blockFormat != QuantizedBlockFormat::GGML_Q6_K))
+				{
+					return std::nullopt;
+				}
+				return consumer;
 			}
 
 			Value emitFilledConstant(DataType dtype, std::span<const std::size_t> shape, double value)
@@ -1165,6 +1225,12 @@ namespace litenn
 				auto resultType = convertTensorType(ctx_, dtype, outputInfos[0].shape);
 				auto op = builder_.create<litenn::BinaryOp>(builder_.getUnknownLoc(), resultType,
 				                                            convertBinaryOp(node.op), lhs, rhs);
+				const auto fusionConsumer =
+				    node.op == LiteNN::BinaryOp::SwiGLU ? getFusableSwiGLUDownConsumer(sg, nodeId) : std::nullopt;
+				if (fusionConsumer)
+				{
+					op->setAttr(kSwiGLUDownFusionIdAttr, builder_.getI64IntegerAttr(static_cast<std::int64_t>(nodeId)));
+				}
 				valueMap[nodeId] = { op.getResult() };
 			}
 
@@ -1421,6 +1487,13 @@ namespace litenn
 						{
 							generic->setAttr("litenn.ggml_block_quantized_matmul_prepared_layout",
 							                 builder_.getI64IntegerAttr(*preparedLayout));
+						}
+						const auto fusionConsumer =
+						    node.lhs.port == 0 ? getFusableSwiGLUDownConsumer(sg, node.lhs.node) : std::nullopt;
+						if (fusionConsumer == std::optional<NodeId>{ nodeId })
+						{
+							generic->setAttr(kSwiGLUDownFusionIdAttr,
+							                 builder_.getI64IntegerAttr(static_cast<std::int64_t>(node.lhs.node)));
 						}
 						valueMap[nodeId] = { generic.getResult(0) };
 						return;

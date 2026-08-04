@@ -2576,6 +2576,111 @@ TEST(GGUFLLaMAQuantizedExecution, FusedSwiGLUFieldInterleavedV4HelperMatchesMate
 	}
 }
 
+TEST(GGUFLLaMAQuantizedExecution, CPUAOTFusesSwiGLUIntoFieldInterleavedV4DownProjection)
+{
+	constexpr std::size_t rows = 2;
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 15;
+	const std::array cases = {
+		std::tuple{ GGML_TYPE_Q4_K, QuantizedBlockFormat::GGML_Q4_K, "q4_k.weight" },
+		std::tuple{ GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K, "q6_k.weight" },
+	};
+
+	for (const auto& [ggmlType, blockFormat, name] : cases)
+	{
+		SCOPED_TRACE(name);
+		std::vector<float> weightValues(outFeatures * inFeatures);
+		for (std::size_t i = 0; i < weightValues.size(); ++i)
+		{
+			weightValues[i] = static_cast<float>(static_cast<int>(i % 27) - 13) * 0.125F;
+		}
+		const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+		const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, ggmlType, blockFormat);
+
+		const auto buildGraph = [&](bool preserveSwiGLUOutput, bool shareSwiGLUOutput = false,
+		                            bool broadcastUp = false) {
+			Graph graph;
+			const auto weightVariable = graph.AddVariable(quantizedWeight);
+			const Layer::LinearLayer downLayer{
+				.weightVariable = weightVariable,
+				.inFeatures = inFeatures,
+				.outFeatures = outFeatures,
+				.dtype = DataType::Float32,
+				.weightQuantization = *quantizedWeight->Quantization(),
+				.weightStorageShape = quantizedWeight->Data().Shape().ToOwned(),
+				.transposeWeight = true,
+			};
+			Subgraph forward;
+			const auto gate = forward.AddParam(DataType::Float32, { rows, inFeatures });
+			const auto up = forward.AddParam(DataType::Float32, { broadcastUp ? 1 : rows, inFeatures });
+			const auto gated =
+			    forward.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
+			                    std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { rows, inFeatures } } });
+			const auto down = Layer::AddLinear(forward, downLayer, { gated, 0 });
+			std::vector<NodeOutput> results;
+			if (preserveSwiGLUOutput)
+			{
+				results.push_back({ gated, 0 });
+			}
+			results.push_back(down);
+			if (shareSwiGLUOutput)
+			{
+				results.push_back(Layer::AddLinear(forward, downLayer, { gated, 0 }));
+			}
+			forward.SetResults(std::move(results));
+			graph.SetForward(graph.AddSubgraph(std::move(forward)));
+			return graph;
+		};
+
+		std::vector<float> gateValues(rows * inFeatures);
+		std::vector<float> upValues(rows * inFeatures);
+		for (std::size_t i = 0; i < gateValues.size(); ++i)
+		{
+			gateValues[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.0625F;
+			upValues[i] = static_cast<float>(static_cast<int>(i % 23) - 11) * 0.09375F;
+		}
+		const std::array<Tensor<CPU>, 2> inputs = {
+			MakeFloatTensor(gateValues, { rows, inFeatures }),
+			MakeFloatTensor(upValues, { rows, inFeatures }),
+		};
+		CompilerOptions options;
+		options.enableCPUAOTExternalRegions = true;
+		options.enableCPUAOTGGMLQ8KStagedMatMul = true;
+		options.enableCPUAOTGGMLPrepackedWeights = true;
+		options.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
+		options.cpuAOTThreadCount = 2;
+		const auto baselineArtifact =
+		    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(buildGraph(true)), options);
+		EXPECT_FALSE(ByteSpanContains(baselineArtifact.Instructions(),
+		                              "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		EXPECT_TRUE(ByteSpanContains(baselineArtifact.Instructions(),
+		                             "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		const auto expected = baselineArtifact.Load().RunTensors(inputs);
+		ASSERT_EQ(expected.size(), 2u);
+		const auto sharedArtifact =
+		    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(buildGraph(false, true)), options);
+		EXPECT_FALSE(ByteSpanContains(sharedArtifact.Instructions(),
+		                              "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		EXPECT_TRUE(ByteSpanContains(sharedArtifact.Instructions(),
+		                             "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		const auto broadcastArtifact = Compiler<CPU>::CompileArtifact(
+		    Detail::BuildExecutablePlanFromGraph(buildGraph(false, false, true)), options);
+		EXPECT_FALSE(ByteSpanContains(broadcastArtifact.Instructions(),
+		                              "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		EXPECT_TRUE(ByteSpanContains(broadcastArtifact.Instructions(),
+		                             "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+
+		const auto plan = Detail::BuildExecutablePlanFromGraph(buildGraph(false));
+		const auto artifact = Compiler<CPU>::CompileArtifact(plan, options);
+		EXPECT_TRUE(ByteSpanContains(artifact.Instructions(),
+		                             "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		auto compiled = artifact.Load();
+		const auto actual = compiled.RunTensors(inputs);
+		ASSERT_EQ(actual.size(), 1u);
+		ExpectTensorNear(actual[0], expected[1], { .absolute = 1.0e-4, .relative = 1.0e-5 });
+	}
+}
+
 TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4DecodeThreadPolicyCapsSquareQ4KProjection)
 {
 	constexpr std::size_t features = 2304;

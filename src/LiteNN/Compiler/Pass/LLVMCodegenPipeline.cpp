@@ -69,6 +69,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Attr = "litenn.scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kScatterUpdateAxis0F32Rank3Helper = "litenn_cpu_scatter_update_axis0_f32_rank3";
 		constexpr llvm::StringLiteral kSwiGLUF32Attr = "litenn.swiglu_f32";
+		constexpr llvm::StringLiteral kSwiGLUDownFusionIdAttr = "litenn.swiglu_down_fusion_id";
 		constexpr llvm::StringLiteral kSwiGLUF32Helper = "litenn_cpu_swiglu_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
@@ -79,6 +80,8 @@ namespace litenn
 		constexpr llvm::StringLiteral kGGMLBlockMatMulCompactQ8KHelper = "litenn_cpu_ggml_block_matmul_compact_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulFieldInterleavedV4Q8KHelper =
 		    "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
+		constexpr llvm::StringLiteral kSwiGLUGGMLBlockMatMulFieldInterleavedV4Q8KHelper =
+		    "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q8KStagedHelper =
@@ -296,7 +299,8 @@ namespace litenn
 
 		mlir::LogicalResult rewriteGGMLBlockQuantizedMatMulCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
 		                                                        mlir::OpBuilder& builder,
-		                                                        const LLVMCodegenOptions& options)
+		                                                        const LLVMCodegenOptions& options,
+		                                                        mlir::linalg::GenericOp swigluProducer = {})
 		{
 			auto formatAttr = op->getAttrOfType<mlir::IntegerAttr>(kGGMLBlockQuantizedMatMulAttr);
 			if (!formatAttr || op->getNumResults() != 0 || op.getInputs().size() != 1 || op.getOutputs().size() != 1)
@@ -348,8 +352,39 @@ namespace litenn
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutCompactBlockGroupedV3;
 			const auto usesFieldInterleavedPreparedLayout =
 			    hasPreparedLayout && preparedLayoutAttr.getInt() == kGGMLPreparedLayoutFieldInterleavedV4;
+			const auto fuseSwiGLU = swigluProducer && usesFieldInterleavedPreparedLayout &&
+			                        (blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q4_K ||
+			                         blockFormat == LiteNN::QuantizedBlockFormat::GGML_Q6_K);
+			mlir::Value gate;
+			mlir::Value up;
+			mlir::MemRefType gateType;
+			mlir::MemRefType upType;
+			if (swigluProducer)
+			{
+				const auto matmulFusionId = op->getAttrOfType<mlir::IntegerAttr>(kSwiGLUDownFusionIdAttr);
+				const auto swigluFusionId = swigluProducer->getAttrOfType<mlir::IntegerAttr>(kSwiGLUDownFusionIdAttr);
+				if (!fuseSwiGLU || !swigluProducer->hasAttr(kSwiGLUF32Attr) || !matmulFusionId || !swigluFusionId ||
+				    matmulFusionId.getInt() != swigluFusionId.getInt() || swigluProducer.getInputs().size() != 2 ||
+				    swigluProducer.getOutputs().size() != 1)
+				{
+					return mlir::failure();
+				}
+				gate = swigluProducer.getInputs()[0];
+				up = swigluProducer.getInputs()[1];
+				gateType = llvm::dyn_cast<mlir::MemRefType>(gate.getType());
+				upType = llvm::dyn_cast<mlir::MemRefType>(up.getType());
+				if (!gateType || !upType || gateType.getRank() != 2 || upType.getRank() != 2 ||
+				    !gateType.getElementType().isF32() || !upType.getElementType().isF32())
+				{
+					return mlir::failure();
+				}
+			}
 			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
-			if (hasPreparedLayout)
+			if (fuseSwiGLU)
+			{
+				helperName = kSwiGLUGGMLBlockMatMulFieldInterleavedV4Q8KHelper;
+			}
+			else if (hasPreparedLayout)
 			{
 				if (!options.enableGGMLPrepackedWeights)
 				{
@@ -386,13 +421,23 @@ namespace litenn
 			{
 				helperName = kGGMLBlockMatMulQ8KStagedHelper;
 			}
-			auto funcType = usesExpandedPreparedLayout
-			                    ? builder.getFunctionType(
-			                          mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64 },
-			                          mlir::TypeRange{})
-			                    : builder.getFunctionType(
-			                          mlir::TypeRange{ dynamicLhsType, dynamicRhsType, dynamicOutType, i64, i64, i64 },
-			                          mlir::TypeRange{});
+			auto* mlirContext = builder.getContext();
+			auto dynamicLayoutRank2 = mlir::StridedLayoutAttr::get(
+			    mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicGateType =
+			    fuseSwiGLU ? mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                       gateType.getElementType(), dynamicLayoutRank2)
+			               : mlir::MemRefType{};
+			auto funcType =
+			    fuseSwiGLU ? builder.getFunctionType(mlir::TypeRange{ dynamicGateType, dynamicGateType, dynamicRhsType,
+			                                                          dynamicOutType, i64, i64, i64 },
+			                                         mlir::TypeRange{})
+			    : usesExpandedPreparedLayout ? builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
+			                                                                            dynamicOutType, i64, i64 },
+			                                                           mlir::TypeRange{})
+			                                 : builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
+			                                                                            dynamicOutType, i64, i64, i64 },
+			                                                           mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
 			if (!helper)
 			{
@@ -411,9 +456,20 @@ namespace litenn
 			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulThreadCount, 64).getResult();
 			auto affinityPolicy =
 			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulAffinityPolicy, 64).getResult();
-			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
 			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
+			if (fuseSwiGLU)
+			{
+				auto dynamicGate = builder.create<mlir::memref::CastOp>(loc, dynamicGateType, gate).getResult();
+				auto dynamicUp = builder.create<mlir::memref::CastOp>(loc, dynamicGateType, up).getResult();
+				builder.create<mlir::func::CallOp>(loc, helper,
+				                                   mlir::ValueRange{ dynamicGate, dynamicUp, dynamicRhs, dynamicOut,
+				                                                     format, threadCount, affinityPolicy });
+				op.erase();
+				swigluProducer.erase();
+				return mlir::success();
+			}
+			auto dynamicLhs = builder.create<mlir::memref::CastOp>(loc, dynamicLhsType, lhs).getResult();
 			if (usesExpandedPreparedLayout)
 			{
 				builder.create<mlir::func::CallOp>(
@@ -427,6 +483,33 @@ namespace litenn
 			}
 			op.erase();
 			return mlir::success();
+		}
+
+		mlir::linalg::GenericOp findFusableSwiGLUProducer(mlir::linalg::GenericOp matmul,
+		                                                  llvm::ArrayRef<mlir::linalg::GenericOp> candidates)
+		{
+			const auto fusionId = matmul->getAttrOfType<mlir::IntegerAttr>(kSwiGLUDownFusionIdAttr);
+			if (!matmul->hasAttr(kGGMLBlockQuantizedMatMulAttr) || !fusionId || matmul.getInputs().size() != 1)
+			{
+				return {};
+			}
+			const auto parentFunc = matmul->getParentOfType<mlir::func::FuncOp>();
+			mlir::linalg::GenericOp producer;
+			for (auto candidate : candidates)
+			{
+				const auto candidateId = candidate->getAttrOfType<mlir::IntegerAttr>(kSwiGLUDownFusionIdAttr);
+				if (candidate == matmul || candidate->getParentOfType<mlir::func::FuncOp>() != parentFunc ||
+				    !candidate->hasAttr(kSwiGLUF32Attr) || !candidateId || candidateId.getInt() != fusionId.getInt())
+				{
+					continue;
+				}
+				if (producer)
+				{
+					return {};
+				}
+				producer = candidate;
+			}
+			return producer;
 		}
 
 		mlir::LogicalResult rewriteGGMLBlockGroupedQuantizedMatMulCall(mlir::ModuleOp module,
@@ -2294,6 +2377,24 @@ namespace litenn
 				getOperation().walk([&](mlir::linalg::GenericOp op) { candidates.push_back(op); });
 
 				mlir::OpBuilder builder(&getContext());
+				llvm::SmallVector<std::pair<mlir::linalg::GenericOp, mlir::linalg::GenericOp>> swigluDownPairs;
+				for (auto op : candidates)
+				{
+					auto swigluProducer = findFusableSwiGLUProducer(op, candidates);
+					if (swigluProducer)
+					{
+						swigluDownPairs.emplace_back(swigluProducer, op);
+					}
+				}
+				for (const auto& [swigluProducer, matmul] : swigluDownPairs)
+				{
+					builder.setInsertionPoint(matmul);
+					static_cast<void>(
+					    rewriteGGMLBlockQuantizedMatMulCall(getOperation(), matmul, builder, options_, swigluProducer));
+				}
+
+				candidates.clear();
+				getOperation().walk([&](mlir::linalg::GenericOp op) { candidates.push_back(op); });
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
