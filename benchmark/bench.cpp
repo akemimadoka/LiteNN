@@ -647,6 +647,18 @@ namespace
 		return data;
 	}
 
+	std::vector<float> MakeGGMLInputData(std::size_t elementCount)
+	{
+		std::mt19937 rng(0);
+		std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
+		std::vector<float> data(elementCount);
+		for (auto& value : data)
+		{
+			value = dist(rng);
+		}
+		return data;
+	}
+
 	std::vector<Tensor<CPU>> MakeInputs(const std::vector<float>& data, std::size_t batch)
 	{
 		std::vector<Tensor<CPU>> inputs;
@@ -1512,7 +1524,7 @@ namespace
 			return;
 		}
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
-		auto lhs = MakeInputData(batch * inputWidth);
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
 		std::vector<float> output(batch * outputWidth);
 		std::vector<float> directReference;
 
@@ -1575,7 +1587,7 @@ namespace
 	                                          std::uint64_t threadCount)
 	{
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
-		auto lhs = MakeInputData(batch * inputWidth);
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
 		const auto compactBytes = litenn_cpu_ggml_compact_interleaved_bytes(static_cast<std::uint64_t>(format),
 		                                                                    static_cast<std::int64_t>(outputWidth),
 		                                                                    static_cast<std::int64_t>(inputWidth));
@@ -1634,7 +1646,7 @@ namespace
 	                                          std::uint64_t threadCount)
 	{
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
-		auto lhs = MakeInputData(batch * inputWidth);
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
 		const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(static_cast<std::uint64_t>(format),
 		                                                                    static_cast<std::int64_t>(outputWidth),
 		                                                                    static_cast<std::int64_t>(inputWidth));
@@ -2031,7 +2043,7 @@ namespace
 			return;
 		}
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
-		auto lhs = MakeInputData(batch * inputWidth);
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
 		std::vector<float> internalReference(batch * outputWidth);
 		std::vector<float> output(batch * outputWidth);
 		const auto blockCount = inputWidth / layout->elementsPerBlock;
@@ -2077,6 +2089,41 @@ namespace
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 		state.counters["q8k_prepared_activation"] = benchmark::Counter(1.0);
 		state.counters["activation_bytes"] = benchmark::Counter(static_cast<double>(stagedActivation.size()));
+	}
+
+	void BMGGMLQ8KActivationPrepare(benchmark::State& state, std::size_t batch, std::size_t inputWidth)
+	{
+		constexpr std::size_t elementsPerBlock = 256;
+		const auto activationBlockBytes = litenn_cpu_ggml_q8k_activation_block_bytes();
+		if (activationBlockBytes == 0 || inputWidth % elementsPerBlock != 0)
+		{
+			state.SkipWithError("unsupported GGML Q8_K activation preparation shape");
+			return;
+		}
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
+		const auto blockCount = inputWidth / elementsPerBlock;
+		std::vector<std::uint8_t> stagedActivation(batch * blockCount * activationBlockBytes);
+		const auto invoke = [&] {
+			litenn_cpu_ggml_prepare_q8k_activation_f32(
+			    nullptr, lhs.data(), 0, static_cast<std::int64_t>(batch), static_cast<std::int64_t>(inputWidth),
+			    static_cast<std::int64_t>(inputWidth), 1, nullptr, stagedActivation.data(), 0,
+			    static_cast<std::int64_t>(stagedActivation.size()), 1);
+		};
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+		}
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(stagedActivation.data());
+			benchmark::ClobberMemory();
+		}
+		state.counters["activation_bytes"] = benchmark::Counter(static_cast<double>(lhs.size() * sizeof(float)));
+		state.counters["blocks"] = benchmark::Counter(static_cast<double>(batch * blockCount));
+		state.counters["staged_bytes"] = benchmark::Counter(static_cast<double>(stagedActivation.size()));
+		state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
+		                        static_cast<std::int64_t>(lhs.size() * sizeof(float)));
 	}
 
 	using GGMLPrepackFn = void (*)(const std::uint8_t*, const std::uint8_t*, std::int64_t, std::int64_t, std::int64_t,
@@ -2182,7 +2229,7 @@ namespace
 			return;
 		}
 		auto rhs = MakeGGMLBenchmarkStorage(format, outputWidth, inputWidth);
-		auto lhs = MakeInputData(batch * inputWidth);
+		auto lhs = MakeGGMLInputData(batch * inputWidth);
 		std::vector<float> directReference(batch * outputWidth);
 		std::vector<float> output(batch * outputWidth);
 		const auto blockCount = inputWidth / layout->elementsPerBlock;
@@ -5180,6 +5227,15 @@ namespace
 		                         GGMLProjectionStreamActivationMode::SwiGLUFused);
 		registerProjectionStream("qwen_q4_k_m_down_48_swiglu_paired", kQwenMixedDownProjectionStream,
 		                         GGMLProjectionStreamActivationMode::SwiGLUPaired);
+		for (const auto [name, inputWidth] :
+		     std::array{ std::pair{ std::string_view{ "qwen_hidden" }, std::size_t{ 5120 } },
+		                 std::pair{ std::string_view{ "qwen_ffn_down" }, std::size_t{ 13824 } } })
+		{
+			auto* benchmarkCase = benchmark::RegisterBenchmark(
+			    std::format("GGMLQ8KActivationPrepare/{}/batch:1/in:{}", name, inputWidth),
+			    [inputWidth](benchmark::State& state) { BMGGMLQ8KActivationPrepare(state, 1, inputWidth); });
+			benchmarkCase->Unit(benchmark::kMicrosecond);
+		}
 		for (const auto format : ggmlQ8KStagedBlockFormats)
 		{
 			for (const auto threadCount : kGGMLThreadCounts)
