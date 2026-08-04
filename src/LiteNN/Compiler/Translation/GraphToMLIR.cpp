@@ -357,6 +357,7 @@ namespace litenn
 		private:
 			static constexpr llvm::StringLiteral kNodeProfileBegin = "litenn_cpu_profile_node_begin";
 			static constexpr llvm::StringLiteral kNodeProfileEnd = "litenn_cpu_profile_node_end";
+			static constexpr llvm::StringLiteral kRMSNormF32Attr = "litenn.rms_norm_f32";
 
 			void emitNodeProfileDeclarations()
 			{
@@ -3330,6 +3331,40 @@ namespace litenn
 
 				const auto inputInfo = sg.GetOutputInfo(node.input);
 				const auto dtype = outputInfos[0].dtype;
+				if (node.mode == NormalizationMode::RMSNorm && inputInfo.dtype == DataType::Float32 &&
+				    dtype == DataType::Float32 && inputInfo.shape.size() == 2 && node.axis == 1 && node.scale &&
+				    !node.bias && outputInfos[0].shape == inputInfo.shape)
+				{
+					const auto scaleInfo = sg.GetOutputInfo(*node.scale);
+					if (scaleInfo.dtype == DataType::Float32 && scaleInfo.shape.size() == 2 &&
+					    scaleInfo.shape[0] == 1 && scaleInfo.shape[1] == inputInfo.shape[1])
+					{
+						const auto loc = builder_.getUnknownLoc();
+						auto resultType = convertTensorType(ctx_, dtype, outputInfos[0].shape);
+						auto empty =
+						    builder_.create<tensor::EmptyOp>(loc, resultType.getShape(), resultType.getElementType());
+						auto row = getAffineDimExpr(0, &ctx_);
+						auto column = getAffineDimExpr(1, &ctx_);
+						auto inputMap = AffineMap::get(2, 0, { row, column }, &ctx_);
+						auto scaleMap = AffineMap::get(2, 0, { getAffineConstantExpr(0, &ctx_), column }, &ctx_);
+						auto outputMap = AffineMap::getMultiDimIdentityMap(2, &ctx_);
+						auto generic = builder_.create<linalg::GenericOp>(
+						    loc, TypeRange{ resultType },
+						    ValueRange{ getVal(valueMap, node.input), getVal(valueMap, *node.scale) },
+						    ValueRange{ empty }, SmallVector<AffineMap>{ inputMap, scaleMap, outputMap },
+						    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
+						                                      utils::IteratorType::parallel },
+						    [&](OpBuilder& b, Location l, ValueRange args) {
+							    auto zero = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
+							    auto scaleDependency = b.create<arith::MulFOp>(l, args[1], zero).getResult();
+							    b.create<linalg::YieldOp>(
+							        l, b.create<arith::AddFOp>(l, args[0], scaleDependency).getResult());
+						    });
+						generic->setAttr(kRMSNormF32Attr, builder_.getF64FloatAttr(node.epsilon));
+						valueMap[nodeId] = { generic.getResult(0) };
+						return;
+					}
+				}
 				const auto computeDType = shouldUseFloat32Accumulator(dtype) ? DataType::Float32 : dtype;
 				const auto inputShape = ShapeView{ inputInfo.shape };
 				const auto reducedShape = ReducedShape(inputShape, node.axis);

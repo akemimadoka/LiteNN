@@ -204,6 +204,18 @@ P0 implementation order:
     distinguish removable wrapper/shape work from timer boundary effects.
   - Do not revive broad CallNode inlining. Require unchanged tokens, no fallback, no compile-time increase above 5%,
     and at least `2%` lower full-token median before retaining a combined generated-code change.
+  - [x] Add a strict Float32 last-axis RMSNorm CPU AOT helper and evaluate it on the real 97-call decode schedule.
+    Profiled helper time is `0.36-0.45 ms/token` versus the prior `1.956 ms/token` normalization row. LLVM IR
+    instructions fell `6.66%`, object emission fell `10.23%`, object bytes fell `2.99%`, and complete artifact compile
+    fell `1.53%`. Three no-profile alternating pairs preserved exact tokens and produced `0.32%`, `6.42%`, and `1.47%`
+    gains; the `1.47%` paired median does not close the `2%` runtime gate. Retain the helper as a compiler-size win and
+    fusion primitive, not as completion evidence.
+  - [ ] Fuse a single-consumer RMSNorm into grouped field-v4 Q8_K activation staging. Skip the normalized Float32
+    materialization and staging cache comparison/copy, keep standalone RMSNorm semantics elsewhere, and require the
+    same exact-token/no-fallback/compile/full-token gates.
+  - [ ] Re-profile projection-wrapper self only after fused staging. Node timers currently surround external helper
+    calls, so the `3.124 ms/token` row is an upper bound contaminated by profile boundaries rather than proof that C ABI
+    wrappers are expensive.
 - [ ] P1 candidate, evidence-gated: raise FFN-Down cold-stream throughput.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing

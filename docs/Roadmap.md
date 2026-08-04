@@ -3323,6 +3323,15 @@ Priority classes:
       - [ ] P1: prove or reject projection-wrapper plus normalization removal with non-profile paired A/B evidence.
             The intrusive ledger measured `3.124 + 1.956 ms/token`; require unchanged output, no fallback, no more than
             `5%` compile-time growth, and at least `2%` full-token median improvement.
+            - [x] Lower strict Float32 last-axis RMSNorm to one CPU AOT helper. The real schedule invokes it 97 times per
+                  token at `0.36-0.45 ms` total; LLVM instructions fell `6.66%`, object emission fell `10.23%`, and
+                  exact-token alternating pairs produced a `1.47%` median gain. This is retained as a compiler-size
+                  improvement and fusion primitive, but does not satisfy the `2%` runtime gate.
+            - [ ] Fuse single-consumer RMSNorm into grouped field-v4 Q8_K activation staging, eliminating the
+                  normalized Float32 materialization and staging cache comparison/copy before repeating the gate.
+            - [ ] Treat the remaining `3.124 ms/token` projection-wrapper row as an instrumented upper bound until a
+                  low-overhead post-fusion profile proves removable non-helper work; do not revive broad CallNode
+                  inlining or an ABI rewrite from timer-boundary evidence.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.

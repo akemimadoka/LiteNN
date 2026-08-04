@@ -1196,6 +1196,50 @@ TEST(CompiledModuleTest, CPUFloat16RMSNormArtifactUsesFloat32Accumulator)
 	}
 }
 
+TEST(CompiledModuleTest, CPUFloat32RMSNormUsesNativeHelperAndMatchesInterpreter)
+{
+	Graph graph;
+	const auto scaleIndex =
+	    graph.AddVariable(Variable::Create(Tensor<CPU>({ 1.0, 0.5, 2.0, -1.0 }, { 1, 4 }, DataType::Float32)));
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 4 });
+	const auto scale = sg.AddNode(VariableRefNode{ scaleIndex }, { OutputInfo{ DataType::Float32, { 1, 4 } } });
+	const auto normalized = sg.AddNode(
+	    NormalizationNode{ { input, 0 }, NodeOutput{ scale, 0 }, std::nullopt, NormalizationMode::RMSNorm, 1, 1, 1e-5 },
+	    { OutputInfo{ DataType::Float32, { 2, 4 } } });
+	sg.SetResults({ { normalized, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+	graph.SetInputNames({ "input" });
+	graph.SetOutputNames({ "normalized" });
+
+	const std::vector<double> inputData = { 1.0, -2.0, 3.0, -4.0, 0.25, 0.5, -0.75, 1.0 };
+	std::array<Tensor<CPU>, 1> inputs = {
+		Tensor<CPU>(std::span<const double>(inputData), { 2, 4 }, DataType::Float32),
+	};
+	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(plan, std::span<const Tensor<CPU>>(inputs));
+	auto compiled = Compiler<CPU>::Compile(plan);
+	std::vector<CompiledModuleCPUHelperProfileEvent> helperEvents;
+	std::vector<Tensor<CPU>> outputs;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		outputs = compiled.RunTensors(std::span<const Tensor<CPU>>(inputs));
+		helperEvents = profiler.Snapshot();
+	}
+
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(expected.size(), 1u);
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-5F) << i;
+	}
+	const auto helper =
+	    std::ranges::find_if(helperEvents, [](const auto& event) { return event.helper == "litenn_cpu_rms_norm_f32"; });
+	ASSERT_NE(helper, helperEvents.end());
+	EXPECT_EQ(helper->calls, 1u);
+}
+
 TEST(CompiledModuleTest, CPUFloat16MatMulArtifactUsesFloat32Accumulator)
 {
 	Graph graph;

@@ -52,6 +52,8 @@ namespace litenn
 		constexpr llvm::StringLiteral kRoPEAtPositionsBaseAttr = "litenn.rope_at_positions_base";
 		constexpr llvm::StringLiteral kRoPEAtPositionsFrequencyScaleAttr = "litenn.rope_at_positions_frequency_scale";
 		constexpr llvm::StringLiteral kRoPEAtPositionsHelper = "litenn_cpu_rope_at_positions_f32";
+		constexpr llvm::StringLiteral kRMSNormF32Attr = "litenn.rms_norm_f32";
+		constexpr llvm::StringLiteral kRMSNormF32Helper = "litenn_cpu_rms_norm_f32";
 		constexpr llvm::StringLiteral kActivePrefixAttentionAttr = "litenn.active_prefix_attention";
 		constexpr llvm::StringLiteral kActivePrefixAttentionKVHeadAttr = "litenn.active_prefix_attention_kv_head";
 		constexpr llvm::StringLiteral kActivePrefixAttentionHelper = "litenn_cpu_active_prefix_attention_f32";
@@ -885,6 +887,61 @@ namespace litenn
 			    builder.create<mlir::arith::ConstantFloatOp>(loc, f64, frequencyScaleAttr.getValue()).getResult();
 			builder.create<mlir::func::CallOp>(
 			    loc, helper, mlir::ValueRange{ dynamicInput, dynamicPositions, dynamicOut, base, frequencyScale });
+			op.erase();
+			return mlir::success();
+		}
+
+		mlir::LogicalResult rewriteRMSNormF32Call(mlir::ModuleOp module, mlir::linalg::GenericOp op,
+		                                          mlir::OpBuilder& builder)
+		{
+			auto epsilonAttr = op->getAttrOfType<mlir::FloatAttr>(kRMSNormF32Attr);
+			if (!epsilonAttr || op->getNumResults() != 0 || op.getInputs().size() != 2 || op.getOutputs().size() != 1)
+			{
+				return mlir::failure();
+			}
+			auto input = op.getInputs()[0];
+			auto scale = op.getInputs()[1];
+			auto out = op.getOutputs()[0];
+			auto inputType = llvm::dyn_cast<mlir::MemRefType>(input.getType());
+			auto scaleType = llvm::dyn_cast<mlir::MemRefType>(scale.getType());
+			auto outType = llvm::dyn_cast<mlir::MemRefType>(out.getType());
+			if (!inputType || !scaleType || !outType || inputType.getRank() != 2 || scaleType.getRank() != 2 ||
+			    outType.getRank() != 2 || !inputType.getElementType().isF32() || !scaleType.getElementType().isF32() ||
+			    !outType.getElementType().isF32())
+			{
+				return mlir::failure();
+			}
+
+			const auto loc = op.getLoc();
+			auto* context = builder.getContext();
+			auto dynamicLayout = mlir::StridedLayoutAttr::get(
+			    context, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+			auto dynamicF32Rank2 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
+			                                             builder.getF32Type(), dynamicLayout);
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank2, dynamicF32Rank2, builder.getF64Type() },
+			    mlir::TypeRange{});
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kRMSNormF32Helper);
+			if (!helper)
+			{
+				mlir::OpBuilder::InsertionGuard guard(builder);
+				builder.setInsertionPointToStart(module.getBody());
+				helper = builder.create<mlir::func::FuncOp>(loc, kRMSNormF32Helper, funcType);
+				helper.setPrivate();
+			}
+			else if (helper.getFunctionType() != funcType)
+			{
+				return mlir::failure();
+			}
+
+			auto dynamicInput = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, input).getResult();
+			auto dynamicScale = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, scale).getResult();
+			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicF32Rank2, out).getResult();
+			auto epsilon =
+			    builder.create<mlir::arith::ConstantFloatOp>(loc, builder.getF64Type(), epsilonAttr.getValue())
+			        .getResult();
+			builder.create<mlir::func::CallOp>(loc, helper,
+			                                   mlir::ValueRange{ dynamicInput, dynamicScale, dynamicOut, epsilon });
 			op.erase();
 			return mlir::success();
 		}
@@ -2403,6 +2460,10 @@ namespace litenn
 						continue;
 					}
 					if (mlir::succeeded(rewriteRoPEAtPositionsCall(getOperation(), op, builder)))
+					{
+						continue;
+					}
+					if (mlir::succeeded(rewriteRMSNormF32Call(getOperation(), op, builder)))
 					{
 						continue;
 					}

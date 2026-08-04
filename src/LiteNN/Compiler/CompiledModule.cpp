@@ -1343,6 +1343,48 @@ namespace
 		}
 	}
 
+	extern "C" void litenn_cpu_rms_norm_f32(const float*, const float* inputAligned, std::int64_t inputOffset,
+	                                        std::int64_t inputRows, std::int64_t inputColumns,
+	                                        std::int64_t inputRowStride, std::int64_t inputColumnStride, const float*,
+	                                        const float* scaleAligned, std::int64_t scaleOffset, std::int64_t scaleRows,
+	                                        std::int64_t scaleColumns, std::int64_t scaleRowStride,
+	                                        std::int64_t scaleColumnStride, float*, float* outAligned,
+	                                        std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	                                        std::int64_t outRowStride, std::int64_t outColumnStride, double epsilon)
+	{
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_rms_norm_f32",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format("input={}x{} output={}x{}", inputRows, inputColumns, outRows, outColumns)
+		        : std::string{});
+		if (!inputAligned || !scaleAligned || !outAligned || inputOffset < 0 || scaleOffset < 0 || outOffset < 0 ||
+		    inputRows <= 0 || inputColumns <= 0 || inputRowStride <= 0 || inputColumnStride <= 0 || scaleRows != 1 ||
+		    scaleColumns != inputColumns || scaleRowStride <= 0 || scaleColumnStride <= 0 || outRows != inputRows ||
+		    outColumns != inputColumns || outRowStride <= 0 || outColumnStride <= 0 || !std::isfinite(epsilon) ||
+		    epsilon <= 0.0)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < inputRows; ++row)
+		{
+			float sumSquares = 0.0F;
+			for (std::int64_t column = 0; column < inputColumns; ++column)
+			{
+				const auto value = inputAligned[inputOffset + row * inputRowStride + column * inputColumnStride];
+				sumSquares += value * value;
+			}
+			const auto inverseRms =
+			    1.0F / std::sqrt(sumSquares / static_cast<float>(inputColumns) + static_cast<float>(epsilon));
+			for (std::int64_t column = 0; column < inputColumns; ++column)
+			{
+				const auto inputIndex = inputOffset + row * inputRowStride + column * inputColumnStride;
+				const auto scaleIndex = scaleOffset + column * scaleColumnStride;
+				const auto outputIndex = outOffset + row * outRowStride + column * outColumnStride;
+				outAligned[outputIndex] = inputAligned[inputIndex] * inverseRms * scaleAligned[scaleIndex];
+			}
+		}
+	}
+
 	void ComputeActivePrefixAttentionF32(const float* query, std::int64_t queryColumns, std::int64_t queryColumnStride,
 	                                     const float* keys, std::int64_t keyRowStride, std::int64_t keyColumnStride,
 	                                     const float* values, std::int64_t valueRowStride,
@@ -10552,6 +10594,7 @@ namespace
 		RegisterJITRuntimeSymbol("litenn_cpu_swiglu_f32", reinterpret_cast<void*>(&litenn_cpu_swiglu_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_rope_at_positions_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_rope_at_positions_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_rms_norm_f32", reinterpret_cast<void*>(&litenn_cpu_rms_norm_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_active_prefix_attention_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_active_prefix_attention_f32_rank3",
