@@ -254,8 +254,9 @@ P0 implementation order:
     Q4_K-only changes of `+7.35%/-10.86%/+1.51%` and mixed Q4_K_M changes of `+4.45%/-3.41%/-9.09%`; paired medians
     were `+1.51%` and `-3.41%`. The prototype was removed without a full-model run. Both selective and broad reuse of
     the existing x16 tile are rejected.
-  - Compare Q6_K AVX2 x8/x16 and AVX-512 x16 under the same cold-stream/full-decode gate instead of assuming wider ISA
-    is faster.
+  - [x] Compare Q6_K AVX2 x8/x16 against the production AVX-512 x16 path. AVX2 x8 regressed Q6_K by `3.98%` median;
+    AVX2 x16 improved Q6_K only `2.31%` while regressing the mixed stream `2.11%`. Both variants were removed, and
+    AVX-512 x16 remains selected.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
 - [ ] Close with controlled full-model evidence.

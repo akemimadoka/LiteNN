@@ -209,6 +209,20 @@ All Q4_K and mixed pairs regress despite the shorter arithmetic chain and a lowe
 was removed. Interleaving two packed output-group streams increases cold-stream pressure enough to outweigh shared
 activation loads and instruction savings on this host.
 
+### Q6_K ISA and Stream-Width Control
+
+The production Q6_K path uses AVX-512 x16. Two separate executables compared it against AVX2 x8 single-stream and
+AVX2 x16 dual-stream execution with the same field-v4 payload and thread policy:
+
+| Variant | Q6_K pair 1 | Pair 2 | Pair 3 | Q6_K median | Mixed median | Decision |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| AVX2 x8 | `-4.43%` | `-3.98%` | `+0.79%` | `-3.98%` | `+1.76%` | Rejected |
+| AVX2 x16 | `+2.31%` | `+6.81%` | `-3.67%` | `+2.31%` | `-2.11%` | Rejected |
+
+Positive values mean the candidate beats AVX-512 x16. The x8 path consistently loses Q6 throughput, while AVX2 x16
+does not reach the `3%` per-format gate and regresses the production mixed stream. AVX-512 x16 remains the selected
+Q6_K path. Wider-versus-narrower SIMD is now closed for this prepared layout and host.
+
 ## Controlled SwiGLU Fusion A/B
 
 The distinct/shared control above does not isolate activation materialization. Reusing one activation also reuses its

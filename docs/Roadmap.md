@@ -3242,6 +3242,8 @@ Priority classes:
             - [x] Rebuild Q4_K x16 as two pair-sum-folded x8-style output streams. Three alternating binary pairs
                   regressed Q4_K by `6.91%` median and the real mixed stream by `2.80%`; every relevant pair was
                   negative. The implementation was removed despite its shorter cache-hot instruction path.
+            - [x] Compare Q6_K AVX2 x8/x16 with production AVX-512 x16. AVX2 x8 regressed Q6_K by `3.98%`; AVX2 x16
+                  gained only `2.31%` on Q6_K and regressed the mixed stream `2.11%`. Both variants were removed.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
             observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,
