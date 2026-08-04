@@ -58,6 +58,53 @@ The following values are shown to document why the stage gate failed. They must 
 The stage CV range is `10.53-82.51%`. The compiler-to-compiler stage sums also move much more than the corresponding
 whole-token baselines. Both observations reject fine callback differencing as the next attribution mechanism.
 
+## Accepted Non-Synchronizing Aggregate Control
+
+The replacement profiler applies a benchmark-only patch to a detached llama.cpp worktree. Thread 0 records coarse
+stage transitions after ggml's existing node barriers; it neither uses `cb_eval` nor adds a scheduler synchronization.
+The strict overhead control compares a completely clean profiler binary with the instrumented binary, so the result
+includes both enabled-counter cost and any static code-layout or atomic-read effect.
+
+The final run replayed the exact nine-token Qwen chat prompt as one prefill and then the 15 generated tokens that
+correspond to the actual-completion eval window. A current exact-replay sweep selected T8 for this profiler workload;
+single-run clean baselines at T2/T4/T8/T16 were `182.207/170.301/163.729/169.525 ms/token`. This supersedes the old
+repeated-token T2 choice for stage attribution, but not the separately accepted actual-completion throughput result.
+
+| Gate metric | Result | Gate |
+| --- | ---: | ---: |
+| Clean baseline median | `155.541 ms/token` | - |
+| Instrumented median | `154.745 ms/token` | - |
+| Paired measurement overhead median | `-0.21%` | absolute value at most `3%` |
+| Aggregate stage coverage | `98.75%` | `95-102%` |
+| Clean/instrumented whole-run CV | `0.23% / 0.39%` | at most `3%` |
+| Stage CV range | `0.16-0.98%` | at most `15%` |
+
+All gates passed. The normalized reference stages are therefore accepted for ranking:
+
+| Reference stage | Median ms/token | CV | Calls/token |
+| --- | ---: | ---: | ---: |
+| Attention | `34.169` | `0.37%` | 49 segments |
+| FFN Gate/Up | `67.038` | `0.20%` | 48 segments |
+| FFN activation + Down | `41.165` | `0.16%` | 48 segments |
+| Final logits | `10.943` | `0.98%` | 1 segment |
+
+The same generated-token positions 10-24 in LiteNN's structured T8 cache-hit profile have the following helper-only
+lower bounds. Attention includes QKV, output projection, active-prefix attention, RoPE, and KV update. Down includes
+both Q4_K/Q6_K Down projections and SwiGLU. Inline normalization, residual, and view work remains outside these rows,
+so a positive LiteNN difference is a conservative deficit rather than timer-boundary inflation.
+
+| Matched stage | LiteNN helper lower bound | LiteNN CV | Reference full stage | LiteNN difference |
+| --- | ---: | ---: | ---: | ---: |
+| Attention | `36.226 ms` | `4.71%` | `34.169 ms` | at least `+2.057 ms` (`+6.02%`) |
+| FFN Gate/Up | `65.048 ms` | `3.33%` | `67.038 ms` | no deficit established |
+| FFN activation + Down | `54.057 ms` | `2.97%` | `41.165 ms` | at least `+12.892 ms` (`+31.32%`) |
+| Final logits | `10.995 ms` | `4.67%` | `10.943 ms` | `+0.052 ms` (`+0.48%`) |
+
+FFN activation + Down is the only double-digit accepted deficit and is about 6.3 times the Attention difference. It
+also explains at least 63% of the approximately `20.5 ms` difference between the profiled module and clean reference
+medians. Down kernel/cache-stream scheduling is therefore promoted to the next CPU P0. Gate/Up, logits, another broad
+ABI rewrite, and dispatch-only work remain closed until a later accepted profile changes the ranking.
+
 ## LiteNN Accounting
 
 The following medians are from stable generated-token steps 10-24 of one structured cache-hit accounting run. This run
@@ -99,17 +146,17 @@ tuning alone is not justified.
 
 1. The accepted end-to-end conclusion remains LiteNN `5.49%` behind the strongest paired Clang/no-OpenMP reference.
    This experiment reproduces the reference near `166 ms/token` and again rules out frequency as the explanation.
-2. Fine llama.cpp callback timing is not precise enough to rank `~1 ms` layer stages on this host. Low whole-token
-   perturbation does not imply low differencing error.
-3. There is no accepted evidence that Q4_K/Q6_K Down or Gate/Up is the remaining cross-runtime deficit. Starting another
-   kernel rewrite from absolute LiteNN helper rank would be speculation.
+2. Fine llama.cpp callback timing remains rejected, but the non-synchronizing aggregate counters pass all overhead,
+   coverage, whole-run variance, and stage-variance gates.
+3. FFN activation + Down is now the accepted largest cross-runtime deficit: LiteNN's helper-only lower bound is
+   `54.057 ms/token` versus the reference's complete `41.165 ms/token` stage.
 4. The highest-value confirmed unknown is LiteNN's `11.408 ms/token` module non-helper residual. It must be reconciled
    into low-cardinality operation groups before selecting a generated-code optimization.
 5. The next independent candidate is dispatch amortization across the 97 parallel projection calls. It should use a
    persistent sequence/batch contract, not another worker wake-up primitive, and must reduce whole-token latency rather
    than only the dispatch counter.
-6. Future llama.cpp stage attribution should use non-synchronizing sampling or counters inside the reference kernels.
-   The cumulative-cut facility remains useful as a rejection gate and coarse directional diagnostic.
+6. Future llama.cpp stage attribution should use the repository-owned aggregate-counter worktree. The cumulative-cut
+   facility remains useful only as a rejection gate and coarse directional diagnostic.
 
 ## Acceptance Gates for the Next Tranche
 
@@ -118,6 +165,6 @@ tuning alone is not justified.
 - No fallback, byte-identical generated text, cache hit, and the same 9-prompt/15-eval window.
 - Dispatch batching must reduce dispatch by at least `50%`, full-token latency by at least `3%`, and must not increase
   parallel wall or barrier time.
-- A kernel change requires an accepted matched stage deficit with stage CV at or below `15%`; absolute LiteNN helper
-  rank alone is insufficient.
+- Down kernel experiments may now proceed because the matched stage deficit and both runtime stage CVs pass the `15%`
+  gate. Retention still requires cache-cold and complete-decode improvement, not a cache-hot-only win.
 - Final closure requires two alternating paired batches within `5%` of the same-run Clang/no-OpenMP median.

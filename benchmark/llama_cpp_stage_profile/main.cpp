@@ -1,3 +1,4 @@
+#include "ggml-cpu.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -29,6 +30,9 @@ namespace
 	enum class ProfileMode
 	{
 		Baseline,
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+		Aggregate,
+#endif
 		Coarse,
 		FFN,
 		Layer,
@@ -52,6 +56,44 @@ namespace
 		double totalMilliseconds = 0.0;
 		std::map<std::string, StageStats> totals;
 	};
+
+	std::vector<llama_token> ParseTokenIds(const char* text, const char* option)
+	{
+		std::vector<llama_token> tokens;
+		const char* cursor = text;
+		while (*cursor != '\0')
+		{
+			char* end = nullptr;
+			const long parsed = std::strtol(cursor, &end, 10);
+			if (end == cursor || parsed < 0 || parsed > INT32_MAX)
+			{
+				std::fprintf(stderr, "invalid token id in %s: %s\n", option, text);
+				std::exit(2);
+			}
+			tokens.push_back(static_cast<llama_token>(parsed));
+			if (*end == '\0')
+			{
+				break;
+			}
+			if (*end != ',')
+			{
+				std::fprintf(stderr, "invalid token list in %s: %s\n", option, text);
+				std::exit(2);
+			}
+			cursor = end + 1;
+			if (*cursor == '\0')
+			{
+				std::fprintf(stderr, "trailing comma in %s: %s\n", option, text);
+				std::exit(2);
+			}
+		}
+		if (tokens.empty())
+		{
+			std::fprintf(stderr, "%s must not be empty\n", option);
+			std::exit(2);
+		}
+		return tokens;
+	}
 
 	bool Contains(const char* text, const char* needle)
 	{
@@ -241,6 +283,12 @@ namespace
 		{
 			return ProfileMode::Baseline;
 		}
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+		if (std::strcmp(value, "aggregate") == 0)
+		{
+			return ProfileMode::Aggregate;
+		}
+#endif
 		if (std::strcmp(value, "coarse") == 0)
 		{
 			return ProfileMode::Coarse;
@@ -261,7 +309,13 @@ namespace
 				return ProfileMode::Layer;
 			}
 		}
-		std::fprintf(stderr, "invalid mode %s; expected baseline, coarse, ffn, or layer-N\n", value);
+		std::fprintf(stderr,
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+		             "invalid mode %s; expected baseline, aggregate, coarse, ffn, or layer-N\n",
+#else
+		             "invalid mode %s; expected baseline, coarse, ffn, or layer-N\n",
+#endif
+		             value);
 		std::exit(2);
 	}
 
@@ -344,7 +398,14 @@ int main(int argc, char** argv)
 {
 	if (argc < 3)
 	{
-		std::fprintf(stderr, "usage: %s MODEL baseline|coarse|ffn|layer-N|scan-layer-N [threads] [warmup] [steps]\n",
+		std::fprintf(stderr,
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+		             "usage: %s MODEL baseline|aggregate|coarse|ffn|layer-N|scan-layer-N [threads] [warmup] [steps] "
+		             "[--prefill-token-ids CSV --decode-token-ids CSV]\n",
+#else
+		             "usage: %s MODEL baseline|coarse|ffn|layer-N|scan-layer-N [threads] [warmup] [steps] "
+		             "[--prefill-token-ids CSV --decode-token-ids CSV]\n",
+#endif
 		             argv[0]);
 		return 2;
 	}
@@ -355,9 +416,47 @@ int main(int argc, char** argv)
 	const int threads = argc > 3 ? std::atoi(argv[3]) : 2;
 	const int warmup = argc > 4 ? std::atoi(argv[4]) : 9;
 	const int steps = argc > 5 ? std::atoi(argv[5]) : 15;
+	std::vector<llama_token> prefillTokens;
+	std::vector<llama_token> decodeTokens;
+	for (int index = 6; index < argc; index += 2)
+	{
+		if (index + 1 >= argc)
+		{
+			std::fprintf(stderr, "missing value for %s\n", argv[index]);
+			return 2;
+		}
+		if (std::strcmp(argv[index], "--prefill-token-ids") == 0)
+		{
+			prefillTokens = ParseTokenIds(argv[index + 1], argv[index]);
+		}
+		else if (std::strcmp(argv[index], "--decode-token-ids") == 0)
+		{
+			decodeTokens = ParseTokenIds(argv[index + 1], argv[index]);
+		}
+		else
+		{
+			std::fprintf(stderr, "unknown option %s\n", argv[index]);
+			return 2;
+		}
+	}
 	if (threads <= 0 || warmup < 0 || steps <= 0)
 	{
 		std::fprintf(stderr, "threads and steps must be positive and warmup must be non-negative\n");
+		return 2;
+	}
+	if (prefillTokens.empty() != decodeTokens.empty())
+	{
+		std::fprintf(stderr, "--prefill-token-ids and --decode-token-ids must be supplied together\n");
+		return 2;
+	}
+	if (!decodeTokens.empty() && (warmup != 0 || decodeTokens.size() != static_cast<std::size_t>(steps)))
+	{
+		std::fprintf(stderr, "exact token replay requires warmup=0 and one decode token per measured step\n");
+		return 2;
+	}
+	if (scanLayer >= 0 && !decodeTokens.empty())
+	{
+		std::fprintf(stderr, "exact token replay is not supported by scan-layer modes\n");
 		return 2;
 	}
 
@@ -434,14 +533,18 @@ int main(int argc, char** argv)
 	callbackState.mode = mode;
 	callbackState.targetLayer = targetLayer;
 	llama_context_params contextParams = llama_context_default_params();
-	contextParams.n_ctx = std::max(64, warmup + steps + 1);
-	contextParams.n_batch = 1;
-	contextParams.n_ubatch = 1;
+	contextParams.n_ctx = std::max(64, static_cast<int>(prefillTokens.size()) + warmup + steps + 1);
+	contextParams.n_batch = std::max(1, static_cast<int>(prefillTokens.size()));
+	contextParams.n_ubatch = contextParams.n_batch;
 	contextParams.n_threads = threads;
 	contextParams.n_threads_batch = threads;
 	contextParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 	contextParams.no_perf = false;
-	if (mode != ProfileMode::Baseline)
+	if (mode != ProfileMode::Baseline
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+	    && mode != ProfileMode::Aggregate
+#endif
+	)
 	{
 		contextParams.cb_eval = ProfileCallback;
 		contextParams.cb_eval_user_data = &callbackState;
@@ -454,19 +557,49 @@ int main(int argc, char** argv)
 		llama_model_free(model);
 		return 1;
 	}
+	if (!prefillTokens.empty())
+	{
+		const int status = llama_decode(
+		    context, llama_batch_get_one(prefillTokens.data(), static_cast<int32_t>(prefillTokens.size())));
+		if (status != 0)
+		{
+			std::fprintf(stderr, "prefill failed: %d\n", status);
+			llama_free(context);
+			llama_model_free(model);
+			return 1;
+		}
+	}
 
 	llama_token token = 151644;
 	std::vector<double> decodeMilliseconds;
 	decodeMilliseconds.reserve(static_cast<std::size_t>(steps));
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+	ggml_cpu_stage_profile_snapshot aggregateSnapshot{};
+#endif
 	for (int index = 0; index < warmup + steps; ++index)
 	{
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+		if (mode == ProfileMode::Aggregate && index == warmup)
+		{
+			ggml_cpu_stage_profile_set_enabled(false);
+			ggml_cpu_stage_profile_reset();
+			ggml_cpu_stage_profile_set_enabled(true);
+		}
+#endif
 		callbackState.record = index >= warmup;
 		callbackState.segmentOpen = false;
+		if (!decodeTokens.empty())
+		{
+			token = decodeTokens[static_cast<std::size_t>(index)];
+		}
 		const auto start = Clock::now();
 		const int status = llama_decode(context, llama_batch_get_one(&token, 1));
 		const auto end = Clock::now();
 		if (status != 0)
 		{
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+			ggml_cpu_stage_profile_set_enabled(false);
+#endif
 			std::fprintf(stderr, "decode failed at step %d: %d\n", index, status);
 			llama_free(context);
 			llama_model_free(model);
@@ -477,6 +610,13 @@ int main(int argc, char** argv)
 			decodeMilliseconds.push_back(std::chrono::duration<double, std::milli>(end - start).count());
 		}
 	}
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+	if (mode == ProfileMode::Aggregate)
+	{
+		ggml_cpu_stage_profile_set_enabled(false);
+		ggml_cpu_stage_profile_get_snapshot(&aggregateSnapshot);
+	}
+#endif
 
 	const double totalMilliseconds = std::accumulate(decodeMilliseconds.begin(), decodeMilliseconds.end(), 0.0);
 	std::printf("mode=%s threads=%d warmup=%d steps=%d mean_decode_ms=%.6f tokens_per_second=%.6f\n", argv[2], threads,
@@ -487,6 +627,24 @@ int main(int argc, char** argv)
 		            stats.totalMilliseconds / steps, static_cast<double>(stats.calls) / steps,
 		            100.0 * stats.totalMilliseconds / totalMilliseconds);
 	}
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+	if (mode == ProfileMode::Aggregate)
+	{
+		const char* stageNames[GGML_CPU_STAGE_PROFILE_COUNT] = {
+			"attention",
+			"ffn.gate_up",
+			"ffn.down",
+			"logits",
+		};
+		for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
+		{
+			const double milliseconds = static_cast<double>(aggregateSnapshot.microseconds[stage]) / 1000.0;
+			std::printf("stage=%s ms_per_token=%.6f calls_per_token=%.3f percent_of_decode=%.3f\n", stageNames[stage],
+			            milliseconds / steps, static_cast<double>(aggregateSnapshot.segments[stage]) / steps,
+			            100.0 * milliseconds / totalMilliseconds);
+		}
+	}
+#endif
 
 	llama_perf_context_print(context);
 	llama_free(context);

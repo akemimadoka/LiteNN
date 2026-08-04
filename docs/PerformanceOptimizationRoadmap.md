@@ -44,19 +44,22 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 profiling evidence but no longer selects implementation work. The accepted stronger paired control places LiteNN
 `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near `166 ms/token`,
 but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting measured
-`176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
+`176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement
+non-synchronizing exact-token aggregate control passes with `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%`
+stage CV; it promotes FFN activation + Down as the largest accepted deficit (`54.057` versus `41.165 ms/token`).
 
 P0 implementation order:
 
 - [ ] Execute the decision gates in the recorded order; do not select work from rejected synchronized stage deltas.
-  - [ ] First, replace reference callback differencing with non-synchronizing aggregate counters and accept a stage
-    only below `3%` whole-token overhead and `15%` stage CV.
+  - [x] Replace reference callback differencing with benchmark-only non-synchronizing aggregate counters. A clean
+    binary versus instrumented exact-token control measured `-0.21%` median overhead, `98.75%` coverage, and
+    `0.16-0.98%` stage CV. The patch is applied to a detached worktree; production targets remain independent.
   - [x] Complete the bounded single-consumer RMSNorm-to-grouped-Q8_K staging A/B. Three exact-token, no-fallback pairs
     measured `-3.23%`, `+4.14%`, and `-0.19%`, for a `-0.19%` median. The experimental lowering and helper ABIs were
     removed; keep only the standalone RMSNorm compiler-size improvement.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
-  - [ ] Open FFN-Down kernel/prefetch work only when the new stage evidence selects it, and require cache-cold plus
-    full-decode improvement rather than a cache-hot-only win.
+  - [x] Open FFN-Down kernel/prefetch work after the accepted aggregate profile measured a conservative `12.892 ms`
+    (`31.32%`) LiteNN deficit. Require cache-cold plus full-decode improvement rather than a cache-hot-only win.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
 
@@ -167,8 +170,11 @@ P0 implementation order:
       total variance, absolute drift, and derived-stage variance.
     - [x] Execute Clang/no-OpenMP and GNU/no-OpenMP controls. Cumulative scans kept whole-token drift between `-0.08%`
       and `+2.32%`, but derived-stage CV was `10.53-82.51%`; the result is correctly rejected for fine attribution.
-    - [ ] Replace callback differencing with non-synchronizing sampling or counters inside reference kernels. Require
-      every promoted stage below `15%` CV and total measurement overhead below `3%`.
+    - [x] Replace callback differencing with non-synchronizing counters inside the reference CPU graph executor. Exact
+      prefill/decode replay, clean-binary overhead accounting, aggregate shape, `95-102%` coverage, and strict variance
+      gates are repository-owned. Clang/no-OpenMP passes with `-0.21%` overhead and `0.16-0.98%` stage CV.
+    - [ ] Repeat the accepted aggregate mode against GNU/no-OpenMP to quantify compiler code-generation effects; this
+      is diagnostic and does not block the stronger Clang reference from selecting the Down tranche.
 - [x] P0: reconcile LiteNN's module non-helper residual before another projection-kernel rewrite.
   - Stable steps 10-24 measured `176.063 ms/token` module time, `164.155 ms` timed helpers, and `11.408 ms` residual.
     The residual is large enough to explain the accepted `~9-10 ms/token` absolute cross-runtime deficit, but currently
@@ -232,7 +238,10 @@ P0 implementation order:
   - [x] Close broad projection-wrapper ABI work. Node timers surround external helper calls, so the `3.124 ms/token`
     row remains an upper bound contaminated by profile boundaries. With both standalone and fused RMSNorm controls
     below the runtime gate, do not revive broad CallNode inlining or wrapper rewrites without new low-overhead evidence.
-- [ ] P1 candidate, evidence-gated: raise FFN-Down cold-stream throughput.
+- [ ] P0 active: raise FFN-Down cold-stream throughput.
+  - Accepted exact-token evidence: LiteNN Q4_K/Q6_K Down plus SwiGLU is `54.057 ms/token` with `2.97%` CV; the complete
+    Clang/no-OpenMP reference stage is `41.165 ms/token` with `0.16%` CV. The conservative deficit is `12.892 ms`
+    (`31.32%`) and explains at least 63% of the profiled module difference.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing
     remains rejected.

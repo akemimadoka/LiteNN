@@ -72,6 +72,15 @@ window. Whole-token drift stayed between `-0.08%` and `+2.32%`, but derived stag
 Subtracting adjacent synchronized prefixes amplified noise enough to fail the `15%` stage-CV gate. No Attention,
 Gate/Up, Down, or logits difference from that run is accepted for optimization ranking.
 
+The replacement benchmark-only CPU aggregate counters avoid `cb_eval` and reuse ggml's existing graph barriers. A
+clean-vs-instrumented, exact nine-token-prefill/15-token-decode T8 control passed with `-0.21%` median measurement
+overhead, `98.75%` coverage, `0.23/0.39%` whole-run CV, and `0.16-0.98%` stage CV. Its normalized reference stages are
+Attention `34.169 ms`, Gate/Up `67.038 ms`, activation + Down `41.165 ms`, and logits `10.943 ms`.
+
+Against the same LiteNN generated-token window, helper-only lower bounds are `36.226`, `65.048`, `54.057`, and
+`10.995 ms` respectively. Because inline LiteNN work is excluded while reference stages are complete, the
+`12.892 ms` (`31.32%`) activation + Down difference is conservative and is now the accepted largest deficit.
+
 ## LiteNN Internal Attribution
 
 LiteNN's low-cardinality native ledger closes the generated module independently of the rejected cross-runtime stage
@@ -143,14 +152,14 @@ the standalone RMSNorm helper remains.
 
 1. The accepted local performance gap is approximately `5.49%`, not the historical `26.9%`. LiteNN is close enough
    that optimization decisions must survive adjacent paired runs; cache-hot microbenchmarks alone are insufficient.
-2. The old FFN-Down comparison identified real mechanisms but cannot rank current cross-runtime work. A low-overhead
-   matched-stage reference profile is the highest-value evidence task.
+2. The old synchronized comparison remains rejected. Its replacement non-synchronizing aggregate profile passes all
+   gates and selects FFN activation + Down as the largest accepted deficit.
 3. Q8_K preparation and worker dispatch are closed directions for now. Their large isolated counters were either
    removed or failed to translate into the required full-token gain.
 4. RMSNorm-to-grouped-Q8_K staging fusion is closed as rejected. It preserved correctness but produced a `-0.19%`
    paired median and did not justify its additional helper ABI or lowering complexity.
-5. FFN-Down kernel or prefetch work is conditional. It should proceed only if accepted matched-stage counters or a
-   cache-cold full-model-correlated experiment identifies Down as the largest remaining deficit.
+5. FFN-Down kernel, cache-stream scheduling, and prefetch work may proceed. Retain only variants that improve both the
+   cache-cold stream and complete decode; cache-hot-only gains remain insufficient.
 6. The external `6.85 token/s` result affects the size of the target, but not implementation selection until its
    provenance is reproduced.
 
@@ -158,8 +167,8 @@ the standalone RMSNorm helper remains.
 
 | Order | Work | Acceptance gate | Resulting action |
 | ---: | --- | --- | --- |
-| 1 | Add non-synchronizing reference-stage aggregate counters | Below `3%` total overhead and below `15%` CV per stage | Promote only the largest accepted cross-runtime deficit |
+| 1 | Add non-synchronizing reference-stage aggregate counters | Completed: `-0.21%` overhead, `98.75%` coverage, `0.16-0.98%` stage CV | Promote FFN activation + Down (`+12.892 ms`, `+31.32%`) |
 | 2 | Fuse single-consumer RMSNorm into grouped field-v4 Q8_K staging | Completed: exact tokens and no fallback, but `-0.19%` paired median | Rejected; keep only the standalone helper |
 | 3 | Reproduce the external `6.85 token/s` provenance | Two accepted paired batches with exact configuration | Update the controlled parity target |
-| 4 | Tune FFN-Down cold-stream/kernel behavior if selected | Cache-cold and full-decode gain; no cache-hot-only acceptance | Retain the measured variant only |
+| 4 | Tune FFN-Down cold-stream/kernel behavior | Cache-cold and full-decode gain; no cache-hot-only acceptance | Active next implementation tranche |
 | 5 | Re-run sustained and long-context controls | 128/512 generated tokens, then 2K through 1M context tiers | Validate that short-window parity survives production scale |

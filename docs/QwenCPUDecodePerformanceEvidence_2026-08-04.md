@@ -5,9 +5,10 @@
 > are owned by `QwenCPUDecodeBuildControl_2026-08-04.md`.
 
 > Current decision baseline: the later alternating Clang/no-OpenMP control measured LiteNN `5.49%` behind by the
-> preferred median per-pair statistic. The older `26.9%` result below is retained as historical stage evidence, not as
-> the current project gap. The residual closure and scheduling controls near the end of this document use the current
-> post-quantizer implementation.
+> preferred median per-pair statistic. A subsequent exact-token, non-synchronizing aggregate profile passed all
+> measurement gates and selected FFN activation + Down as the largest accepted stage deficit. The older `26.9%`
+> result below is retained as historical stage evidence, not as the current project gap. The residual closure and
+> scheduling controls near the end of this document use the current post-quantizer implementation.
 
 This document is the evidence record for the current Qwen CPU decode optimization tranche. It separates measured
 results and supported conclusions from the implementation checklist in `PerformanceOptimizationRoadmap.md`. The more
@@ -33,8 +34,9 @@ The comparison answers three questions:
   estimates, not PMU measurements.
 - LiteNN helper buckets are lower bounds because generated-code work between helpers is excluded. llama.cpp boundary
   buckets include all work between selected graph tensors.
-- The llama.cpp stage run repeatedly decodes one valid token. Shapes and short-context execution are comparable, but
-  this is not a generated-text parity test.
+- The historical synchronized llama.cpp boundary run repeatedly decoded one valid token. Its shapes and short-context
+  execution are comparable, but it is not a generated-text parity test. The accepted aggregate control instead
+  replays the exact prompt and 15 generated token ids used by the LiteNN profile.
 - The cold-stream benchmark reproduces the observed 48-layer Down weight order and activation turnover, but excludes
   surrounding normalization, residual, and scheduler work.
 
@@ -48,7 +50,36 @@ The comparison answers three questions:
 The observed gap is `54.392 ms/token`. LiteNN is `26.9%` slower relative to the llama.cpp latency denominator and
 delivers `21.2%` less throughput in this run.
 
-## Stage Comparison
+## Accepted Exact-Token Aggregate Control
+
+The repository-owned benchmark patch records coarse llama.cpp CPU stages on graph thread zero and reuses existing
+ggml graph barriers. It adds no callback synchronization. A clean executable and a separately instrumented executable
+were built with the same pinned source, Clang target/sysroot, no-OpenMP configuration, and optimization settings.
+Three exact-token repetitions at T8 passed every acceptance gate:
+
+| Gate | Result |
+| --- | ---: |
+| Clean baseline median | `155.541 ms/token` |
+| Instrumented median | `154.745 ms/token` |
+| Median measurement overhead | `-0.21%` |
+| Clean / instrumented whole-run CV | `0.23%` / `0.39%` |
+| Accounted stage coverage | `98.75%` |
+| Stage CV range | `0.16-0.98%` |
+
+The accepted stage medians and matched LiteNN helper-only lower bounds are:
+
+| Stage | LiteNN lower bound | llama.cpp aggregate | Conservative LiteNN deficit |
+| --- | ---: | ---: | ---: |
+| Attention | `36.226 ms` | `34.169 ms` | at least `+2.057 ms` (`+6.02%`) |
+| FFN Gate/Up | `65.048 ms` | `67.038 ms` | no deficit established |
+| FFN activation + Down | `54.057 ms` | `41.165 ms` | at least `+12.892 ms` (`+31.32%`) |
+| Final logits | `10.995 ms` | `10.943 ms` | `+0.052 ms` (`+0.48%`) |
+
+FFN activation + Down is the only accepted double-digit stage deficit. It is about `6.3x` the Attention difference
+and explains at least `63%` of the profiled module-versus-clean-reference difference. This result opens the Down
+cold-stream kernel and memory-scheduling tranche; it does not reopen Gate/Up, logits, or broad dispatch tuning.
+
+## Historical Synchronized Stage Comparison
 
 The LiteNN helper profile measured `281.703 ms/token` beside a `256.616 ms/token` no-profile run. The llama.cpp
 boundary profile measured `222.810 ms/token` beside a `202.224 ms/token` no-profile run. The corresponding scale
@@ -268,12 +299,14 @@ fewer submissions, but another thread-pool wait/standby policy is not a current 
 
 ### Supported but not yet proven
 
-1. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
-   reference; matched low-overhead reference-stage counters are still required before choosing that route.
+1. The accepted FFN activation + Down deficit and `23-30 GB/s` cold projection rate support a kernel or
+   memory-scheduling deficit. The next experiment must still separate interleaving, prefetch, and format-specific SIMD
+   effects rather than assuming one of them is the owner.
 
 ### Not established
 
-1. Fine llama.cpp callback differencing remains rejected because stage CV ranged from `10.53%` to `82.51%`.
+1. Fine llama.cpp callback differencing remains rejected because stage CV ranged from `10.53%` to `82.51%`; the
+   accepted replacement is the non-synchronizing aggregate mode above.
 2. PMU evidence does not yet distinguish LLC/DRAM stalls from dispatch imbalance on Windows.
 3. Wider SIMD, more threads, prefetch, or a new prepared layout has not shown both a cold-stream and full-model win.
 
@@ -284,8 +317,8 @@ fewer submissions, but another thread-pool wait/standby policy is not a current 
 | Done | Close native module residual accounting | Closure within `2%`, instrumentation within `3%` |
 | Done | Reject wake-primitive and sequence-standby dispatch changes | Dispatch plus parallel wall plus full-token gate |
 | Done | Reject RMSNorm-to-Q8_K staging fusion and broad wrapper ABI work | Exact-token paired median `-0.19%`; experiment removed |
-| P1 | Add low-overhead matched reference-stage counters | Below `3%` total overhead and below `15%` stage CV |
-| P1 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
+| Done | Add low-overhead matched reference-stage counters | `-0.21%` overhead, `98.75%` coverage, `0.16-0.98%` stage CV |
+| P0 | Raise FFN-Down cold-stream throughput | Improvement in cold stream and complete decode, not hot rows alone |
 | P0 | Re-run full-model no-profile controls after accepted changes | Identical generated tokens and alternating medians |
 | P2 | Add optional PMU evidence | Clean fallback on hosts without profiling privileges |
 

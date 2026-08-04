@@ -4,18 +4,28 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
 from pathlib import Path
 
-from run_llama_cpp_completion_control import host_metadata, sha256_file
-from run_paired_gguf_decode_control import (
-    power_policy,
-    redact_text,
-    run_monitored,
-    series_statistics,
-)
+try:
+    from .run_llama_cpp_completion_control import host_metadata, sha256_file
+    from .run_paired_gguf_decode_control import (
+        power_policy,
+        redact_text,
+        run_monitored,
+        series_statistics,
+    )
+except ImportError:
+    from run_llama_cpp_completion_control import host_metadata, sha256_file
+    from run_paired_gguf_decode_control import (
+        power_policy,
+        redact_text,
+        run_monitored,
+        series_statistics,
+    )
 
 
 SUMMARY_RE = re.compile(
@@ -29,6 +39,7 @@ STAGE_RE = re.compile(
     re.MULTILINE,
 )
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
+AGGREGATE_STAGES = {"attention", "ffn.gate_up", "ffn.down", "logits"}
 
 
 def positive_int(raw: str) -> int:
@@ -50,6 +61,20 @@ def positive_float(raw: str) -> float:
     if not math.isfinite(value) or value <= 0.0:
         raise argparse.ArgumentTypeError("value must be finite and positive")
     return value
+
+
+def token_ids(raw: str) -> list[int]:
+    try:
+        values = [int(value) for value in raw.split(",")]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("token ids must be comma-separated integers") from exc
+    if not values or any(value < 0 for value in values):
+        raise argparse.ArgumentTypeError("token ids must be non-empty and non-negative")
+    return values
+
+
+def token_ids_digest(values: list[int]) -> str:
+    return hashlib.sha256(",".join(str(value) for value in values).encode("ascii")).hexdigest()
 
 
 def parse_registry(entries: list[str]) -> dict[str, Path]:
@@ -123,6 +148,15 @@ def run_profile(
         str(args.warmup),
         str(args.steps),
     ]
+    if args.prefill_token_ids is not None:
+        command.extend(
+            [
+                "--prefill-token-ids",
+                ",".join(str(value) for value in args.prefill_token_ids),
+                "--decode-token-ids",
+                ",".join(str(value) for value in args.decode_token_ids),
+            ]
+        )
     process, stdout, stderr = run_monitored(command, artifact_prefix, replacements, args.monitor_interval_seconds)
     if process["returncode"] != 0:
         raise RuntimeError(
@@ -152,6 +186,9 @@ def normalize_pair(baseline: dict[str, object], profile: dict[str, object]) -> d
         "profile_overhead_percent": (profile_ms / baseline_ms - 1.0) * 100.0,
         "normalization_scale": scale,
         "normalized_stages": normalized_stages,
+        "stage_coverage_percent": 100.0
+        * sum(float(stage["raw_ms_per_token"]) for stage in normalized_stages.values())
+        / profile_ms,
     }
 
 
@@ -178,6 +215,7 @@ def summarize_pairs(name: str, mode: str, pairs: list[dict[str, object]]) -> dic
         )
         for stage in stage_names
     }
+    coverage_values = [float(pair["stage_coverage_percent"]) for pair in pairs]
     return {
         "binary": name,
         "mode": mode,
@@ -187,6 +225,7 @@ def summarize_pairs(name: str, mode: str, pairs: list[dict[str, object]]) -> dic
         "baseline_weighted_actual_mhz": series_statistics(baseline_frequency) if baseline_frequency else None,
         "profile_weighted_actual_mhz": series_statistics(profile_frequency) if profile_frequency else None,
         "normalized_stages": stages,
+        "stage_coverage_percent": series_statistics(coverage_values),
     }
 
 
@@ -206,12 +245,14 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         "",
     ]
     for name, binary in document["binaries"].items():  # type: ignore[union-attr]
-        lines.append(f"- `{name}`: `{binary['sha256']}`")
+        lines.append(
+            f"- `{name}`: baseline `{binary['baseline_sha256']}`, profile `{binary['profile_sha256']}`"
+        )
     lines.extend(
         [
             "",
-            "| Binary | Mode | Baseline ms | Profile ms | Overhead | Baseline MHz | Profile MHz |",
-            "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Binary | Mode | Baseline ms | Profile ms | Overhead | Coverage | Baseline MHz | Profile MHz |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for summary in document["summaries"]:  # type: ignore[union-attr]
@@ -222,13 +263,15 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"{summary['baseline_ms_per_token']['median']:.3f} | "
             f"{summary['profile_ms_per_token']['median']:.3f} | "
             f"{summary['profile_overhead_percent']['median']:.2f}% | "
+            f"{summary['stage_coverage_percent']['median']:.2f}% | "
             f"{baseline_frequency['median']:.0f} | "
             f"{profile_frequency['median']:.0f} |"
             if baseline_frequency is not None and profile_frequency is not None
             else f"| {summary['binary']} | {summary['mode']} | "
             f"{summary['baseline_ms_per_token']['median']:.3f} | "
             f"{summary['profile_ms_per_token']['median']:.3f} | "
-            f"{summary['profile_overhead_percent']['median']:.2f}% | n/a | n/a |"
+            f"{summary['profile_overhead_percent']['median']:.2f}% | "
+            f"{summary['stage_coverage_percent']['median']:.2f}% | n/a | n/a |"
         )
     for summary in document["summaries"]:  # type: ignore[union-attr]
         lines.extend(
@@ -252,6 +295,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--binary", action="append", required=True, metavar="NAME=PATH")
+    parser.add_argument(
+        "--baseline-binary",
+        action="append",
+        metavar="NAME=PATH",
+        help="Optional clean baseline binary for each instrumented --binary name",
+    )
     parser.add_argument("--output-json", required=True, type=Path)
     parser.add_argument("--output-md", type=Path)
     parser.add_argument(
@@ -261,9 +310,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup", default=9, type=non_negative_int)
     parser.add_argument("--steps", default=15, type=positive_int)
     parser.add_argument("--repetitions", default=3, type=positive_int)
+    parser.add_argument("--prefill-token-ids", type=token_ids)
+    parser.add_argument("--decode-token-ids", type=token_ids)
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--stage-variance-threshold-percent", default=15.0, type=positive_float)
-    parser.add_argument("--overhead-threshold-percent", default=15.0, type=positive_float)
+    parser.add_argument("--overhead-threshold-percent", default=3.0, type=positive_float)
+    parser.add_argument("--minimum-stage-coverage-percent", default=95.0, type=positive_float)
+    parser.add_argument("--maximum-stage-coverage-percent", default=102.0, type=positive_float)
     parser.add_argument("--monitor-interval-seconds", default=0.25, type=positive_float)
     return parser
 
@@ -272,7 +325,16 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.repetitions < 3:
         raise SystemExit("stage control requires at least three repetitions")
+    if (args.prefill_token_ids is None) != (args.decode_token_ids is None):
+        raise SystemExit("--prefill-token-ids and --decode-token-ids must be supplied together")
+    if args.decode_token_ids is not None and (
+        args.warmup != 0 or len(args.decode_token_ids) != args.steps
+    ):
+        raise SystemExit("exact token replay requires --warmup 0 and one decode token per measured step")
     binaries = parse_registry(args.binary)
+    baseline_binaries = parse_registry(args.baseline_binary) if args.baseline_binary else binaries
+    if set(baseline_binaries) != set(binaries):
+        raise SystemExit("--baseline-binary names must exactly match --binary names")
     model = args.model.resolve()
     if not model.is_file():
         raise SystemExit(f"model file not found: {model}")
@@ -280,7 +342,7 @@ def main() -> int:
     invalid_modes = [
         mode
         for mode in modes
-        if mode not in {"coarse", "ffn"}
+        if mode not in {"aggregate", "coarse", "ffn"}
         and not re.fullmatch(r"(?:scan-)?layer-[1-9]\d*", mode)
     ]
     if invalid_modes:
@@ -288,8 +350,17 @@ def main() -> int:
     output_json = args.output_json.resolve()
     output_json.parent.mkdir(parents=True, exist_ok=True)
     replacements = {str(model): "<model>", str(Path.cwd()): "<repo>"}
+    if args.prefill_token_ids is not None:
+        replacements[",".join(str(value) for value in args.prefill_token_ids)] = "<prefill-token-ids>"
+        replacements[",".join(str(value) for value in args.decode_token_ids)] = "<decode-token-ids>"
     replacements.update({str(path): f"<stage-profiler:{name}>" for name, path in binaries.items()})
     replacements.update({str(path.parent): f"<stage-profiler-dir:{name}>" for name, path in binaries.items()})
+    replacements.update(
+        {str(path): f"<baseline-stage-profiler:{name}>" for name, path in baseline_binaries.items()}
+    )
+    replacements.update(
+        {str(path.parent): f"<baseline-stage-profiler-dir:{name}>" for name, path in baseline_binaries.items()}
+    )
 
     document: dict[str, object] = {
         "schema_version": 1,
@@ -298,7 +369,12 @@ def main() -> int:
         "host": host_metadata(),
         "power_policy": power_policy(),
         "binaries": {
-            name: {"path": f"<stage-profiler:{name}>", "sha256": sha256_file(path)}
+            name: {
+                "baseline_path": f"<baseline-stage-profiler:{name}>",
+                "baseline_sha256": sha256_file(baseline_binaries[name]),
+                "profile_path": f"<stage-profiler:{name}>",
+                "profile_sha256": sha256_file(path),
+            }
             for name, path in binaries.items()
         },
         "model": {"filename": "<model>", "size_bytes": model.stat().st_size},
@@ -311,6 +387,18 @@ def main() -> int:
             "variance_threshold_percent": args.variance_threshold_percent,
             "stage_variance_threshold_percent": args.stage_variance_threshold_percent,
             "overhead_threshold_percent": args.overhead_threshold_percent,
+            "minimum_stage_coverage_percent": args.minimum_stage_coverage_percent,
+            "maximum_stage_coverage_percent": args.maximum_stage_coverage_percent,
+            "exact_token_replay": (
+                {
+                    "prefill_count": len(args.prefill_token_ids),
+                    "prefill_sha256": token_ids_digest(args.prefill_token_ids),
+                    "decode_count": len(args.decode_token_ids),
+                    "decode_sha256": token_ids_digest(args.decode_token_ids),
+                }
+                if args.prefill_token_ids is not None
+                else None
+            ),
         },
         "pairs": [],
     }
@@ -338,7 +426,9 @@ def main() -> int:
                             / f"rep_{repetition:02d}_{binary_name}_{mode}_{executed_mode}"
                         )
                         runs[executed_mode] = run_profile(
-                            binaries[binary_name],
+                            baseline_binaries[binary_name]
+                            if executed_mode == "baseline"
+                            else binaries[binary_name],
                             model,
                             executed_mode,
                             args,
@@ -385,12 +475,28 @@ def main() -> int:
         for summary in summaries
         for stats in summary["normalized_stages"].values()
     )
+    aggregate_shape_ok = all(
+        summary["mode"] != "aggregate" or set(summary["normalized_stages"]) == AGGREGATE_STAGES
+        for summary in summaries
+    )
+    stage_coverage_ok = all(
+        args.minimum_stage_coverage_percent
+        <= summary["stage_coverage_percent"]["median"]
+        <= args.maximum_stage_coverage_percent
+        for summary in summaries
+    )
     document["summaries"] = summaries
     document["gate"] = {
         "variance": variance_ok,
         "stage_variance": stage_variance_ok,
         "profile_overhead": overhead_ok,
-        "accepted": variance_ok and stage_variance_ok and overhead_ok,
+        "aggregate_shape": aggregate_shape_ok,
+        "stage_coverage": stage_coverage_ok,
+        "accepted": variance_ok
+        and stage_variance_ok
+        and overhead_ok
+        and aggregate_shape_ok
+        and stage_coverage_ok,
     }
     document["status"] = "complete"
     document["power_policy_after"] = power_policy()

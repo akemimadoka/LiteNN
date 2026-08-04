@@ -3218,13 +3218,21 @@ Priority classes:
       no longer selects implementation work. The accepted stronger paired control places LiteNN `5.49%` behind
       Clang/no-OpenMP. A matched cumulative-cut run reproduced the reference near `166 ms/token`, but its
       `10.53-82.51%` stage CV rejected fine attribution. Stable LiteNN accounting measured `176.063 ms/token` module
-      time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual.
+      time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement exact-token,
+      non-synchronizing aggregate control passes with `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%` stage CV;
+      it selects FFN activation + Down as the largest accepted deficit (`54.057` versus `41.165 ms/token`).
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
-      - [ ] Follow the evidence-backed order: add low-overhead matched reference-stage counters; treat the completed
-            RMSNorm-to-grouped-Q8_K rejection as a closed branch; reproduce the external `6.85 token/s` provenance; open Down-kernel work
-            only if selected by accepted stage data; then extend controls to sustained decode and long-context tiers.
+      - [ ] Follow the evidence-backed order: use the completed low-overhead reference-stage counters and closed
+            RMSNorm-to-grouped-Q8_K rejection; execute the selected Down-kernel tranche; reproduce the external
+            `6.85 token/s` provenance; then extend controls to sustained decode and long-context tiers.
             Rejected synchronized stage deltas and cache-hot-only wins must not reorder this sequence.
+      - [x] Add benchmark-only non-synchronizing llama.cpp CPU stage counters in a detached worktree, exact prompt/decode
+            replay, clean-vs-instrumented binary pairing, aggregate coverage, and strict overhead/variance gates. The
+            accepted T8 control measured `-0.21%` overhead and `0.16-0.98%` stage CV without production linkage.
+      - [ ] P0: close the accepted FFN activation + Down deficit. LiteNN's helper-only lower bound is `54.057 ms/token`
+            with `2.97%` CV versus the complete Clang/no-OpenMP stage at `41.165 ms/token` with `0.16%` CV, a conservative
+            `12.892 ms` (`31.32%`) gap. Require cache-cold and full-decode gains before retaining a kernel variant.
       - [x] Add a cache-cold projection-stream benchmark whose rotating weight set exceeds LLC and can replay the
             observed 48-layer Qwen Q4_K_M projection order. The Release T8 benchmark now reports bytes, effective
             bandwidth, weighted warm/cold ratio, grouped/single mode, requested/resolved threads, unique activations,

@@ -19,8 +19,17 @@ find_library(GGML_CPU_LIBRARY ggml-cpu PATHS "${LLAMA_CPP_BUILD_DIR}/ggml/src" N
 find_library(GGML_BASE_LIBRARY ggml-base PATHS "${LLAMA_CPP_BUILD_DIR}/ggml/src" NO_DEFAULT_PATH REQUIRED)
 find_package(Threads REQUIRED)
 
+file(READ "${LLAMA_CPP_SOURCE_DIR}/ggml/include/ggml-cpu.h" GGML_CPU_HEADER)
+string(FIND "${GGML_CPU_HEADER}" "ggml_cpu_stage_profile_set_enabled" GGML_CPU_STAGE_COUNTER_POSITION)
+if(NOT GGML_CPU_STAGE_COUNTER_POSITION EQUAL -1)
+    set(LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS ON)
+endif()
+
 add_executable(litenn_llama_cpp_stage_profile main.cpp)
 target_compile_features(litenn_llama_cpp_stage_profile PRIVATE cxx_std_17)
+if(LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS)
+    target_compile_definitions(litenn_llama_cpp_stage_profile PRIVATE LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS=1)
+endif()
 target_include_directories(
     litenn_llama_cpp_stage_profile
     PRIVATE
@@ -41,4 +50,3 @@ if(WIN32)
     target_compile_definitions(litenn_llama_cpp_stage_profile PRIVATE _WIN32_WINNT=0x0A00)
     target_link_libraries(litenn_llama_cpp_stage_profile PRIVATE ws2_32)
 endif()
-
