@@ -4,6 +4,11 @@
 > ranking predates the controlled compiler/OpenMP matrix. The current performance conclusion and next evidence gate
 > are owned by `QwenCPUDecodeBuildControl_2026-08-04.md`.
 
+> Current decision baseline: the later alternating Clang/no-OpenMP control measured LiteNN `5.49%` behind by the
+> preferred median per-pair statistic. The older `26.9%` result below is retained as historical stage evidence, not as
+> the current project gap. The residual closure and scheduling controls near the end of this document use the current
+> post-quantizer implementation.
+
 This document is the evidence record for the current Qwen CPU decode optimization tranche. It separates measured
 results and supported conclusions from the implementation checklist in `PerformanceOptimizationRoadmap.md`. The more
 detailed profiling narrative remains in `PerformanceAnalysis_2026-08-04.md`.
@@ -145,41 +150,105 @@ is performance-neutral at this scale. It remains useful for a cleaner compiler-o
 materialization checks, but it does not explain or close the FFN-Down gap. The previous `223.955 ms/token` optimistic
 bound is invalidated.
 
-## Conclusions
+## Current Native Residual Closure
+
+The current cache-hit artifact was profiled with helper, stream, and native-node aggregate instrumentation over eight
+prompt-replay and 16 generation steps. The private model path and raw local artifact paths are intentionally omitted.
+The generation phase produced the following complete ledger:
+
+| Bucket | Mean ms/token | Share of module | Interpretation |
+| --- | ---: | ---: | --- |
+| CPU AOT module | `205.435` | `100.00%` | Intrusively profiled module call; not a throughput baseline |
+| Timed helpers | `185.885` | `90.48%` | Includes projection dispatch and barriers |
+| Module non-helper | `19.550` | `9.52%` | Closed by the rows below |
+| Native node self | `13.499` | `6.57%` | Generated operations outside helper timers |
+| Node-marker instrumentation | `5.392` | `2.62%` | Profiling cost, absent from production |
+| Module unattributed | `0.658` | `0.32%` | Remaining timer/accounting residual |
+
+The categorized ledger reconciled to module non-helper time with effectively zero arithmetic closure error. Marker
+instrumentation was `2.62%` of module time, so the run passes the predefined `2%` closure and `3%` perturbation gates.
+
+| Non-helper category | Mean ms/token | Share of non-helper | Actionability |
+| --- | ---: | ---: | --- |
+| Node-marker instrumentation | `5.392` | `27.58%` | Measurement-only; not a production optimization |
+| Call/control | `5.347` | `27.35%` | Non-profile always-inline A/B already rejected |
+| Projection wrapper | `3.124` | `15.98%` | Largest unresolved generated-code category |
+| Normalization | `1.956` | `10.01%` | Secondary generated-code category |
+| Unemitted node self | `1.384` | `7.08%` | Aggregate coverage follow-up, not necessarily missing work |
+| Attention/position/state | `1.025` | `5.24%` | Small at the tested short context |
+| Module unattributed | `0.658` | `3.37%` | Too small to own the cross-runtime gap |
+| Elementwise | `0.569` | `2.91%` | Small individually |
+| Views/data movement and remaining rows | `0.095` | `0.49%` | Not a current target |
+
+The `CallNode` category is not an optimization estimate. Forced always-inlining previously reduced the module from 52
+functions to two and cut LLVM IR instruction count, yet increased compile-artifact time by `22.7%` and changed the
+no-profile decode median from `263.721` to `264.153 ms/token` (`0.16%` slower). Marker cost is likewise absent from
+normal execution. Removing both from the ledger leaves projection wrappers plus normalization as the largest plausible
+generated-code cluster, about `5.08 ms` in this intrusive run; it requires a non-profile A/B before promotion.
+
+## Dispatch Controls
+
+Stable post-quantizer profiling measured `10.365 ms/token` of worker dispatch across 97 ordinary parallel projections,
+or about `0.107 ms/call`. Dispatch is already included in parallel-wall and helper time and must not be added to the
+non-helper ledger.
+
+Three controls constrain the implementation route:
+
+| Control | Dispatch result | End-to-end/parallel result | Decision |
+| --- | ---: | --- | --- |
+| `atomic::wait/notify_one` | `21.7%` lower | Parallel wall/barrier rose; profiled token regressed `0.54%` | Rejected |
+| Worker wait `Latency` versus `Adaptive` | Not isolated | Median `252.650` versus `255.594 ms`, `1.16%` better | Keep explicit option; not the default |
+| Signal only sleeping workers | `10.365 -> 10.139 ms`, `2.2%` lower | Diagnostic parallel wall `66.225 -> 76.543 ms`; below gate | Rejected and removed |
+
+The last comparison was not an alternating throughput batch, so its wall-time regression is directional. It is still
+enough to reject the implementation because dispatch improvement was far below the required `50%` and no compensating
+whole-token gain was observed. The combined evidence says that swapping wake primitives or suppressing semaphore
+signals cannot close the gap. Any further P0 dispatch work needs a sequence-level contract that amortizes multiple
+helper submissions while preserving useful-worker arrival and memory bandwidth.
+
+## Current Conclusions
 
 ### Established by measurement
 
-1. FFN is the dominant short-context CPU decode gap; Attention and final logits are not the first owners.
-2. The deficit is concentrated in Q4_K/Q6_K activation-plus-Down, while grouped Gate/Up is comparatively close.
-3. Cache-hot Up and Down rows are nearly direction-neutral, so hot helper throughput does not predict model latency.
-4. The production-sized cold stream reproduces the real Down helper totals within `12.5%`.
-5. The controlled SwiGLU fusion is performance-neutral within measurement noise; activation materialization is not the
-   owner of the remaining FFN-Down gap.
-6. The `32.661 ms` distinct/shared difference combines Q8_K prepared-block reuse and cache/access-pattern changes and
-   must not be treated as removable handoff cost.
+1. The current accepted cross-runtime gap is `5.49%` against the alternating Clang/no-OpenMP control, not the older
+   `26.9%` historical stage result.
+2. Cache-hot Up and Down rows are nearly direction-neutral, and the cold stream reproduces real Down helper totals
+   within `12.5%`; hot helper rank alone cannot select a kernel rewrite.
+3. The controlled SwiGLU fusion is performance-neutral within noise. The `32.661 ms` distinct/shared difference is not
+   a removable materialization estimate.
+4. The native non-helper ledger now closes within the `2%` requirement with `2.62%` marker overhead. Only `0.658 ms`
+   remains unattributed.
+5. `CallNode` inlining and marker removal cannot provide production gain. Projection wrapper plus normalization is the
+   largest unresolved generated-code cluster, but its measured upper bound still requires non-profile validation.
+6. Dispatch remains a material helper-side owner. Two wake-path implementations failed, and the latency polling policy
+   produced only a `1.16%` median advantage, so the next attempt must amortize submissions across a helper sequence.
 
 ### Supported but not yet proven
 
-1. The remaining `23-30 GB/s` production projection rate versus the llama.cpp lower bounds suggests worker scheduling,
-   memory concurrency, cache/DRAM behavior, or kernel scheduling inside the projection path.
-2. Low-overhead worker and phase timing should identify which of those mechanisms owns enough time to justify the next
-   implementation change.
+1. A sequence-level dispatch contract can remove enough of the `10.365 ms/token` floor without delaying useful worker
+   arrival or reducing memory bandwidth.
+2. Projection wrapper and normalization work contains a removable generated-code cost rather than unavoidable ABI,
+   shape, or profile-boundary overhead.
+3. The remaining `23-30 GB/s` cold projection rate reflects a kernel or memory-scheduling deficit against the stronger
+   reference; matched low-overhead reference-stage counters are still required before choosing that route.
 
 ### Not established
 
-1. PMU evidence does not yet distinguish LLC/DRAM stalls from dispatch imbalance on Windows.
-2. The distinct/shared `32.661 ms` difference has not been decomposed into prepared-block reuse, cache residency, and
-   memory-level parallelism effects.
-3. Wider SIMD, more threads, prefetch, or a new prepared layout has not shown a cold-stream and full-model win yet.
+1. Fine llama.cpp callback differencing remains rejected because stage CV ranged from `10.53%` to `82.51%`.
+2. PMU evidence does not yet distinguish LLC/DRAM stalls from dispatch imbalance on Windows.
+3. Wider SIMD, more threads, prefetch, or a new prepared layout has not shown both a cold-stream and full-model win.
 
 ## Decision Record
 
 | Priority | Decision | Evidence gate |
 | --- | --- | --- |
-| Done | Fuse single-consumer SwiGLU preparation with field-v4 Q4_K/Q6_K Down | Correctness passes; paired A/B is neutral |
-| P0 | Attribute residual projection time | Activation, dispatch, useful work, task balance, and barrier phases |
-| P0 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
-| P0 | Re-run full-model stage and no-profile controls | Identical generated tokens and alternating T8 medians |
+| Done | Close native module residual accounting | Closure within `2%`, instrumentation within `3%` |
+| Done | Reject wake-primitive-only dispatch changes | Dispatch plus parallel wall plus full-token gate |
+| P0 | Add sequence-level projection dispatch amortization | At least `50%` less dispatch, `3%` less token latency, no wall/barrier regression |
+| P1 | Prove or reject projection-wrapper plus normalization removal | Non-profile paired A/B; at least `2%` full-token gain |
+| P1 | Add low-overhead matched reference-stage counters | Below `3%` total overhead and below `15%` stage CV |
+| P1 | Tune projection scheduling or kernels only after attribution | Improvement in cold stream and complete decode, not hot rows alone |
+| P0 | Re-run full-model no-profile controls after accepted changes | Identical generated tokens and alternating medians |
 | P2 | Add optional PMU evidence | Clean fallback on hosts without profiling privileges |
 
 The implementation order and completion state are maintained in `PerformanceOptimizationRoadmap.md`; the high-level

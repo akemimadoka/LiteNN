@@ -156,14 +156,19 @@ P0 implementation order:
       and `+2.32%`, but derived-stage CV was `10.53-82.51%`; the result is correctly rejected for fine attribution.
     - [ ] Replace callback differencing with non-synchronizing sampling or counters inside reference kernels. Require
       every promoted stage below `15%` CV and total measurement overhead below `3%`.
-- [ ] P0: reconcile LiteNN's module non-helper residual before another projection-kernel rewrite.
+- [x] P0: reconcile LiteNN's module non-helper residual before another projection-kernel rewrite.
   - Stable steps 10-24 measured `176.063 ms/token` module time, `164.155 ms` timed helpers, and `11.408 ms` residual.
     The residual is large enough to explain the accepted `~9-10 ms/token` absolute cross-runtime deficit, but currently
     combines inline AOT operations, untimed work, and instrumentation error.
-  - Add low-cardinality aggregate timers for normalization, bias/residual elementwise work, views, KV state updates,
-    runtime entry/bindings, and unattributed generated code. Reconcile categorized plus helper time to module time
-    within `2%` while keeping instrumentation overhead below `3%`.
-  - Promote only the largest reconciled category to implementation work and require at least `3%` whole-token gain.
+  - Completed on 2026-08-04 with low-cardinality ledgers for call/control, projection wrappers, normalization,
+    elementwise work, attention/position/state, views/data movement, embedding, unemitted node self, markers, and
+    unattributed module work. A current 16-step generation profile measured `205.435 ms` module, `185.885 ms` helpers,
+    and `19.550 ms` non-helper; the ledger closed with effectively zero arithmetic error and marker overhead was
+    `2.62%` of module time, passing both gates.
+  - The largest rows were marker instrumentation `5.392 ms`, call/control `5.347 ms`, projection wrapper `3.124 ms`,
+    and normalization `1.956 ms`. Marker time is measurement-only, and non-profile CallNode inlining already regressed
+    median latency by `0.16%` while increasing compile time `22.7%`; neither is a production optimization estimate.
+    Only `0.658 ms` remained unattributed. Evidence: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`.
 - [x] Evaluate grouped Q4_K x16 specifically on Qwen Gate/Up. Rejected: `1.14 -> 1.11 ms` was below the `~4%` run
   noise and CPU time slightly regressed, so the uncommitted route was removed.
 - [x] Evaluate `atomic::wait/notify_one` for the measured worker-dispatch floor. Rejected: dispatch improved `21.7%`,
@@ -177,6 +182,17 @@ P0 implementation order:
   - Require at least `50%` lower dispatch, at least `3%` lower full-token latency, and no parallel-wall/barrier
     regression. The rejected `atomic::wait` route demonstrates that the dispatch counter alone is not an acceptance
     metric.
+  - [x] Reject signal elision for workers observed polling. A diagnostic profile changed dispatch only
+    `10.365 -> 10.139 ms` (`2.2%`) and raised parallel wall from `66.225` to `76.543 ms`; it missed the dispatch gate by
+    a wide margin and was removed. Together with the rejected atomic-wait path and the prior `1.16%` Latency-policy
+    median advantage, this closes wake-primitive-only work. The remaining route is sequence-level submission
+    amortization.
+- [ ] P1 candidate, evidence-gated: reduce the projection-wrapper plus normalization cluster.
+  - The accepted residual ledger measured `3.124 ms/token` projection-wrapper and `1.956 ms/token` normalization self
+    time under intrusive profiling. Inspect generated IR and ABI boundaries, then use a non-profile paired A/B to
+    distinguish removable wrapper/shape work from timer boundary effects.
+  - Do not revive broad CallNode inlining. Require unchanged tokens, no fallback, no compile-time increase above 5%,
+    and at least `2%` lower full-token median before retaining a combined generated-code change.
 - [ ] P1 candidate, evidence-gated: raise FFN-Down cold-stream throughput.
   - Evaluate multiple independent output-group streams per worker and bounded software prefetch distances.
   - Re-evaluate Q4_K AVX2 x16 only for the measured cold-stream Down shape; the previously rejected broad x16 routing

@@ -3303,13 +3303,21 @@ Priority classes:
             and CPU time regressed slightly.
       - [x] Reject an `atomic::wait/notify_one` worker path: dispatch improved `21.7%`, but parallel wall/barrier costs
             increased and total profiled latency regressed `0.54%`.
-      - [ ] P0: reconcile the `11.408 ms/token` module non-helper residual. Stable steps 10-24 measured `176.063 ms`
-            module time and `164.155 ms` timed helpers. Add low-cardinality aggregate attribution for normalization,
-            elementwise residual/bias work, views, state updates, runtime bindings, and unattributed generated code;
-            keep overhead below `3%` and reconcile the module ledger within `2%`.
+      - [x] P0: reconcile the module non-helper residual. Completed on 2026-08-04 with low-cardinality native ledgers.
+            A current 16-step generation run measured `205.435 ms` module, `185.885 ms` helpers, and `19.550 ms`
+            non-helper; accounting closure was effectively exact, marker overhead was `2.62%`, and only `0.658 ms`
+            remained unattributed. Marker time is measurement-only, while non-profile CallNode inlining had already
+            regressed latency, leaving projection-wrapper plus normalization as the largest unresolved generated-code
+            cluster. Evidence: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`.
       - [ ] P0: amortize the post-quantizer `10.365 ms/step` dispatch floor across compatible helper sequences. Retain
             workers or batch a layer sequence rather than only changing wake-up primitives. Require at least `50%`
             lower dispatch, `3%` lower full-token latency, and no parallel-wall/barrier regression.
+            - [x] Reject sleeping-worker signal elision: dispatch changed only `10.365 -> 10.139 ms` (`2.2%`) and the
+                  diagnostic parallel wall increased. Atomic wait and wait-policy controls already rejected the same
+                  wake-primitive-only direction; proceed only with sequence-level amortization.
+      - [ ] P1: prove or reject projection-wrapper plus normalization removal with non-profile paired A/B evidence.
+            The intrusive ledger measured `3.124 + 1.956 ms/token`; require unchanged output, no fallback, no more than
+            `5%` compile-time growth, and at least `2%` full-token median improvement.
       - [ ] Implement evidence-gated Down-path experiments: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection. Reject variants that win only in the cache-hot
             helper benchmark.
