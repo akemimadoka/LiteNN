@@ -3208,9 +3208,11 @@ Priority classes:
       T8 runs remained host-frequency sensitive (`279-289` versus `268-274 ms/token`), so explicit T16 remains available
       for controlled experiments but is not the production default.
 - [ ] P0: Close the remaining CPU FFN-Down streaming gap against the CPU-only llama.cpp control:
-      `docs/PerformanceAnalysis_2026-08-04.md` records an adjacent-run baseline of `256.616 ms/token` for LiteNN and
+      `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md` is the canonical evidence record and
+      `docs/PerformanceAnalysis_2026-08-04.md` retains the detailed profiling narrative. The adjacent-run baseline is
+      `256.616 ms/token` for LiteNN and
       `202.224 ms/token` for llama.cpp at T8. Normalized stage attribution assigns at least `46.54 ms` of the
-      `53.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
+      `54.39 ms/token` gap to FFN, with Q4_K and Q6_K activation-plus-Down each roughly twice the corresponding
       llama.cpp boundary. Gate/Up is comparatively close and Attention is not the immediate short-context owner.
       The implementation checklist is maintained in `docs/PerformanceOptimizationRoadmap.md` under the
       2026-08-04 FFN-Down closure tranche.
@@ -3223,6 +3225,9 @@ Priority classes:
             `32.661 ms` in Float32 activation cache comparison/copy and Q8_K regeneration. Produce a compiler-owned
             prepared activation at the SwiGLU boundary and consume it directly in Down without changing graph-visible
             SwiGLU behavior.
+            - [ ] Mark only single-consumer SwiGLU values that are not public results before bufferization.
+            - [ ] Lower the marked pair to the fused field-v4 Q4_K/Q6_K runtime helper and verify object imports.
+            - [ ] Pass runtime, artifact-load, and AOT execution parity, then measure a fused mixed-format cold stream.
       - [ ] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead, then establish whether
             the residual shared-activation gap comes from helper fixed cost, task imbalance, or insufficient concurrent
             streams. Include activation lookup/copy/quantization as separate phases.

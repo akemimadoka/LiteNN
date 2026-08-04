@@ -35,9 +35,10 @@ Priority classes for the GGUF/Qwen decode work:
 
 ### 2026-08-04 FFN-Down Closure Tranche
 
-Evidence owner: `docs/PerformanceAnalysis_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
+Evidence owner: `docs/QwenCPUDecodePerformanceEvidence_2026-08-04.md`; detailed profiling narrative:
+`docs/PerformanceAnalysis_2026-08-04.md`. An adjacent CPU-only T8 run measured LiteNN at
 `256.616 ms/token` and llama.cpp at `202.224 ms/token`. After correcting each profiler by its own no-profile baseline,
-FFN accounts for at least `46.54 ms` of the `53.39 ms/token` gap. Q4_K and Q6_K activation-plus-Down are approximately
+FFN accounts for at least `46.54 ms` of the `54.39 ms/token` gap. Q4_K and Q6_K activation-plus-Down are approximately
 `2.04x` and `1.82x` the corresponding llama.cpp boundaries, while Gate/Up is only about `5 ms` behind.
 
 P0 implementation order:
@@ -57,6 +58,12 @@ P0 implementation order:
     cache lookup, Float32 comparison/copy, and quantization pass.
   - Preserve standalone SwiGLU semantics for non-quantized and non-decode graphs; validate Q4_K/Q6_K parity,
     mixed-format 48-layer schedules, state aliases, artifact load, and generated text.
+  - [ ] Establish an explicit single-consumer, non-public-result fusion contract before bufferization; do not infer
+    ownership from post-bufferization memref aliases.
+  - [ ] Lower the marked pair to the fused field-v4 helper and verify the generated object imports the fused symbol.
+  - [ ] Add runtime, serialized-artifact, and loaded-execution parity for both Q4_K and Q6_K.
+  - [ ] Add a distinct-gate/up cold-stream row and require a measured reduction against the `96.726 ms` ordinary
+    mixed-format baseline before routing production AOT decode through the fused path.
 - [ ] Attribute the residual single-projection bandwidth loss before changing the kernel.
   - Add opt-in low-overhead timestamps for activation lookup/copy/quantization, helper dispatch, each worker's useful
     interval, bytes assigned, task claims, and final barrier wait.
@@ -79,6 +86,9 @@ P0 implementation order:
   - Require no fallback, unchanged generated tokens, Q4_K/Q6_K Down cold-stream throughput of at least `40 GB/s`, FFN
     latency within `10%` of the corresponding llama.cpp block, and total latency within `5%` of the same-run llama.cpp
     median.
+  - Treat `223.955 ms/token` as an optimistic activation-fusion bound, not an acceptance target. A result materially
+    above it triggers residual phase attribution; a result near it still requires closing the remaining approximately
+    `10.7%` latency gap.
 
 P1 follow-up after the P0 gate:
 

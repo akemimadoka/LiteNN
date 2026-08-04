@@ -1,5 +1,9 @@
 # LiteNN Qwen CPU Decode Stage Analysis - 2026-08-04
 
+Canonical measurement tables, confidence boundaries, and the evidence-to-decision mapping are maintained in
+`QwenCPUDecodePerformanceEvidence_2026-08-04.md`. This document retains the detailed profiling narrative and source
+interpretation.
+
 This report extends the July Qwen CPU decode analyses with a same-host, stage-level comparison against a CPU-only
 llama.cpp control. It focuses on steady state stateful decode after the field-interleaved-v4 prepared-weight path,
 Q8_K activation staging, grouped projections, and shape-aware thread policy landed.
@@ -73,8 +77,8 @@ the selected graph boundaries.
 | Attention | `63.83 ms` helper lower bound | `69.74 ms` full block | inconclusive / near parity | Not the immediate owner |
 | Final logits | `11.35 ms` helper | `10.25 ms` full boundary | `+1.10 ms` | Secondary |
 
-The normalized FFN difference explains about `87%` of the `53.39 ms/token` total baseline gap. Q4_K and Q6_K
-activation-plus-Down account for about `41.57 ms`, or `78%` of the total gap. Optimizing Attention first cannot recover
+The normalized FFN difference explains about `85.6%` of the `54.39 ms/token` total baseline gap. Q4_K and Q6_K
+activation-plus-Down account for about `41.56 ms`, or `76.4%` of the total gap. Optimizing Attention first cannot recover
 enough time to reach CPU parity at the tested short context.
 
 ### Raw LiteNN Helper Attribution
