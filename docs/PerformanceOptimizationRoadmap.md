@@ -42,7 +42,8 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead stage-control evidence:
 `docs/QwenCPUDecodeStageControl_2026-08-04.md`; FFN activation/Down re-ranking:
 `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; accepted activation/Down split:
-`docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+`docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated cross-runtime stage decision:
+`docs/QwenCPUDecodeStageComparison_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
 historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
 LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
 `166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
@@ -68,8 +69,10 @@ P0 implementation order:
     bounded SwiGLU control. The accepted split has `-0.79%` median overhead, `98.44%` coverage, and at most `5.61%`
     stage CV; stale-cache fusion eligibility is repaired; strict scalar and vendored bounded 48-call controls measure
     `15.8/0.526 ms`. Exact SIMD remains unavailable until the vector-math ownership boundary is selected.
-  - [ ] Select the vector-math owner, add an explicit bounded compiler policy/helper ABI, and pass standalone plus
-    exact-token full-model promotion gates before reopening projection work.
+  - [x] Establish a separately named bounded compiler/artifact policy before selecting a vector-math provider. Strict
+    remains the default; capability, helper-symbol, rodata-v6, cache-v4, CLI, and smoke-report identity are complete.
+  - [ ] Select the vector-math owner, implement the bounded standalone/fused helpers, and pass standalone plus
+    exact-token full-model promotion gates before reopening any other implementation direction.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
@@ -279,8 +282,9 @@ P0 implementation order:
 - [ ] P0 active: reduce the confirmed FFN activation deficit.
   - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact evidence and
     production-shape SwiGLU measurements: `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`; accepted cross-runtime
-    split: `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`. Do not reopen a projection microkernel branch until
-    a new accepted profile or PMU evidence selects it.
+    split: `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated data-to-decision record:
+    `docs/QwenCPUDecodeStageComparison_2026-08-09.md`. Do not reopen a projection microkernel branch until a new
+    accepted profile or PMU evidence selects it.
   - [x] Split llama.cpp SwiGLU from Q4_K/Q6_K Down with the non-synchronizing aggregate-counter method. Three exact-token
     pairs passed every gate: `-0.79%` median overhead, `98.44%` coverage, `2.66/0.25%` clean/profile whole-run CV, and
     at most `5.61%` stage CV. Reference activation is `0.210 ms/token`; Down is `43.045 ms/token`.
@@ -318,6 +322,8 @@ P0 implementation order:
     run. Retention then requires three alternating cache-hit pairs, at least `3%` median full-token improvement,
     unchanged token ids/text, no fallback, FFN activation + Down within `10%`, and whole-token latency within `5%` of
     the adjacent Clang/no-OpenMP control.
+  - [ ] Repeat the accepted five-stage aggregate profile after promotion and verify that activation moved without
+    transferring the cost to Down, dispatch, or the module residual.
 - [ ] Close with controlled full-model evidence.
   - Alternate at least three LiteNN and three CPU-only llama.cpp runs using each runtime's measured production thread
     policy; capture actual frequency to control host state and filesystem-cache variance.
@@ -337,7 +343,8 @@ P1 follow-up after the P0 gate:
   stall, bandwidth, and residency evidence remains open.
 - [ ] Extend paired actual-decode controls from the current 15-call window to sustained 128- and 512-token windows, then
   cover 2K/32K/128K/1M context tiers as paged-KV capacity becomes production-ready. Preserve byte-identical text,
-  no-fallback, AOT-cache-hit, alternating-order, and variance gates.
+  no-fallback, AOT-cache-hit, alternating-order, and variance gates. Record sustained throughput, process memory,
+  weight/artifact residency, and KV-cache growth separately so step cost is not confused with capacity cost.
 - [ ] Preserve a reproducible out-of-tree llama.cpp stage-control recipe without adding llama.cpp runtime linkage to
   LiteNN production targets.
 - [ ] Add non-gating warm/cold benchmark trend output and alert when a cache-hot win regresses the cold-stream or

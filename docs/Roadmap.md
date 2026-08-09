@@ -3217,7 +3217,9 @@ Priority classes:
       `docs/QwenCPUDecodeStageControl_2026-08-04.md`; the completed Down experiment and FFN re-ranking are in
       `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact-root-cause and production-shape
       SwiGLU evidence is in `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`; the accepted reference activation/Down
-      split is in `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
+      split is in `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; the consolidated cross-runtime stage data,
+      evidence boundaries, conclusions, and ordered gates are in
+      `docs/QwenCPUDecodeStageComparison_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
       remains historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
       `5.49%` behind Clang/no-OpenMP. Stable LiteNN accounting measured `176.063 ms/token` module time, `164.155 ms`
       helper time, and an `11.408 ms` non-helper residual. The fresh exact-token non-synchronizing split passes every
@@ -3290,7 +3292,9 @@ Priority classes:
             until this executable slice is complete.
       - [ ] Promote a candidate to full Qwen decode only after the 48-call row improves by at least `2x` or `5 ms`.
             Retention requires three alternating cache-hit pairs, at least `3%` median token-latency gain, identical
-            token ids/text, no fallback, and a regenerated cache-v3 artifact that imports the intended helper.
+            token ids/text, no fallback, and a regenerated cache-v4 artifact that imports the intended helper.
+      - [ ] After promotion, repeat the accepted five-stage aggregate profile and require that activation moves without
+            transferring its cost to Down, dispatch, or the module residual.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3359,7 +3363,8 @@ Priority classes:
                         measured `36.338/70.564/0.196/43.128/11.739 ms/token`, confirming that compiler choice does not
                         change the activation-owned P0. Evidence: `docs/QwenCPUDecodeGNUStageControl_2026-08-09.md`.
             - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
-                  tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
+                  tiers as paged-KV support matures; report sustained throughput, process memory, weight/artifact
+                  residency, and KV-cache growth separately.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
                   frequency remains policy metadata and must not be treated as proof of equal effective clocks.
       - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
