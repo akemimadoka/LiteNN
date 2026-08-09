@@ -302,9 +302,14 @@ P0 implementation order:
     cross-platform provider such as SLEEF while keeping strict scalar `std::exp` as default/reference. Alternative:
     own a small attributed kernel derived from pinned GGML. Do not link the complete GGML runtime into
     `LiteNNCompiler` for one primitive.
-  - [ ] Add a separately named bounded activation-math compiler policy and helper ABI with explicit maximum-error,
-    saturation, special-value, ISA-dispatch, artifact-feature, and cache-identity contracts. Route both standalone
-    SwiGLU and fused SwiGLU+Down through it only when explicitly selected.
+  - [x] Establish the separately named activation-math policy and artifact contract before selecting a provider.
+    `Strict` remains the default; explicit `Bounded` selection has distinct standalone/fused helper symbols, capability
+    reporting, early unsupported-provider rejection, rodata-v6 required-runtime features, CPU AOT cache-v4 identity,
+    GGUF CLI/environment configuration, and Qwen smoke-report provenance. Unsupported artifacts cannot silently load
+    or fall back to strict scalar math.
+  - [ ] After choosing the provider, implement the bounded standalone and fused helpers and freeze their maximum-error,
+    saturation, special-value, and ISA-dispatch contracts. Keep the capability disabled until those executable paths
+    and their cross-platform tests exist.
   - [ ] Require at least `2x` or `5 ms/token` savings in the 48-layer SwiGLU benchmark before an exact-token full-model
     run. Retention then requires three alternating cache-hit pairs, at least `3%` median full-token improvement,
     unchanged token ids/text, no fallback, FFN activation + Down within `10%`, and whole-token latency within `5%` of

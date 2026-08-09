@@ -3281,9 +3281,13 @@ Priority classes:
       - [ ] Choose the vector-math ownership boundary: vendor a maintained cross-platform provider such as SLEEF, or
             explicitly own an attributed compact kernel derived from pinned GGML. Avoid linking the complete GGML
             runtime into `LiteNNCompiler` for one activation primitive.
-      - [ ] Add an explicit bounded activation-math compiler policy/helper ABI covering standalone and fused SwiGLU,
-            error/saturation/special-value contracts, ISA fallback, artifact features, and cache identity. Strict scalar
-            `std::exp` remains the default and reference path.
+      - [x] Establish an explicit bounded activation-math compiler/artifact contract covering standalone and fused
+            SwiGLU symbol selection, capability reporting, unsupported-provider rejection, rodata-v6 runtime features,
+            CPU AOT cache-v4 identity, GGUF CLI/environment configuration, and smoke-report provenance. Strict scalar
+            `std::exp` remains the default/reference path, and bounded artifacts cannot silently fall back.
+      - [ ] After selecting the provider, implement the bounded standalone/fused helpers and freeze error, saturation,
+            special-value, and ISA-dispatch behavior with cross-platform execution tests. Capability remains disabled
+            until this executable slice is complete.
       - [ ] Promote a candidate to full Qwen decode only after the 48-call row improves by at least `2x` or `5 ms`.
             Retention requires three alternating cache-hit pairs, at least `3%` median token-latency gain, identical
             token ids/text, no fallback, and a regenerated cache-v3 artifact that imports the intended helper.
@@ -3401,8 +3405,11 @@ Priority classes:
             - [x] Benchmark strict scalar and explicitly bounded SwiGLU policies over the production 48-layer shape,
                   including contiguous/strided and special-value correctness evidence. The same-binary bounded control
                   is `30x` faster; exact SIMD is unavailable because LiteNN has no vector-exp provider.
-            - [ ] Select the vector-math ownership boundary, then add a separately named bounded activation compiler
-                  policy/helper ABI with explicit error, saturation, special-value, ISA, feature, and cache contracts.
+            - [x] Add the separately named strict/bounded compiler and artifact contract. Standalone/fused helper symbol
+                  selection, capability gating, cache-v4 identity, rodata-v6 runtime features, GGUF CLI/environment
+                  configuration, and smoke-report provenance are complete; unsupported bounded requests fail early.
+            - [ ] Select the vector-math ownership boundary, implement the bounded standalone/fused helpers, and freeze
+                  explicit error, saturation, special-value, ISA-dispatch, and cross-platform execution contracts.
             - [ ] Promote a candidate to full decode only after at least `2x` or `5 ms/token` activation savings; retain
                   it only after three exact-token/no-fallback alternating pairs improve median token latency by at
                   least `3%` and preserve the adjacent reference stage/whole-token gates.
