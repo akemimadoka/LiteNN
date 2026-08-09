@@ -3274,9 +3274,17 @@ Priority classes:
       - [ ] Split the controlled reference's SwiGLU activation from Q4_K/Q6_K Down with non-synchronizing aggregate
             counters before promoting another projection rewrite. Preserve the accepted overhead, coverage, and CV
             gates.
-      - [ ] Evaluate exact SIMD exponential/SwiGLU first, preserving strict finite, signed-zero, NaN, and infinity
-            behavior. If it cannot clear the standalone gate, evaluate approximation only as a separately named policy
-            with an explicit numerical and saturation contract.
+      - [x] Audit exact SIMD availability and benchmark the pinned GGML bounded implementation without changing
+            production behavior. Release disassembly shows one scalar `expf` per LiteNN lane and no vector-exp
+            provider. Seven paired-binary repetitions measured strict `15.8 ms` versus bounded `0.526 ms` for 48 calls,
+            about `30x` and `15.3 ms` saved, with max absolute/relative error `9.54e-7/3.47e-7` and zero special-value
+            mismatches.
+      - [ ] Choose the vector-math ownership boundary: vendor a maintained cross-platform provider such as SLEEF, or
+            explicitly own an attributed compact kernel derived from pinned GGML. Avoid linking the complete GGML
+            runtime into `LiteNNCompiler` for one activation primitive.
+      - [ ] Add an explicit bounded activation-math compiler policy/helper ABI covering standalone and fused SwiGLU,
+            error/saturation/special-value contracts, ISA fallback, artifact features, and cache identity. Strict scalar
+            `std::exp` remains the default and reference path.
       - [ ] Promote a candidate to full Qwen decode only after the 48-call row improves by at least `2x` or `5 ms`.
             Retention requires three alternating cache-hit pairs, at least `3%` median token-latency gain, identical
             token ids/text, no fallback, and a regenerated cache-v3 artifact that imports the intended helper.

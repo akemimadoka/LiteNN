@@ -285,9 +285,18 @@ P0 implementation order:
     signed-zero/NaN/infinity behavior. Five strict `std::exp` repetitions measured `13.3 ms` mean for 48 contiguous
     calls and `13.5 ms` for stride 2, both with zero error/mismatches. The fused cold-stream row already exists and was
     neutral within noise; it remains projection-stream evidence rather than a vector-math benchmark.
-  - [ ] Evaluate an exact SIMD SwiGLU path before approximate math. If scalar `std::exp` remains dominant, evaluate a
-    separately named bounded fast-exp policy with an explicit numerical contract; never silently change the strict
-    helper's semantics.
+  - [x] Audit exact SIMD availability and benchmark the already vendored bounded implementation without changing
+    production behavior. Release disassembly proves one scalar `expf` call per LiteNN lane, and the repository has no
+    x86 vector-exp provider. In the same executable, seven 48-call repetitions measured strict `15.8 ms` versus GGML
+    bounded `0.526 ms` (`30.0x`, about `15.3 ms` saved), with max absolute/relative error `9.54e-7/3.47e-7` and zero
+    special-value mismatches. Exact SIMD cannot be implemented by surrounding scalar libm with AVX arithmetic.
+  - [ ] Choose and implement the vector-math ownership boundary. Preferred production option: vendor a maintained
+    cross-platform provider such as SLEEF while keeping strict scalar `std::exp` as default/reference. Alternative:
+    own a small attributed kernel derived from pinned GGML. Do not link the complete GGML runtime into
+    `LiteNNCompiler` for one primitive.
+  - [ ] Add a separately named bounded activation-math compiler policy and helper ABI with explicit maximum-error,
+    saturation, special-value, ISA-dispatch, artifact-feature, and cache-identity contracts. Route both standalone
+    SwiGLU and fused SwiGLU+Down through it only when explicitly selected.
   - [ ] Require at least `2x` or `5 ms/token` savings in the 48-layer SwiGLU benchmark before an exact-token full-model
     run. Retention then requires three alternating cache-hit pairs, at least `3%` median full-token improvement,
     unchanged token ids/text, no fallback, FFN activation + Down within `10%`, and whole-token latency within `5%` of

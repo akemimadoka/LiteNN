@@ -76,6 +76,30 @@ The 48-call contiguous row is within `2.26 ms` of the real helper profile's `11.
 benchmark reproduces the correct cost class. The real run can be faster because its activation distribution, cache
 state, and surrounding helper schedule differ from independently randomized benchmark streams.
 
+## Bounded Third-Party Control
+
+The benchmark target already links the pinned GGML vendor library for importer/kernel controls. Calling its existing
+`ggml_vec_swiglu_f32` implementation therefore provides a bounded-approximation comparison without copying an
+algorithm into LiteNN or changing production behavior. The vendor target in this build compiles `vec.cpp` without
+AVX2/AVX-512 target flags, so this is the portable x86 SSE2 route rather than its strongest host-specific route.
+
+Seven aggregate repetitions in one executable produced:
+
+| Policy | 48-call mean | Median | CV | Max abs error | Max relative error | Special mismatches |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| LiteNN strict scalar `std::exp` | `15.8 ms` | `15.9 ms` | `7.94%` | `0` | `0` | `0` |
+| GGML bounded approximately 1.5-ULP exp | `0.526 ms` | `0.529 ms` | `1.04%` | `9.54e-7` | `3.47e-7` | `0` |
+
+The bounded comparison is about `30.0x` faster by mean and saves about `15.3 ms` for the 48-call sequence. It clears
+both standalone promotion gates by a wide margin. This does not authorize a silent default change: it proves that an
+explicit bounded math policy is worth implementing and taking to exact-token full-model validation.
+
+Release disassembly of `litenn_cpu_swiglu_f32` shows one scalar `expf` relocation inside the inner lane loop and no
+YMM/ZMM vector body. The repository contains no SLEEF, xsimd, Highway, SVML, or equivalent x86 vector-exp provider.
+Consequently, a strict vector implementation is not currently available merely by adding AVX intrinsics around the
+loop. The production implementation must choose between adding a maintained vector-math dependency and owning a
+small attributed approximation kernel; that dependency/ownership decision precedes production integration.
+
 ## Conclusions
 
 1. Strict scalar exponential math is the dominant independently isolated SwiGLU cost. Moving from contiguous to
@@ -86,18 +110,20 @@ state, and surrounding helper schedule differ from independently randomized benc
 3. Existing SwiGLU+Down fusion does not remove sigmoid math. Earlier materialized-versus-fused cold-stream pairs were
    neutral within noise, so regenerating the artifact is a correctness/structure fix rather than a predicted 11 ms
    speedup.
-4. A vector-math implementation is the highest-value bounded LiteNN-side experiment. It must first save at least
-   `5 ms/token` or deliver `2x` on the 48-call row before consuming full-model benchmark time.
+4. A bounded vector-math implementation is now promoted to production-option work: the third-party control delivers
+   about `30x` and `15.3 ms` standalone savings with sub-`1e-6` observed absolute error. Strict scalar math remains the
+   default until the policy is explicit and full-model correctness is accepted.
 5. No additional Down-kernel rewrite is selected. The controlled reference must still split activation from Down, or
    PMU evidence must identify a specific projection mechanism, before that work can return to P0.
 
 ## Next Decision Gates
 
 - Split reference activation and Down with the already accepted non-synchronizing aggregate method.
-- Inventory available exact vector exponential support and benchmark it without changing strict special-value
-  behavior.
-- If exact SIMD cannot clear the gate, define a separately named bounded fast-exp policy with explicit error,
-  saturation, and special-value contracts; never make approximation an implicit compiler side effect.
+- Choose the vector-math ownership boundary: prefer a maintained cross-platform provider such as SLEEF, or explicitly
+  own an attributed compact kernel derived from the already vendored GGML implementation. Do not link the complete
+  GGML runtime into `LiteNNCompiler` for one activation primitive.
+- Add a separately named bounded activation-math compiler policy with explicit error, saturation, ISA fallback, and
+  special-value contracts. Keep strict scalar `std::exp` as the default and as the reference implementation.
 - For a candidate that clears the standalone gate, regenerate a cache-version-3 Qwen artifact and run three
   alternating exact-token pairs. Retention requires at least `3%` median full-token gain, unchanged tokens/text, and no
   fallback.
