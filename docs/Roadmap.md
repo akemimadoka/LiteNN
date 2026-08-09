@@ -3219,7 +3219,9 @@ Priority classes:
       SwiGLU evidence is in `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`; the accepted reference activation/Down
       split is in `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; the consolidated cross-runtime stage data,
       evidence boundaries, conclusions, and ordered gates are in
-      `docs/QwenCPUDecodeStageComparison_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
+      `docs/QwenCPUDecodeStageComparison_2026-08-09.md`; the accepted fixed-trajectory 128-token throughput,
+      position-growth, and numerical-drift evidence is in
+      `docs/QwenCPUDecodeSustained128Control_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
       remains historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
       `5.49%` behind Clang/no-OpenMP. Stable LiteNN accounting measured `176.063 ms/token` module time, `164.155 ms`
       helper time, and an `11.408 ms` non-helper residual. The fresh exact-token non-synchronizing split passes every
@@ -3295,6 +3297,21 @@ Priority classes:
             token ids/text, no fallback, and a regenerated cache-v4 artifact that imports the intended helper.
       - [ ] After promotion, repeat the accepted five-stage aggregate profile and require that activation moves without
             transferring its cost to Down, dispatch, or the module residual.
+      - [ ] P0 parallel: attribute the sustained context-dependent module slope before selecting Attention/KV
+            implementation work.
+            - [x] Add fixed-reference replay while retaining natural argmax diagnostics, exact token-identity gates,
+                  UTF-8 file transport, and Windows newline recovery.
+            - [x] Complete three accepted 128-token pairs. LiteNN/reference medians are `4.768/5.700 token/s`, the
+                  paired median delta is `-15.01%`, and CVs are `1.96/1.25%`; forced trajectories match and fallback
+                  remains zero.
+            - [x] Establish LiteNN's position trend: module mean rises from `198.080 ms` at positions 1-16 to
+                  `221.030 ms` at positions 113-128 while sampling remains below `0.2 ms`.
+            - [ ] Add accepted position-binned counters to both runtimes and split QKV projection, RoPE/KV append,
+                  score-softmax-value, attention output, FFN, logits, and residual before promoting a
+                  context-sensitive kernel.
+            - [ ] Localize the first natural logit mismatch with per-layer checkpoints. It occurs at generated index
+                  23; functional/stateful outputs are bit-identical and source/prepacked outputs are close, excluding
+                  those two suspected ownership boundaries.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3362,9 +3379,14 @@ Priority classes:
                         delta, `98.64%` coverage, and at most `4.17%` stage CV. Attention/Gate-Up/activation/Down/logits
                         measured `36.338/70.564/0.196/43.128/11.739 ms/token`, confirming that compiler choice does not
                         change the activation-owned P0. Evidence: `docs/QwenCPUDecodeGNUStageControl_2026-08-09.md`.
-            - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
-                  tiers as paged-KV support matures; report sustained throughput, process memory, weight/artifact
-                  residency, and KV-cache growth separately.
+            - [ ] Extend paired decode evidence through sustained and long-context tiers as paged-KV support matures.
+                  - [x] Complete the 128-token fixed-trajectory throughput and variance tier.
+                  - [ ] Reject in-process power-policy changes and record peak working set/private bytes, mapped
+                        weight/artifact residency, and KV-cache bytes.
+                  - [ ] Complete the 512-token fixed-trajectory tier after position attribution and residency gates.
+                  - [ ] Extend to 2K/32K/128K/1M context tiers with paged-KV capacity.
+                  - [ ] Add fixed-trajectory logit/layer checkpoints, corpus perplexity, and task-quality checks so
+                        numerical fidelity is not reduced to exact long natural greedy text.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
                   frequency remains policy metadata and must not be treated as proof of equal effective clocks.
       - [x] Reject grouped Q4_K x16 Gate/Up after the target median changed only `1.14 -> 1.11 ms` within `~4%` noise
@@ -3794,6 +3816,15 @@ These improvements do not require a compatibility break and should not block vNe
   use it as the production execution path.
 
 ## Date Notes
+
+### 2026-08-09
+
+- Added fixed-reference token replay for sustained cross-runtime decode controls and completed three accepted
+  128-token Qwen pairs. LiteNN/reference medians are `4.768/5.700 token/s`, with a `-15.01%` paired median delta.
+- Separated the confirmed `10.833 ms/token` SwiGLU fixed cost from the context-dependent module slope: LiteNN module
+  mean rises from `198.080 ms` at positions 1-16 to `221.030 ms` at positions 113-128.
+- Split long-window performance acceptance from natural greedy fidelity. The first natural mismatch is reproducible at
+  generated index 23; position-binned stage attribution and per-layer numerical checkpoints are the next P0 evidence.
 
 ### 2026-08-04
 

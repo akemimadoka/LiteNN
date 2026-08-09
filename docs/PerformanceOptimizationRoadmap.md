@@ -43,7 +43,8 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeStageControl_2026-08-04.md`; FFN activation/Down re-ranking:
 `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; accepted activation/Down split:
 `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated cross-runtime stage decision:
-`docs/QwenCPUDecodeStageComparison_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+`docs/QwenCPUDecodeStageComparison_2026-08-09.md`; accepted sustained 128-token control and position-growth decision:
+`docs/QwenCPUDecodeSustained128Control_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
 historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
 LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
 `166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
@@ -73,9 +74,19 @@ P0 implementation order:
     remains the default; capability, helper-symbol, rodata-v6, cache-v4, CLI, and smoke-report identity are complete.
   - [ ] Select the vector-math owner, implement the bounded standalone/fused helpers, and pass standalone plus
     exact-token full-model promotion gates before reopening any other implementation direction.
+  - [ ] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
+    control measures LiteNN/reference medians of `4.768/5.700 token/s` (`-15.01%` paired median); LiteNN module time
+    rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. Add matched position-binned
+    counters before selecting Attention/KV work.
+  - [ ] Localize natural logit drift independently of performance. The first argmax mismatch is reproducible at
+    generated index 23; functional/stateful logits are bit-identical and source/prepacked logits are very close, so add
+    per-layer hidden-state checkpoints and model-quality gates rather than blaming state aliasing or weight packing.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
+    - [x] Add fixed-reference token replay and complete three accepted 128-token pairs with exact forced trajectory,
+      no fallback, cache hit, alternating order, and per-runtime CV below 3%.
+    - [ ] Add peak process memory/residency and in-process power-policy stability gates, then run the 512-token tier.
 
 - [x] Build a cache-cold GGML projection-stream benchmark.
   - `GGMLFieldInterleavedV4ColdProjectionStream` covers isolated Q4_K/Q6_K `13824 -> 5120` Down streams, the observed
@@ -341,10 +352,20 @@ P1 follow-up after the P0 gate:
   degrade cleanly when Windows policy or CI privileges do not permit system profiling. Windows PDH actual-frequency
   and utility sampling is complete and rules out a clock explanation for the current build/paired controls; PMU cache,
   stall, bandwidth, and residency evidence remains open.
-- [ ] Extend paired actual-decode controls from the current 15-call window to sustained 128- and 512-token windows, then
-  cover 2K/32K/128K/1M context tiers as paged-KV capacity becomes production-ready. Preserve byte-identical text,
-  no-fallback, AOT-cache-hit, alternating-order, and variance gates. Record sustained throughput, process memory,
-  weight/artifact residency, and KV-cache growth separately so step cost is not confused with capacity cost.
+- [ ] Extend paired actual-decode controls through sustained and long-context tiers.
+  - [x] Add fixed-reference token replay while still evaluating natural argmax, UTF-8 file transport, Windows
+    newline recovery, token-identity gates, and focused unit tests.
+  - [x] Complete the 128-token throughput/variance tier: LiteNN/reference medians are `4.768/5.700 token/s`, paired
+    median delta is `-15.01%`, CVs are `1.96/1.25%`, and all forced trajectories match without fallback.
+  - [ ] Add matched low-overhead position bins to both runtimes. Split QKV projection, RoPE/KV append,
+    score-softmax-value, attention output, FFN, logits, and residual; require accepted coverage/overhead before a
+    context-sensitive kernel is promoted.
+  - [ ] Reject a run when its power policy changes in-process, and capture peak working set/private bytes, mapped
+    weight/artifact residency, and KV-cache bytes without imposing a mandatory profiling dependency.
+  - [ ] Run the 512-token fixed-trajectory tier only after the attribution and residency gates pass, then cover
+    2K/32K/128K/1M context tiers as paged-KV capacity becomes production-ready.
+  - [ ] Track numerical fidelity separately with fixed-trajectory logit/layer checkpoints, corpus perplexity, and
+    task-quality checks; do not require byte-identical long natural greedy text across valid reduction orders.
 - [ ] Preserve a reproducible out-of-tree llama.cpp stage-control recipe without adding llama.cpp runtime linkage to
   LiteNN production targets.
 - [ ] Add non-gating warm/cold benchmark trend output and alert when a cache-hot win regresses the cold-stream or
