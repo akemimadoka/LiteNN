@@ -41,16 +41,16 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; stronger build/runtime control:
 `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead stage-control evidence:
 `docs/QwenCPUDecodeStageControl_2026-08-04.md`; FFN activation/Down re-ranking:
-`docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. The earlier GNU/OpenMP T8 stage attribution is retained
-as historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places LiteNN
-`5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near `166 ms/token`,
-but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting measured
-`176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement
-non-synchronizing exact-token aggregate control passes with `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%`
-stage CV; it promotes the composite FFN activation + Down stage as the largest accepted deficit (`54.057` versus
-`41.165 ms/token`). The subsequent LiteNN split measured `42.723 ms` in Q4_K/Q6_K Down projections and `11.043 ms`
-in standalone SwiGLU. Because the reference still combines those two components, the composite deficit no longer
-selects a Down microkernel rewrite by itself.
+`docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; accepted activation/Down split:
+`docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
+LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
+`166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
+measured `176.063 ms/token` module time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The
+replacement non-synchronizing exact-token aggregate control first selected the composite FFN activation + Down stage;
+the fresh split then measured reference activation at `0.210 ms/token` and Down at `43.045 ms/token`. Against LiteNN's
+`11.043/42.723 ms` helper lower bounds, activation owns a `10.833 ms` (`52.5x`) deficit while no Down deficit is
+established.
 
 P0 implementation order:
 
@@ -64,8 +64,12 @@ P0 implementation order:
   - [x] Open and close the first FFN-Down kernel/prefetch tranche after the aggregate profile measured a composite
     `12.892 ms` (`31.32%`) deficit. All bounded variants failed the cache-cold mixed-stream gate, and the later
     activation/projection split proved that the composite row cannot select projection work alone.
-  - [ ] Split reference activation from Down, repair real-artifact fusion eligibility, and evaluate SwiGLU SIMD under
-    the exact-token gates before reopening projection work.
+  - [x] Split reference activation from Down, repair real-artifact fusion eligibility, and evaluate the available
+    bounded SwiGLU control. The accepted split has `-0.79%` median overhead, `98.44%` coverage, and at most `5.61%`
+    stage CV; stale-cache fusion eligibility is repaired; strict scalar and vendored bounded 48-call controls measure
+    `15.8/0.526 ms`. Exact SIMD remains unavailable until the vector-math ownership boundary is selected.
+  - [ ] Select the vector-math owner, add an explicit bounded compiler policy/helper ABI, and pass standalone plus
+    exact-token full-model promotion gates before reopening projection work.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
@@ -248,9 +252,9 @@ P0 implementation order:
 - [x] P0: evaluate FFN-Down cold-stream throughput candidates. Closed as rejected on 2026-08-04.
   - Accepted exact-token evidence: LiteNN Q4_K/Q6_K Down plus SwiGLU is `54.057 ms/token` with `2.97%` CV; the complete
     Clang/no-OpenMP reference stage is `41.165 ms/token` with `0.16%` CV. The conservative deficit is `12.892 ms`
-    (`31.32%`) and explains at least 63% of the profiled module difference. The later LiteNN decomposition measured
-    Q4_K/Q6_K projection helpers at `42.723 ms` and standalone SwiGLU at `11.043 ms`. Since the reference row still
-    combines activation and projection, the complete `12.892 ms` cannot be assigned to the Down kernels.
+    (`31.32%`) and explains at least 63% of the profiled module difference. The accepted 2026-08-09 split measures
+    reference Down at `43.045 ms` versus LiteNN's `42.723 ms` helper lower bound. The `-0.322 ms` difference is within
+    run variation and closes Down rewrite work until new low-overhead evidence identifies a projection deficit.
   - [x] Evaluate two independent Q4_K output-group streams per worker with the accepted x8 pair-sum/scale folding.
     Three alternating binary pairs regressed Q4_K by `6.91%` median and mixed Q4_K_M by `2.80%`; every Q4_K and mixed
     pair was negative. The implementation was removed. The shorter cache-hot instruction path does not survive the
@@ -268,13 +272,17 @@ P0 implementation order:
     AVX-512 x16 remains selected.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
-- [ ] P0 active: split and reduce the FFN activation/Down composite deficit.
+- [ ] P0 active: reduce the confirmed FFN activation deficit.
   - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact evidence and
-    production-shape SwiGLU measurements: `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`. Do not reopen a projection
-    microkernel branch until the reference-side activation cost is separated or PMU evidence selects that branch.
-  - [ ] Split llama.cpp SwiGLU from Q4_K/Q6_K Down with the accepted non-synchronizing aggregate-counter method.
-    Preserve at most `3%` instrumentation overhead, `95-102%` coverage, at most `3%` whole-run CV, and at most `15%`
-    CV for every promoted substage.
+    production-shape SwiGLU measurements: `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`; accepted cross-runtime
+    split: `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`. Do not reopen a projection microkernel branch until
+    a new accepted profile or PMU evidence selects it.
+  - [x] Split llama.cpp SwiGLU from Q4_K/Q6_K Down with the non-synchronizing aggregate-counter method. Three exact-token
+    pairs passed every gate: `-0.79%` median overhead, `98.44%` coverage, `2.66/0.25%` clean/profile whole-run CV, and
+    at most `5.61%` stage CV. Reference activation is `0.210 ms/token`; Down is `43.045 ms/token`.
+  - [x] Re-rank the components. LiteNN activation is `11.043 ms/token`, `+10.833 ms` and `52.5x` the reference stage;
+    LiteNN Down is `42.723 ms/token`, within `0.322 ms` of reference. Activation accounts for about `84%` of the prior
+    accepted composite gap and is the sole current P0 implementation owner.
   - [x] Add an imported-plan and generated-artifact fusion regression. A fresh mixed Q4_K/Q6_K imported plan retains
     seven `Source` projections but emits seven field-v4 external weights, imports the fused helper, omits standalone
     SwiGLU, loads, and runs. This disproved source-layout gating. The real profile used a stale cache-v2 artifact because
