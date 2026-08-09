@@ -3,7 +3,9 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 namespace
@@ -12,10 +14,22 @@ namespace
 	{
 		std::cerr << "Usage:\n"
 		          << "  " << executable << " tokenize <model.gguf> <text> <tokens.json>\n"
+		          << "  " << executable << " tokenize-file <model.gguf> <text.bin> <tokens.json>\n"
 		          << "  " << executable << " detokenize <model.gguf> <comma-token-ids> <text.bin>\n"
 		          << "  " << executable << " chat-template <model.gguf> <user-text> <prompt.bin>\n"
+		          << "  " << executable << " chat-template-file <model.gguf> <user-text.bin> <prompt.bin>\n"
 		          << "  " << executable
 		          << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n";
+	}
+
+	std::string ReadBinary(const std::filesystem::path& path)
+	{
+		std::ifstream input(path, std::ios::binary);
+		if (!input)
+		{
+			throw std::runtime_error("failed to open text input: " + path.string());
+		}
+		return { std::istreambuf_iterator<char>{ input }, std::istreambuf_iterator<char>{} };
 	}
 
 	void WriteBinary(std::string_view text, const std::filesystem::path& path)
@@ -44,6 +58,12 @@ try
 		LiteNN::LlamaCppAdapter::WriteTokensJson(model.Tokenize(argv[3]), argv[4]);
 		return 0;
 	}
+	if (command == "tokenize-file" && argc == 5)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		LiteNN::LlamaCppAdapter::WriteTokensJson(model.Tokenize(ReadBinary(argv[3])), argv[4]);
+		return 0;
+	}
 	if (command == "detokenize" && argc == 5)
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
@@ -55,6 +75,12 @@ try
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
 		WriteBinary(model.ApplyChatTemplate(argv[3]), argv[4]);
+		return 0;
+	}
+	if (command == "chat-template-file" && argc == 5)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		WriteBinary(model.ApplyChatTemplate(ReadBinary(argv[3])), argv[4]);
 		return 0;
 	}
 	if (command == "decode-logits" && argc == 6)

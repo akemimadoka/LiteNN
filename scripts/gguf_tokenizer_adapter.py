@@ -41,8 +41,12 @@ def main() -> int:
         raise SystemExit(f"GGUF model does not exist: {args.model}")
     args.workdir.mkdir(parents=True, exist_ok=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    payload = args.token_ids if args.operation == "detokenize" else args.text
-    command = [str(args.tool), args.operation, str(args.model), payload, str(args.output)]
+    if args.operation == "detokenize":
+        command = [str(args.tool), args.operation, str(args.model), args.token_ids, str(args.output)]
+    else:
+        text_input = args.workdir / f"{args.operation}.input.bin"
+        text_input.write_bytes(args.text.encode("utf-8"))
+        command = [str(args.tool), f"{args.operation}-file", str(args.model), str(text_input), str(args.output)]
     environment = os.environ.copy()
     runtime_paths = [args.tool.parent, args.tool.parent / "bin"]
     environment["PATH"] = os.pathsep.join(str(path) for path in runtime_paths) + os.pathsep + environment.get("PATH", "")
