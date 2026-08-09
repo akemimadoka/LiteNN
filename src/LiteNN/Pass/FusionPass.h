@@ -131,6 +131,14 @@ namespace LiteNN
 						    countInput(node.lhs);
 						    countInput(node.rhsStorage);
 					    }
+					    else if constexpr (std::same_as<T, GroupedQuantizedMatMulNode>)
+					    {
+						    countInput(node.lhs);
+						    for (const auto& rhsStorage : node.rhsStorages)
+						    {
+							    countInput(rhsStorage);
+						    }
+					    }
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
 						    for (const auto& a : node.args)
@@ -751,6 +759,16 @@ namespace LiteNN
 				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
 				    {
 					    return QuantizedMatMulNode{ remap(n.lhs), remap(n.rhsStorage), n.params, n.transposeRhs };
+				    }
+				    else if constexpr (std::same_as<T, GroupedQuantizedMatMulNode>)
+				    {
+					    auto copy = n;
+					    copy.lhs = remap(copy.lhs);
+					    for (auto& rhsStorage : copy.rhsStorages)
+					    {
+						    rhsStorage = remap(rhsStorage);
+					    }
+					    return copy;
 				    }
 				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
 				    {

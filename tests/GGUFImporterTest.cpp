@@ -612,54 +612,51 @@ namespace
 		return graph;
 	}
 
-	Graph BuildQuantizedFriendlyLLaMAArchive()
+	Graph BuildQuantizedFriendlyLLaMAArchive(std::size_t embeddingLength = 32, std::size_t feedForwardLength = 64)
 	{
-		constexpr std::size_t kEmbeddingLength = 32;
-		constexpr std::size_t kFeedForwardLength = 64;
-
 		Graph graph;
 		graph.SetMetadata({
 		    { "general.architecture", std::string("llama") },
 		    { "llama.context_length", std::uint64_t{ 16 } },
-		    { "llama.embedding_length", std::uint64_t{ kEmbeddingLength } },
+		    { "llama.embedding_length", static_cast<std::uint64_t>(embeddingLength) },
 		    { "llama.block_count", std::uint64_t{ 1 } },
-		    { "llama.feed_forward_length", std::uint64_t{ kFeedForwardLength } },
+		    { "llama.feed_forward_length", static_cast<std::uint64_t>(feedForwardLength) },
 		    { "llama.attention.head_count", std::uint64_t{ 4 } },
 		    { "llama.attention.head_count_kv", std::uint64_t{ 4 } },
 		    { "llama.attention.layer_norm_rms_epsilon", 1.0e-6 },
 		    { "llama.rope.freq_base", 10000.0 },
 		});
 
-		std::vector<float> identity(kEmbeddingLength * kEmbeddingLength, 0.0f);
-		for (std::size_t i = 0; i < kEmbeddingLength; ++i)
+		std::vector<float> identity(embeddingLength * embeddingLength, 0.0f);
+		for (std::size_t i = 0; i < embeddingLength; ++i)
 		{
-			identity[i * kEmbeddingLength + i] = 1.0f;
+			identity[i * embeddingLength + i] = 1.0f;
 		}
-		const std::vector<float> ones(kEmbeddingLength, 1.0f);
-		const std::vector<float> zeros32x32(kEmbeddingLength * kEmbeddingLength, 0.0f);
-		const std::vector<float> zeros32x64(kEmbeddingLength * kFeedForwardLength, 0.0f);
-		const std::vector<float> zeros64x32(kFeedForwardLength * kEmbeddingLength, 0.0f);
+		const std::vector<float> ones(embeddingLength, 1.0f);
+		const std::vector<float> zerosSquare(embeddingLength * embeddingLength, 0.0f);
+		const std::vector<float> zerosGateUp(embeddingLength * feedForwardLength, 0.0f);
+		const std::vector<float> zerosDown(feedForwardLength * embeddingLength, 0.0f);
 
-		AddNamedVariable(graph, "token_embd.weight", MakeFloatTensor(identity, { kEmbeddingLength, kEmbeddingLength }));
-		AddNamedVariable(graph, "output_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
-		AddNamedVariable(graph, "output.weight", MakeFloatTensor(identity, { kEmbeddingLength, kEmbeddingLength }));
+		AddNamedVariable(graph, "token_embd.weight", MakeFloatTensor(identity, { embeddingLength, embeddingLength }));
+		AddNamedVariable(graph, "output_norm.weight", MakeFloatTensor(ones, { 1, embeddingLength }));
+		AddNamedVariable(graph, "output.weight", MakeFloatTensor(identity, { embeddingLength, embeddingLength }));
 
-		AddNamedVariable(graph, "blk.0.attn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
-		AddNamedVariable(graph, "blk.0.ffn_norm.weight", MakeFloatTensor(ones, { 1, kEmbeddingLength }));
+		AddNamedVariable(graph, "blk.0.attn_norm.weight", MakeFloatTensor(ones, { 1, embeddingLength }));
+		AddNamedVariable(graph, "blk.0.ffn_norm.weight", MakeFloatTensor(ones, { 1, embeddingLength }));
 		AddNamedVariable(graph, "blk.0.attn_q.weight",
-		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zerosSquare, { embeddingLength, embeddingLength }));
 		AddNamedVariable(graph, "blk.0.attn_k.weight",
-		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zerosSquare, { embeddingLength, embeddingLength }));
 		AddNamedVariable(graph, "blk.0.attn_v.weight",
-		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zerosSquare, { embeddingLength, embeddingLength }));
 		AddNamedVariable(graph, "blk.0.attn_output.weight",
-		                 MakeFloatTensor(zeros32x32, { kEmbeddingLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zerosSquare, { embeddingLength, embeddingLength }));
 		AddNamedVariable(graph, "blk.0.ffn_gate.weight",
-		                 MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		                 MakeFloatTensor(zerosGateUp, { embeddingLength, feedForwardLength }));
 		AddNamedVariable(graph, "blk.0.ffn_up.weight",
-		                 MakeFloatTensor(zeros32x64, { kEmbeddingLength, kFeedForwardLength }));
+		                 MakeFloatTensor(zerosGateUp, { embeddingLength, feedForwardLength }));
 		AddNamedVariable(graph, "blk.0.ffn_down.weight",
-		                 MakeFloatTensor(zeros64x32, { kFeedForwardLength, kEmbeddingLength }));
+		                 MakeFloatTensor(zerosDown, { feedForwardLength, embeddingLength }));
 		return graph;
 	}
 
@@ -736,6 +733,31 @@ namespace
 			const auto shouldQuantize = ShouldQuantizeQ80Weight(name, variable);
 			const auto index =
 			    copy.AddVariable(shouldQuantize ? QuantizeQ80Variable(variable) : archive.GetVariable(i));
+			copy.SetVariableName(index, name);
+		}
+		return copy;
+	}
+
+	Graph QuantizeMixedQ4KQ6KWeights(const Graph& archive)
+	{
+		Graph copy;
+		copy.SetMetadata(std::vector<ModelMetadataEntry>(archive.Metadata().begin(), archive.Metadata().end()));
+		for (std::size_t i = 0; i < archive.VariableCount(); ++i)
+		{
+			const auto& variable = *archive.GetVariable(i);
+			const auto name = archive.VariableName(i);
+			std::shared_ptr<Variable> copiedVariable = archive.GetVariable(i);
+			if (ShouldQuantizeQ80Weight(name, variable))
+			{
+				auto outputMajorData = variable.Data().CopyToDevice(CPU{});
+				outputMajorData = outputMajorData.Transpose();
+				const auto outputMajorVariable = Variable::Create(std::move(outputMajorData));
+				const auto isDown = name == "blk.0.ffn_down.weight";
+				copiedVariable =
+				    QuantizeGGMLVariable(*outputMajorVariable, isDown ? GGML_TYPE_Q6_K : GGML_TYPE_Q4_K,
+				                         isDown ? QuantizedBlockFormat::GGML_Q6_K : QuantizedBlockFormat::GGML_Q4_K);
+			}
+			const auto index = copy.AddVariable(std::move(copiedVariable));
 			copy.SetVariableName(index, name);
 		}
 		return copy;
@@ -2697,6 +2719,72 @@ TEST(GGUFLLaMAQuantizedExecution, CPUAOTFusesSwiGLUIntoFieldInterleavedV4DownPro
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected[1], { .absolute = 1.0e-4, .relative = 1.0e-5 });
+	}
+}
+
+TEST(GGUFLLaMAQuantizedExecution, ImportedMixedKQuantizedPlanEmitsAndRunsFreshSwiGLUDownFusion)
+{
+	constexpr std::size_t embeddingLength = 256;
+	constexpr std::size_t feedForwardLength = 512;
+	const auto archive =
+	    QuantizeMixedQ4KQ6KWeights(BuildQuantizedFriendlyLLaMAArchive(embeddingLength, feedForwardLength));
+	const auto lowered = GGUF::LowerLLaMACausalLM(archive, 1, 0, { .preserveQuantizedWeights = true });
+	const auto plan = Detail::BuildExecutablePlanFromGraph(lowered);
+
+	std::size_t sourceProjectionCount = 0;
+	std::size_t swigluCount = 0;
+	for (const auto& subgraph : plan.subgraphs)
+	{
+		for (const auto& entry : subgraph.nodes)
+		{
+			if (const auto* matmul = std::get_if<QuantizedMatMulNode>(&entry.node))
+			{
+				EXPECT_EQ(matmul->params.storageLayout, QuantizedStorageLayout::Source);
+				EXPECT_TRUE(matmul->transposeRhs);
+				++sourceProjectionCount;
+			}
+			if (const auto* grouped = std::get_if<GroupedQuantizedMatMulNode>(&entry.node))
+			{
+				EXPECT_TRUE(grouped->transposeRhs);
+				for (const auto& params : grouped->projectionParams)
+				{
+					EXPECT_EQ(params.storageLayout, QuantizedStorageLayout::Source);
+					++sourceProjectionCount;
+				}
+			}
+			if (const auto* binary = std::get_if<BinaryOpNode>(&entry.node); binary && binary->op == BinaryOp::SwiGLU)
+			{
+				++swigluCount;
+			}
+		}
+	}
+	EXPECT_EQ(sourceProjectionCount, 7u);
+	EXPECT_EQ(swigluCount, 1u);
+
+	CompilerOptions options;
+	options.enableCPUAOTExternalRegions = true;
+	options.enableCPUAOTGGMLQ8KStagedMatMul = true;
+	options.enableCPUAOTGGMLPrepackedWeights = true;
+	options.cpuAOTGGMLPrepackedWeightLayout = CPUAOTGGMLPrepackedWeightLayout::FieldInterleavedV4;
+	options.cpuAOTThreadCount = 2;
+	const auto artifact = Compiler<CPU>::CompileArtifact(plan, options);
+	EXPECT_TRUE(
+	    ByteSpanContains(artifact.Instructions(), "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+	EXPECT_FALSE(ByteSpanContains(artifact.Instructions(), "litenn_cpu_swiglu_f32"));
+	EXPECT_EQ(std::ranges::count_if(artifact.ExternalTensorInfos(),
+	                                [](const auto& info) {
+		                                return info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
+	                                }),
+	          7);
+
+	auto compiled = artifact.Load();
+	const std::array<Tensor<CPU>, 1> inputs = { MakeInt32Tensor({ 1 }, { 1 }) };
+	const auto outputs = compiled.RunTensors(inputs);
+	ASSERT_EQ(outputs.size(), 1u);
+	ASSERT_EQ(outputs[0].Shape(), (ShapeView{ 1, embeddingLength }));
+	for (std::size_t i = 0; i < outputs[0].NumElements(); ++i)
+	{
+		EXPECT_TRUE(std::isfinite(ReadFloat(outputs[0], i))) << "at element " << i;
 	}
 }
 
