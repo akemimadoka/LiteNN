@@ -1700,6 +1700,107 @@ namespace
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
+	void BMSwiGLUF32ProductionSequence(benchmark::State& state, std::size_t width, std::size_t callCount,
+	                                   std::int64_t columnStride)
+	{
+		if (width == 0 || callCount == 0 || columnStride <= 0)
+		{
+			state.SkipWithError("SwiGLU production sequence requires positive dimensions and stride");
+			return;
+		}
+		const auto stride = static_cast<std::size_t>(columnStride);
+		const auto rowStorage = width * stride;
+		const auto storageElements = callCount * rowStorage;
+		std::vector<float> gate(storageElements);
+		std::vector<float> up(storageElements);
+		std::vector<float> output(storageElements, std::numeric_limits<float>::quiet_NaN());
+		std::mt19937 rng(0x51A1u);
+		std::uniform_real_distribution<float> gateDist(-8.0F, 8.0F);
+		std::uniform_real_distribution<float> upDist(-1.0F, 1.0F);
+		for (std::size_t call = 0; call < callCount; ++call)
+		{
+			for (std::size_t column = 0; column < width; ++column)
+			{
+				const auto index = call * rowStorage + column * stride;
+				gate[index] = gateDist(rng);
+				up[index] = upDist(rng);
+			}
+		}
+
+		const auto invoke = [&] {
+			for (std::size_t call = 0; call < callCount; ++call)
+			{
+				const auto offset = static_cast<std::int64_t>(call * rowStorage);
+				litenn_cpu_swiglu_f32(nullptr, gate.data(), offset, 1, static_cast<std::int64_t>(width),
+				                      static_cast<std::int64_t>(rowStorage), columnStride, nullptr, up.data(), offset,
+				                      1, static_cast<std::int64_t>(width), static_cast<std::int64_t>(rowStorage),
+				                      columnStride, nullptr, output.data(), offset, 1, static_cast<std::int64_t>(width),
+				                      static_cast<std::int64_t>(rowStorage), columnStride);
+			}
+		};
+
+		invoke();
+		double maxAbsDelta = 0.0;
+		double maxRelativeDelta = 0.0;
+		for (std::size_t call = 0; call < callCount; ++call)
+		{
+			for (std::size_t column = 0; column < width; ++column)
+			{
+				const auto index = call * rowStorage + column * stride;
+				const auto expected = gate[index] / (1.0F + std::exp(-gate[index])) * up[index];
+				const auto delta = std::abs(static_cast<double>(output[index]) - static_cast<double>(expected));
+				maxAbsDelta = std::max(maxAbsDelta, delta);
+				maxRelativeDelta =
+				    std::max(maxRelativeDelta, delta / std::max(std::abs(static_cast<double>(expected)), 1.0e-12));
+			}
+		}
+
+		const std::array specialGate{ 0.0F, -0.0F, std::numeric_limits<float>::infinity(),
+			                          -std::numeric_limits<float>::infinity(),
+			                          std::numeric_limits<float>::quiet_NaN() };
+		const std::array specialUp{ 1.0F, -1.0F, 1.0F, 1.0F, 1.0F };
+		std::array<float, specialGate.size()> specialOutput{};
+		litenn_cpu_swiglu_f32(nullptr, specialGate.data(), 0, 1, static_cast<std::int64_t>(specialGate.size()),
+		                      static_cast<std::int64_t>(specialGate.size()), 1, nullptr, specialUp.data(), 0, 1,
+		                      static_cast<std::int64_t>(specialUp.size()), static_cast<std::int64_t>(specialUp.size()),
+		                      1, nullptr, specialOutput.data(), 0, 1, static_cast<std::int64_t>(specialOutput.size()),
+		                      static_cast<std::int64_t>(specialOutput.size()), 1);
+		std::size_t specialValueMismatches = 0;
+		for (std::size_t i = 0; i < specialGate.size(); ++i)
+		{
+			const auto expected = specialGate[i] / (1.0F + std::exp(-specialGate[i])) * specialUp[i];
+			const auto bothNaN = std::isnan(expected) && std::isnan(specialOutput[i]);
+			const auto exact = expected == specialOutput[i] &&
+			                   (expected != 0.0F || std::signbit(expected) == std::signbit(specialOutput[i]));
+			specialValueMismatches += !bothNaN && !exact ? 1 : 0;
+		}
+
+		for (int i = 0; i < kWarmupIterations; ++i)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+		}
+		for (auto _ : state)
+		{
+			invoke();
+			benchmark::DoNotOptimize(output.data());
+			benchmark::ClobberMemory();
+		}
+
+		const auto elementsPerIteration = callCount * width;
+		state.counters["calls_per_iteration"] = benchmark::Counter(static_cast<double>(callCount));
+		state.counters["column_stride"] = benchmark::Counter(static_cast<double>(columnStride));
+		state.counters["elements_per_call"] = benchmark::Counter(static_cast<double>(width));
+		state.counters["max_abs_delta"] = benchmark::Counter(maxAbsDelta);
+		state.counters["max_relative_delta"] = benchmark::Counter(maxRelativeDelta);
+		state.counters["special_value_mismatches"] = benchmark::Counter(static_cast<double>(specialValueMismatches));
+		state.counters["total_elements"] = benchmark::Counter(static_cast<double>(elementsPerIteration));
+		state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations()) *
+		                        static_cast<std::int64_t>(elementsPerIteration));
+		state.SetBytesProcessed(static_cast<std::int64_t>(state.iterations()) *
+		                        static_cast<std::int64_t>(elementsPerIteration * sizeof(float) * 3));
+	}
+
 	struct GGMLPackedProjectionStreamEntry
 	{
 		QuantizedBlockFormat format;
@@ -5200,6 +5301,21 @@ namespace
 			}
 		}
 		constexpr std::uint64_t projectionStreamThreadCount = 8;
+		for (const auto callCount : { std::size_t{ 1 }, std::size_t{ 48 } })
+		{
+			for (const auto [layoutName, columnStride] :
+			     std::array{ std::pair{ std::string_view{ "contiguous" }, std::int64_t{ 1 } },
+			                 std::pair{ std::string_view{ "strided" }, std::int64_t{ 2 } } })
+			{
+				auto* benchmarkCase = benchmark::RegisterBenchmark(
+				    std::format("SwiGLUF32ProductionSequence/strict_std_exp/{}/calls:{}/width:13824", layoutName,
+				                callCount),
+				    [callCount, columnStride](benchmark::State& state) {
+					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride);
+				    });
+				benchmarkCase->Unit(benchmark::kMillisecond);
+			}
+		}
 		const auto registerProjectionStream =
 		    [projectionStreamThreadCount](std::string_view name, std::span<const QuantizedBlockFormat> formats,
 		                                  GGMLProjectionStreamActivationMode activationMode) {
