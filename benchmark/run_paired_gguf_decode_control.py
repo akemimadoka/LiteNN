@@ -350,6 +350,12 @@ def power_policy() -> dict[str, object]:
     return {"source": "platform", "value": platform.platform()}
 
 
+def process_power_policy_stable(process: dict[str, object]) -> bool:
+    before = process.get("power_policy_before")
+    after = process.get("power_policy_after")
+    return isinstance(before, dict) and isinstance(after, dict) and before == after
+
+
 def summarize_frequency(samples: list[dict[str, object]]) -> dict[str, object]:
     current = [
         float(value) for sample in samples for value in sample.get("current_mhz", [])  # type: ignore[union-attr]
@@ -690,8 +696,8 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Trajectory mode: `{'fixed reference replay' if document['configuration']['fixed_token_replay'] else 'natural greedy'}`",  # type: ignore[index]
         "",
         "| Pair | Order | llama ms/token | llama t/s | LiteNN ms/token | LiteNN t/s | LiteNN delta | "
-        "llama MHz | LiteNN MHz | Trajectory parity |",
-        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "llama MHz | LiteNN MHz | Policy stable | Trajectory parity |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for pair in document["pairs"]:  # type: ignore[union-attr]
         llama = pair["llama_cpp"]
@@ -710,7 +716,8 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"{llama['ms_per_token']:.3f} | {llama['tokens_per_second']:.3f} | "
             f"{litenn['ms_per_token']:.3f} | {litenn['tokens_per_second']:.3f} | "
             f"{pair['litenn_vs_llama_percent']:+.2f}% | {frequency_value(llama_frequency)} | "
-            f"{frequency_value(litenn_frequency)} | {pair['trajectory_match']} |"
+            f"{frequency_value(litenn_frequency)} | {pair['power_policy_stable']} | "
+            f"{pair['trajectory_match']} |"
         )
     lines.extend(
         [
@@ -727,6 +734,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"- Trajectory parity: `{gate['trajectory_parity']}`",  # type: ignore[index]
             f"- Natural sampler parity: `{gate['natural_sampler_parity']}`",  # type: ignore[index]
             f"- No fallback: `{gate['no_fallback']}`",  # type: ignore[index]
+            f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
@@ -955,6 +963,9 @@ def main() -> int:
         pair["litenn_vs_llama_percent"] = (
             float(litenn_result["tokens_per_second"]) / float(llama["tokens_per_second"]) - 1.0  # type: ignore[index]
         ) * 100.0
+        pair["power_policy_stable"] = process_power_policy_stable(llama["process"]) and process_power_policy_stable(  # type: ignore[index]
+            litenn_result["process"]  # type: ignore[index]
+        )
         if document["configuration"]["prompt_tokens"] is None:  # type: ignore[index]
             document["configuration"]["prompt_tokens"] = llama["prompt_tokens"]  # type: ignore[index]
             document["configuration"]["eval_tokens"] = llama["eval_tokens"]  # type: ignore[index]
@@ -1011,9 +1022,15 @@ def main() -> int:
             else all(bool(pair["text_match"]) for pair in pairs)  # type: ignore[index]
         ),
         "no_fallback": all(not bool(pair["litenn"]["fallback_used"]) for pair in pairs),  # type: ignore[index]
+        "power_policy_stability": all(bool(pair["power_policy_stable"]) for pair in pairs),
         "variance": variance_passed,
     }
-    gate["accepted"] = bool(gate["trajectory_parity"] and gate["no_fallback"] and gate["variance"])
+    gate["accepted"] = bool(
+        gate["trajectory_parity"]
+        and gate["no_fallback"]
+        and gate["power_policy_stability"]
+        and gate["variance"]
+    )
     document["summary"] = summary
     document["gate"] = gate
     document["status"] = "complete"
@@ -1027,6 +1044,8 @@ def main() -> int:
         f"variance_gate={variance_passed}",
         file=sys.stderr,
     )
+    if not gate["power_policy_stability"]:
+        return 2
     return 2 if args.require_variance_gate and not variance_passed else 0
 
 

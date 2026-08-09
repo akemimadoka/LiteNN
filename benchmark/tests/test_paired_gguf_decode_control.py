@@ -12,6 +12,7 @@ from run_paired_gguf_decode_control import (  # noqa: E402
     load_tokenizer_token_ids,
     normalize_completion_text,
     parse_forced_replay_metrics,
+    process_power_policy_stable,
     token_ids_identity,
 )
 
@@ -60,6 +61,19 @@ class FixedTokenReplayTest(unittest.TestCase):
 
     def test_normalizes_windows_completion_output_to_model_bytes(self) -> None:
         self.assertEqual(normalize_completion_text("hello\r\nworld\r\n\r\n"), "hello\nworld")
+
+    def test_rejects_in_process_power_policy_transition(self) -> None:
+        stable = {
+            "power_policy_before": {"source": "powercfg", "value": "high-performance"},
+            "power_policy_after": {"source": "powercfg", "value": "high-performance"},
+        }
+        changed = {
+            **stable,
+            "power_policy_after": {"source": "powercfg", "value": "balanced"},
+        }
+        self.assertTrue(process_power_policy_stable(stable))
+        self.assertFalse(process_power_policy_stable(changed))
+        self.assertFalse(process_power_policy_stable({}))
 
 
 if __name__ == "__main__":
