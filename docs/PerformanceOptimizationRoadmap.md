@@ -173,7 +173,7 @@ P0 implementation order:
     - [ ] Obtain the exact external binary or the remaining source/build/runtime differences that produced `6.85 t/s`.
     - [ ] Replay it through the paired runner with `--require-variance-gate`; require two accepted batches before
       treating the result as a stable cross-runtime gap.
-  - [ ] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual boundaries
+  - [x] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual boundaries
     against Clang/no-OpenMP using the same 9-prompt/15-eval window. Repeat against GNU/no-OpenMP to separate compiler
     code generation from OpenMP runtime cost. Promote only the largest statistically accepted LiteNN deficit.
     - [x] Add an out-of-tree llama.cpp stage profiler and paired multi-build runner without linking llama.cpp into
@@ -184,8 +184,12 @@ P0 implementation order:
     - [x] Replace callback differencing with non-synchronizing counters inside the reference CPU graph executor. Exact
       prefill/decode replay, clean-binary overhead accounting, aggregate shape, `95-102%` coverage, and strict variance
       gates are repository-owned. Clang/no-OpenMP passes with `-0.21%` overhead and `0.16-0.98%` stage CV.
-    - [ ] Repeat the accepted aggregate mode against GNU/no-OpenMP to quantify compiler code-generation effects; this
-      is diagnostic and does not block the stronger Clang reference from selecting the Down tranche.
+    - [x] Repeat the accepted five-stage aggregate mode against a freshly paired GNU/no-OpenMP build. Five alternating
+      pairs passed all gates: clean/profile CV `1.46/2.13%`, median instrumentation delta `-1.00%`, `98.64%` coverage,
+      and at most `4.17%` stage CV. GNU measured Attention/Gate-Up/activation/Down/logits at
+      `36.338/70.564/0.196/43.128/11.739 ms/token`; all material stages are within `1.52%` of the non-adjacent Clang
+      campaign, and activation differs by only `0.014 ms`. Compiler choice does not change the P0 owner. Evidence:
+      `docs/QwenCPUDecodeGNUStageControl_2026-08-09.md`.
 - [x] P0: reconcile LiteNN's module non-helper residual before another projection-kernel rewrite.
   - Stable steps 10-24 measured `176.063 ms/token` module time, `164.155 ms` timed helpers, and `11.408 ms` residual.
     The residual is large enough to explain the accepted `~9-10 ms/token` absolute cross-runtime deficit, but currently

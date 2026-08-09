@@ -3344,7 +3344,7 @@ Priority classes:
                         actual frequency in redacted artifacts.
                   - [ ] Obtain the external binary or its remaining exact source/build/runtime differences.
                   - [ ] Require two paired batches to pass the variance, output-parity, and no-fallback gates.
-            - [ ] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual
+            - [x] P0 evidence gate: profile matched Attention, FFN Gate/Up, FFN Down, logits, dispatch, and residual
                   boundaries against Clang/no-OpenMP over the same 9-prompt/15-eval window. Repeat with GNU/no-OpenMP
                   and promote only statistically accepted deficits.
                   - [x] Add and run an out-of-tree paired stage profiler for both no-OpenMP builds. One-sync cumulative
@@ -3353,6 +3353,11 @@ Priority classes:
                         `docs/QwenCPUDecodeStageControl_2026-08-04.md`.
                   - [x] Replace callback differencing with non-synchronizing in-kernel aggregate counters. The accepted
                         Clang/no-OpenMP control measured `-0.21%` overhead, `98.75%` coverage, and `0.16-0.98%` stage CV.
+                  - [x] Repeat the five-stage aggregate control against a freshly paired GNU/no-OpenMP build. Five
+                        alternating pairs passed with clean/profile CV `1.46/2.13%`, `-1.00%` median instrumentation
+                        delta, `98.64%` coverage, and at most `4.17%` stage CV. Attention/Gate-Up/activation/Down/logits
+                        measured `36.338/70.564/0.196/43.128/11.739 ms/token`, confirming that compiler choice does not
+                        change the activation-owned P0. Evidence: `docs/QwenCPUDecodeGNUStageControl_2026-08-09.md`.
             - [ ] Extend paired decode evidence to 128/512 generated-token windows and then 2K/32K/128K/1M context
                   tiers as paged-KV support matures; report sustained throughput, memory residency, and cache growth.
             - [ ] Add optional effective-cycle, LLC-miss, memory-stall, and bandwidth evidence. Windows processor-power
