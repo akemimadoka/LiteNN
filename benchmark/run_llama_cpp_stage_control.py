@@ -14,6 +14,7 @@ try:
     from .run_llama_cpp_completion_control import host_metadata, sha256_file
     from .run_paired_gguf_decode_control import (
         power_policy,
+        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -22,6 +23,7 @@ except ImportError:
     from run_llama_cpp_completion_control import host_metadata, sha256_file
     from run_paired_gguf_decode_control import (
         power_policy,
+        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -36,6 +38,14 @@ SUMMARY_RE = re.compile(
 STAGE_RE = re.compile(
     r"^stage=(?P<stage>\S+) ms_per_token=(?P<ms>[0-9.]+) calls_per_token=(?P<calls>[0-9.]+) "
     r"percent_of_decode=(?P<percent>[0-9.]+)\r?$",
+    re.MULTILINE,
+)
+DECODE_STEP_RE = re.compile(
+    r"^decode_step=(?P<step>\d+) decode_ms=(?P<ms>[0-9.]+)\r?$", re.MULTILINE
+)
+STAGE_STEP_RE = re.compile(
+    r"^stage_step=(?P<step>\d+) stage=(?P<stage>\S+) stage_ms=(?P<ms>[0-9.]+) "
+    r"calls=(?P<calls>\d+)\r?$",
     re.MULTILINE,
 )
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
@@ -71,6 +81,22 @@ def token_ids(raw: str) -> list[int]:
     if not values or any(value < 0 for value in values):
         raise argparse.ArgumentTypeError("token ids must be non-empty and non-negative")
     return values
+
+
+def position_bins(raw: str) -> list[tuple[int, int]]:
+    bins: list[tuple[int, int]] = []
+    expected_start = 1
+    for value in raw.split(","):
+        match = re.fullmatch(r"(?P<start>[1-9]\d*)-(?P<end>[1-9]\d*)", value.strip())
+        if match is None:
+            raise argparse.ArgumentTypeError("position bins must use START-END comma-separated ranges")
+        start = int(match.group("start"))
+        end = int(match.group("end"))
+        if start != expected_start or end < start:
+            raise argparse.ArgumentTypeError("position bins must be ordered, contiguous, and start at 1")
+        bins.append((start, end))
+        expected_start = end + 1
+    return bins
 
 
 def token_ids_digest(values: list[int]) -> str:
@@ -113,6 +139,29 @@ def parse_output(stdout: str, expected_mode: str) -> dict[str, object]:
         }
     if expected_mode != "baseline" and not stages:
         raise RuntimeError(f"profile mode {expected_mode!r} reported no stages")
+    decode_steps = {
+        int(step_match.group("step")): float(step_match.group("ms"))
+        for step_match in DECODE_STEP_RE.finditer(stdout)
+    }
+    if decode_steps and sorted(decode_steps) != list(range(1, int(match.group("steps")) + 1)):
+        raise RuntimeError("decode-step records are not contiguous")
+    stage_steps: dict[int, dict[str, dict[str, float | int]]] = {}
+    for step_match in STAGE_STEP_RE.finditer(stdout):
+        step = int(step_match.group("step"))
+        stage = step_match.group("stage")
+        step_stages = stage_steps.setdefault(step, {})
+        if stage in step_stages:
+            raise RuntimeError(f"duplicate stage-step record for step {step}, stage {stage!r}")
+        step_stages[stage] = {
+            "ms": float(step_match.group("ms")),
+            "calls": int(step_match.group("calls")),
+        }
+    if stage_steps:
+        expected_steps = list(range(1, int(match.group("steps")) + 1))
+        if sorted(stage_steps) != expected_steps:
+            raise RuntimeError("stage-step records are not contiguous")
+        if any(set(step_stages) != AGGREGATE_STAGES for step_stages in stage_steps.values()):
+            raise RuntimeError("stage-step records do not contain the aggregate stage set")
     return {
         "mode": match.group("mode"),
         "threads": int(match.group("threads")),
@@ -121,6 +170,10 @@ def parse_output(stdout: str, expected_mode: str) -> dict[str, object]:
         "mean_decode_ms": float(match.group("mean_ms")),
         "tokens_per_second": float(match.group("tps")),
         "stages": stages,
+        "decode_steps": [decode_steps[step] for step in sorted(decode_steps)],
+        "stage_steps": [
+            {"step": step, "stages": stage_steps[step]} for step in sorted(stage_steps)
+        ],
     }
 
 
@@ -167,7 +220,76 @@ def run_profile(
     return {"process": process, "metrics": metrics}
 
 
-def normalize_pair(baseline: dict[str, object], profile: dict[str, object]) -> dict[str, object]:
+def normalize_position_bins(
+    baseline: dict[str, object],
+    profile: dict[str, object],
+    bins: list[tuple[int, int]],
+) -> list[dict[str, object]]:
+    baseline_steps = baseline["metrics"]["decode_steps"]  # type: ignore[index]
+    profile_steps = profile["metrics"]["decode_steps"]  # type: ignore[index]
+    profile_stage_steps = profile["metrics"]["stage_steps"]  # type: ignore[index]
+    if not baseline_steps or not profile_steps or not profile_stage_steps:
+        raise RuntimeError("position bins require decode-step and aggregate stage-step records")
+    if len(baseline_steps) != len(profile_steps) or len(profile_steps) != len(profile_stage_steps):
+        raise RuntimeError("baseline/profile position-step counts differ")
+    if bins[-1][1] != len(baseline_steps):
+        raise RuntimeError("position bins must cover every measured decode step")
+
+    result: list[dict[str, object]] = []
+    for start, end in bins:
+        count = end - start + 1
+        baseline_ms = sum(float(value) for value in baseline_steps[start - 1 : end]) / count
+        profile_ms = sum(float(value) for value in profile_steps[start - 1 : end]) / count
+        scale = baseline_ms / profile_ms
+        stage_names = set.intersection(
+            *(
+                set(step["stages"])  # type: ignore[index]
+                for step in profile_stage_steps[start - 1 : end]
+            )
+        )
+        stages: dict[str, object] = {}
+        for stage in sorted(stage_names):
+            raw_ms = (
+                sum(
+                    float(step["stages"][stage]["ms"])  # type: ignore[index]
+                    for step in profile_stage_steps[start - 1 : end]
+                )
+                / count
+            )
+            calls = (
+                sum(
+                    float(step["stages"][stage]["calls"])  # type: ignore[index]
+                    for step in profile_stage_steps[start - 1 : end]
+                )
+                / count
+            )
+            stages[stage] = {
+                "ms_per_token": raw_ms * scale,
+                "raw_ms_per_token": raw_ms,
+                "calls_per_token": calls,
+            }
+        result.append(
+            {
+                "start": start,
+                "end": end,
+                "baseline_ms_per_token": baseline_ms,
+                "profile_ms_per_token": profile_ms,
+                "profile_overhead_percent": (profile_ms / baseline_ms - 1.0) * 100.0,
+                "normalization_scale": scale,
+                "normalized_stages": stages,
+                "stage_coverage_percent": 100.0
+                * sum(float(stage["raw_ms_per_token"]) for stage in stages.values())
+                / profile_ms,
+            }
+        )
+    return result
+
+
+def normalize_pair(
+    baseline: dict[str, object],
+    profile: dict[str, object],
+    bins: list[tuple[int, int]] | None = None,
+) -> dict[str, object]:
     baseline_ms = float(baseline["metrics"]["mean_decode_ms"])  # type: ignore[index]
     profile_ms = float(profile["metrics"]["mean_decode_ms"])  # type: ignore[index]
     scale = baseline_ms / profile_ms
@@ -180,7 +302,7 @@ def normalize_pair(baseline: dict[str, object], profile: dict[str, object]) -> d
         }
         for name, stage in stages.items()  # type: ignore[union-attr]
     }
-    return {
+    result = {
         "baseline": baseline,
         "profile": profile,
         "profile_overhead_percent": (profile_ms / baseline_ms - 1.0) * 100.0,
@@ -190,6 +312,8 @@ def normalize_pair(baseline: dict[str, object], profile: dict[str, object]) -> d
         * sum(float(stage["raw_ms_per_token"]) for stage in normalized_stages.values())
         / profile_ms,
     }
+    result["position_bins"] = normalize_position_bins(baseline, profile, bins) if bins else []
+    return result
 
 
 def summarize_pairs(name: str, mode: str, pairs: list[dict[str, object]]) -> dict[str, object]:
@@ -216,6 +340,43 @@ def summarize_pairs(name: str, mode: str, pairs: list[dict[str, object]]) -> dic
         for stage in stage_names
     }
     coverage_values = [float(pair["stage_coverage_percent"]) for pair in pairs]
+    position_bin_summaries: list[dict[str, object]] = []
+    if pairs[0]["position_bins"]:
+        bin_count = len(pairs[0]["position_bins"])  # type: ignore[arg-type]
+        if any(len(pair["position_bins"]) != bin_count for pair in pairs):  # type: ignore[arg-type]
+            raise RuntimeError("position-bin count differs across repetitions")
+        for bin_index in range(bin_count):
+            bin_values = [pair["position_bins"][bin_index] for pair in pairs]  # type: ignore[index]
+            stage_names_for_bin = sorted(
+                set.intersection(*(set(value["normalized_stages"]) for value in bin_values))  # type: ignore[arg-type]
+            )
+            position_bin_summaries.append(
+                {
+                    "start": bin_values[0]["start"],  # type: ignore[index]
+                    "end": bin_values[0]["end"],  # type: ignore[index]
+                    "baseline_ms_per_token": series_statistics(
+                        [float(value["baseline_ms_per_token"]) for value in bin_values]  # type: ignore[index]
+                    ),
+                    "profile_ms_per_token": series_statistics(
+                        [float(value["profile_ms_per_token"]) for value in bin_values]  # type: ignore[index]
+                    ),
+                    "profile_overhead_percent": series_statistics(
+                        [float(value["profile_overhead_percent"]) for value in bin_values]  # type: ignore[index]
+                    ),
+                    "stage_coverage_percent": series_statistics(
+                        [float(value["stage_coverage_percent"]) for value in bin_values]  # type: ignore[index]
+                    ),
+                    "normalized_stages": {
+                        stage: series_statistics(
+                            [
+                                float(value["normalized_stages"][stage]["ms_per_token"])  # type: ignore[index]
+                                for value in bin_values
+                            ]
+                        )
+                        for stage in stage_names_for_bin
+                    },
+                }
+            )
     return {
         "binary": name,
         "mode": mode,
@@ -226,6 +387,7 @@ def summarize_pairs(name: str, mode: str, pairs: list[dict[str, object]]) -> dic
         "profile_weighted_actual_mhz": series_statistics(profile_frequency) if profile_frequency else None,
         "normalized_stages": stages,
         "stage_coverage_percent": series_statistics(coverage_values),
+        "position_bins": position_bin_summaries,
     }
 
 
@@ -239,6 +401,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Threads: `{configuration['threads']}`",  # type: ignore[index]
         f"- Warmup/steps: `{configuration['warmup']}/{configuration['steps']}`",  # type: ignore[index]
         f"- Repetitions: `{configuration['repetitions']}`",  # type: ignore[index]
+        f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
         f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         "",
         "Binaries:",
@@ -287,6 +450,37 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             lines.append(
                 f"| {stage} | {stats['median']:.3f} | {stats['coefficient_of_variation_percent']:.2f}% |"
             )
+        if summary["position_bins"]:
+            lines.extend(
+                [
+                    "",
+                    "### Position bins",
+                    "",
+                    "| Positions | Baseline ms | Profile ms | Overhead | Coverage |",
+                    "| --- | ---: | ---: | ---: | ---: |",
+                ]
+            )
+            for position_bin in summary["position_bins"]:
+                lines.append(
+                    f"| {position_bin['start']}-{position_bin['end']} | "
+                    f"{position_bin['baseline_ms_per_token']['median']:.3f} | "
+                    f"{position_bin['profile_ms_per_token']['median']:.3f} | "
+                    f"{position_bin['profile_overhead_percent']['median']:.2f}% | "
+                    f"{position_bin['stage_coverage_percent']['median']:.2f}% |"
+                )
+            lines.extend(
+                [
+                    "",
+                    "| Positions | Stage | Median ms/token | CV |",
+                    "| --- | --- | ---: | ---: |",
+                ]
+            )
+            for position_bin in summary["position_bins"]:
+                for stage, stats in position_bin["normalized_stages"].items():
+                    lines.append(
+                        f"| {position_bin['start']}-{position_bin['end']} | {stage} | "
+                        f"{stats['median']:.3f} | {stats['coefficient_of_variation_percent']:.2f}% |"
+                    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -312,6 +506,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--repetitions", default=3, type=positive_int)
     parser.add_argument("--prefill-token-ids", type=token_ids)
     parser.add_argument("--decode-token-ids", type=token_ids)
+    parser.add_argument(
+        "--position-bins",
+        type=position_bins,
+        help="Contiguous one-based decode-step ranges, for example 1-16,17-48,49-80,81-112,113-128",
+    )
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--stage-variance-threshold-percent", default=15.0, type=positive_float)
     parser.add_argument("--overhead-threshold-percent", default=3.0, type=positive_float)
@@ -347,6 +546,11 @@ def main() -> int:
     ]
     if invalid_modes:
         raise SystemExit(f"invalid profile modes: {', '.join(invalid_modes)}")
+    if args.position_bins is not None:
+        if modes != ["aggregate"]:
+            raise SystemExit("--position-bins requires exactly one --mode aggregate")
+        if args.position_bins[-1][1] != args.steps:
+            raise SystemExit("--position-bins must cover exactly --steps decode steps")
     output_json = args.output_json.resolve()
     output_json.parent.mkdir(parents=True, exist_ok=True)
     replacements = {str(model): "<model>", str(Path.cwd()): "<repo>"}
@@ -384,6 +588,11 @@ def main() -> int:
             "steps": args.steps,
             "repetitions": args.repetitions,
             "modes": modes,
+            "position_bins": (
+                [{"start": start, "end": end} for start, end in args.position_bins]
+                if args.position_bins is not None
+                else []
+            ),
             "variance_threshold_percent": args.variance_threshold_percent,
             "stage_variance_threshold_percent": args.stage_variance_threshold_percent,
             "overhead_threshold_percent": args.overhead_threshold_percent,
@@ -435,7 +644,7 @@ def main() -> int:
                             artifact_prefix,
                             replacements,
                         )
-                    pair = normalize_pair(runs["baseline"], runs[mode])
+                    pair = normalize_pair(runs["baseline"], runs[mode], args.position_bins)
                     pair.update(
                         {
                             "repetition": repetition,
@@ -485,6 +694,35 @@ def main() -> int:
         <= args.maximum_stage_coverage_percent
         for summary in summaries
     )
+    position_bin_variance_ok = all(
+        stats["coefficient_of_variation_percent"] <= args.variance_threshold_percent
+        for summary in summaries
+        for position_bin in summary["position_bins"]
+        for stats in (position_bin["baseline_ms_per_token"], position_bin["profile_ms_per_token"])
+    )
+    position_bin_stage_variance_ok = all(
+        stats["coefficient_of_variation_percent"] <= args.stage_variance_threshold_percent
+        for summary in summaries
+        for position_bin in summary["position_bins"]
+        for stats in position_bin["normalized_stages"].values()
+    )
+    position_bin_overhead_ok = all(
+        abs(position_bin["profile_overhead_percent"]["median"]) <= args.overhead_threshold_percent
+        for summary in summaries
+        for position_bin in summary["position_bins"]
+    )
+    position_bin_coverage_ok = all(
+        args.minimum_stage_coverage_percent
+        <= position_bin["stage_coverage_percent"]["median"]
+        <= args.maximum_stage_coverage_percent
+        for summary in summaries
+        for position_bin in summary["position_bins"]
+    )
+    power_policy_stability_ok = all(
+        process_power_policy_stable(pair[run]["process"])
+        for pair in document["pairs"]  # type: ignore[union-attr]
+        for run in ("baseline", "profile")
+    )
     document["summaries"] = summaries
     document["gate"] = {
         "variance": variance_ok,
@@ -492,11 +730,21 @@ def main() -> int:
         "profile_overhead": overhead_ok,
         "aggregate_shape": aggregate_shape_ok,
         "stage_coverage": stage_coverage_ok,
+        "position_bin_variance": position_bin_variance_ok,
+        "position_bin_stage_variance": position_bin_stage_variance_ok,
+        "position_bin_profile_overhead": position_bin_overhead_ok,
+        "position_bin_stage_coverage": position_bin_coverage_ok,
+        "power_policy_stability": power_policy_stability_ok,
         "accepted": variance_ok
         and stage_variance_ok
         and overhead_ok
         and aggregate_shape_ok
-        and stage_coverage_ok,
+        and stage_coverage_ok
+        and position_bin_variance_ok
+        and position_bin_stage_variance_ok
+        and position_bin_overhead_ok
+        and position_bin_coverage_ok
+        and power_policy_stability_ok,
     }
     document["status"] = "complete"
     document["power_policy_after"] = power_policy()

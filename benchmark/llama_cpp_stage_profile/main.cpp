@@ -575,6 +575,9 @@ int main(int argc, char** argv)
 	decodeMilliseconds.reserve(static_cast<std::size_t>(steps));
 #ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
 	ggml_cpu_stage_profile_snapshot aggregateSnapshot{};
+	ggml_cpu_stage_profile_snapshot previousAggregateSnapshot{};
+	std::vector<ggml_cpu_stage_profile_snapshot> aggregateStepSnapshots;
+	aggregateStepSnapshots.reserve(static_cast<std::size_t>(steps));
 #endif
 	for (int index = 0; index < warmup + steps; ++index)
 	{
@@ -608,6 +611,28 @@ int main(int argc, char** argv)
 		if (index >= warmup)
 		{
 			decodeMilliseconds.push_back(std::chrono::duration<double, std::milli>(end - start).count());
+#ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
+			if (mode == ProfileMode::Aggregate)
+			{
+				ggml_cpu_stage_profile_set_enabled(false);
+				ggml_cpu_stage_profile_snapshot currentSnapshot{};
+				ggml_cpu_stage_profile_get_snapshot(&currentSnapshot);
+				ggml_cpu_stage_profile_snapshot stepSnapshot{};
+				for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
+				{
+					stepSnapshot.microseconds[stage] =
+					    currentSnapshot.microseconds[stage] - previousAggregateSnapshot.microseconds[stage];
+					stepSnapshot.segments[stage] =
+					    currentSnapshot.segments[stage] - previousAggregateSnapshot.segments[stage];
+				}
+				aggregateStepSnapshots.push_back(stepSnapshot);
+				previousAggregateSnapshot = currentSnapshot;
+				if (index + 1 < warmup + steps)
+				{
+					ggml_cpu_stage_profile_set_enabled(true);
+				}
+			}
+#endif
 		}
 	}
 #ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
@@ -621,6 +646,10 @@ int main(int argc, char** argv)
 	const double totalMilliseconds = std::accumulate(decodeMilliseconds.begin(), decodeMilliseconds.end(), 0.0);
 	std::printf("mode=%s threads=%d warmup=%d steps=%d mean_decode_ms=%.6f tokens_per_second=%.6f\n", argv[2], threads,
 	            warmup, steps, totalMilliseconds / steps, 1000.0 * steps / totalMilliseconds);
+	for (std::size_t step = 0; step < decodeMilliseconds.size(); ++step)
+	{
+		std::printf("decode_step=%zu decode_ms=%.6f\n", step + 1, decodeMilliseconds[step]);
+	}
 	for (const auto& [stage, stats] : callbackState.totals)
 	{
 		std::printf("stage=%s ms_per_token=%.6f calls_per_token=%.3f percent_of_decode=%.3f\n", stage.c_str(),
@@ -634,12 +663,31 @@ int main(int argc, char** argv)
 			"attention", "ffn.gate_up", "ffn.activation", "ffn.down", "logits",
 		};
 		static_assert(sizeof(stageNames) / sizeof(*stageNames) == GGML_CPU_STAGE_PROFILE_COUNT);
+		if (aggregateStepSnapshots.size() != decodeMilliseconds.size())
+		{
+			std::fprintf(stderr, "aggregate step snapshot count mismatch\n");
+			llama_free(context);
+			llama_model_free(model);
+			llama_backend_free();
+			return 1;
+		}
 		for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
 		{
 			const double milliseconds = static_cast<double>(aggregateSnapshot.microseconds[stage]) / 1000.0;
 			std::printf("stage=%s ms_per_token=%.6f calls_per_token=%.3f percent_of_decode=%.3f\n", stageNames[stage],
 			            milliseconds / steps, static_cast<double>(aggregateSnapshot.segments[stage]) / steps,
 			            100.0 * milliseconds / totalMilliseconds);
+		}
+		for (std::size_t step = 0; step < aggregateStepSnapshots.size(); ++step)
+		{
+			for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
+			{
+				const double milliseconds =
+				    static_cast<double>(aggregateStepSnapshots[step].microseconds[stage]) / 1000.0;
+				std::printf("stage_step=%zu stage=%s stage_ms=%.6f calls=%llu\n", step + 1, stageNames[stage],
+				            milliseconds,
+				            static_cast<unsigned long long>(aggregateStepSnapshots[step].segments[stage]));
+			}
 		}
 	}
 #endif
