@@ -3221,7 +3221,9 @@ Priority classes:
       evidence boundaries, conclusions, and ordered gates are in
       `docs/QwenCPUDecodeStageComparison_2026-08-09.md`; the accepted fixed-trajectory 128-token throughput,
       position-growth, and numerical-drift evidence is in
-      `docs/QwenCPUDecodeSustained128Control_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
+      `docs/QwenCPUDecodeSustained128Control_2026-08-09.md`; the position-binned reference-stage data, rejected gates,
+      and resulting LiteNN-first attribution decision are in
+      `docs/QwenCPUDecodePositionStageControl_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
       remains historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
       `5.49%` behind Clang/no-OpenMP. Stable LiteNN accounting measured `176.063 ms/token` module time, `164.155 ms`
       helper time, and an `11.408 ms` non-helper residual. The fresh exact-token non-synchronizing split passes every
@@ -3309,6 +3311,15 @@ Priority classes:
             - [ ] Add accepted position-binned counters to both runtimes and split QKV projection, RoPE/KV append,
                   score-softmax-value, attention output, FFN, logits, and residual before promoting a
                   context-sensitive kernel.
+                  - [x] Add reference-side per-token five-stage counters, configurable bins, and power-policy rejection.
+                        The first three-pair run has exact call shape and `99.53%` aggregate coverage, but is rejected:
+                        whole overhead is `-3.08%`, clean bin CV reaches `7.06%`, and a `0.19 ms` activation bin reaches
+                        `17.01%` CV. Raw Attention/Gate-Up ratios remain within `0.5299-0.5321`, providing no evidence for
+                        a reference Attention-share increase over positions 1-128.
+                  - [ ] Add LiteNN clean/profile bins and separate QKV projection, RoPE/KV append,
+                        score-softmax-value, attention output, Gate/Up, activation, Down, logits, and residual.
+                  - [ ] Add a dual absolute/relative variance gate for sub-millisecond stages and rerun at least five
+                        alternating reference pairs without weakening whole-token or larger-stage gates.
             - [ ] Localize the first natural logit mismatch with per-layer checkpoints. It occurs at generated index
                   23; functional/stateful outputs are bit-identical and source/prepacked outputs are close, excluding
                   those two suspected ownership boundaries.
@@ -3381,8 +3392,8 @@ Priority classes:
                         change the activation-owned P0. Evidence: `docs/QwenCPUDecodeGNUStageControl_2026-08-09.md`.
             - [ ] Extend paired decode evidence through sustained and long-context tiers as paged-KV support matures.
                   - [x] Complete the 128-token fixed-trajectory throughput and variance tier.
-                  - [ ] Reject in-process power-policy changes and record peak working set/private bytes, mapped
-                        weight/artifact residency, and KV-cache bytes.
+                  - [x] Reject in-process power-policy changes in paired decode and reference-stage controls.
+                  - [ ] Record peak working set/private bytes, mapped weight/artifact residency, and KV-cache bytes.
                   - [ ] Complete the 512-token fixed-trajectory tier after position attribution and residency gates.
                   - [ ] Extend to 2K/32K/128K/1M context tiers with paged-KV capacity.
                   - [ ] Add fixed-trajectory logit/layer checkpoints, corpus perplexity, and task-quality checks so
@@ -3823,6 +3834,9 @@ These improvements do not require a compatibility break and should not block vNe
   128-token Qwen pairs. LiteNN/reference medians are `4.768/5.700 token/s`, with a `-15.01%` paired median delta.
 - Separated the confirmed `10.833 ms/token` SwiGLU fixed cost from the context-dependent module slope: LiteNN module
   mean rises from `198.080 ms` at positions 1-16 to `221.030 ms` at positions 113-128.
+- Added per-token reference stage counters, position-bin summaries, and power-policy rejection. The first 128-token
+  stage campaign is intentionally rejected by overhead/variance gates; its stable Attention/Gate-Up ratio does not
+  support selecting generic Attention work before LiteNN's own position-sensitive stages are split.
 - Split long-window performance acceptance from natural greedy fidelity. The first natural mismatch is reproducible at
   generated index 23; position-binned stage attribution and per-layer numerical checkpoints are the next P0 evidence.
 

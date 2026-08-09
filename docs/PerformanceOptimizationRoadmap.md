@@ -44,7 +44,8 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; accepted activation/Down split:
 `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated cross-runtime stage decision:
 `docs/QwenCPUDecodeStageComparison_2026-08-09.md`; accepted sustained 128-token control and position-growth decision:
-`docs/QwenCPUDecodeSustained128Control_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+`docs/QwenCPUDecodeSustained128Control_2026-08-09.md`; position-binned reference-stage evidence and its rejected gates:
+`docs/QwenCPUDecodePositionStageControl_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
 historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
 LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
 `166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
@@ -76,8 +77,20 @@ P0 implementation order:
     exact-token full-model promotion gates before reopening any other implementation direction.
   - [ ] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
     control measures LiteNN/reference medians of `4.768/5.700 token/s` (`-15.01%` paired median); LiteNN module time
-    rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. Add matched position-binned
-    counters before selecting Attention/KV work.
+    rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. The first reference-side
+    position campaign has exact call shape, `99.53%` aggregate coverage, and a stable power policy, but is rejected by
+    the strict overhead/bin-variance gates. Its raw within-profile Attention/Gate-Up ratio stays within
+    `0.5299-0.5321`, so it does not support promoting generic Attention/KV work. Add accepted LiteNN position-binned
+    stage accounting next.
+    - [x] Add benchmark-only per-step reference counters for Attention, Gate/Up, activation, Down, and logits, plus
+      configurable position bins and in-process power-policy rejection.
+    - [x] Run the first three-pair 128-token reference campaign and document the rejected gates separately. Clean and
+      profile CVs pass at `1.16/1.62%`, but whole overhead is `-3.08%`; per-bin clean CV reaches `7.06%` and one
+      sub-millisecond activation bin reaches `17.01%` CV.
+    - [ ] Add LiteNN clean/profile position bins and split QKV projection, RoPE/KV append, score-softmax-value,
+      attention output, Gate/Up, activation, Down, logits, and generated-code residual.
+    - [ ] Add a dual absolute/relative variance rule for sub-millisecond stages and repeat at least five alternating
+      reference pairs without relaxing whole-token or multi-millisecond stage gates.
   - [ ] Localize natural logit drift independently of performance. The first argmax mismatch is reproducible at
     generated index 23; functional/stateful logits are bit-identical and source/prepacked logits are very close, so add
     per-layer hidden-state checkpoints and model-quality gates rather than blaming state aliasing or weight packing.
@@ -86,7 +99,9 @@ P0 implementation order:
     2K/32K/128K/1M context tiers.
     - [x] Add fixed-reference token replay and complete three accepted 128-token pairs with exact forced trajectory,
       no fallback, cache hit, alternating order, and per-runtime CV below 3%.
-    - [ ] Add peak process memory/residency and in-process power-policy stability gates, then run the 512-token tier.
+    - [x] Reject in-process power-policy changes in both paired full-decode and reference-stage controls.
+    - [ ] Add peak process memory/residency, mapped artifact/weight residency, and KV-cache byte gates, then run the
+      512-token tier only after LiteNN position attribution passes.
 
 - [x] Build a cache-cold GGML projection-stream benchmark.
   - `GGMLFieldInterleavedV4ColdProjectionStream` covers isolated Q4_K/Q6_K `13824 -> 5120` Down streams, the observed
