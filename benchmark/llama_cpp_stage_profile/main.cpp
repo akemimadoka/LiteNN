@@ -630,9 +630,10 @@ int main(int argc, char** argv)
 #ifdef LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS
 	if (mode == ProfileMode::Aggregate)
 	{
-		const char* stageNames[GGML_CPU_STAGE_PROFILE_COUNT] = {
+		const char* stageNames[] = {
 			"attention", "ffn.gate_up", "ffn.activation", "ffn.down", "logits",
 		};
+		static_assert(sizeof(stageNames) / sizeof(*stageNames) == GGML_CPU_STAGE_PROFILE_COUNT);
 		for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
 		{
 			const double milliseconds = static_cast<double>(aggregateSnapshot.microseconds[stage]) / 1000.0;

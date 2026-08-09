@@ -23,6 +23,13 @@ file(READ "${LLAMA_CPP_SOURCE_DIR}/ggml/include/ggml-cpu.h" GGML_CPU_HEADER)
 string(FIND "${GGML_CPU_HEADER}" "ggml_cpu_stage_profile_set_enabled" GGML_CPU_STAGE_COUNTER_POSITION)
 if(NOT GGML_CPU_STAGE_COUNTER_POSITION EQUAL -1)
     set(LITENN_LLAMA_CPP_HAS_STAGE_COUNTERS ON)
+    string(FIND "${GGML_CPU_HEADER}" "GGML_CPU_STAGE_PROFILE_FFN_ACTIVATION" GGML_CPU_STAGE_ACTIVATION_POSITION)
+    if(GGML_CPU_STAGE_ACTIVATION_POSITION EQUAL -1)
+        message(FATAL_ERROR
+            "The instrumented llama.cpp tree uses the legacy four-stage counter ABI. "
+            "Regenerate it with prepare_instrumented_source.py before configuring this profiler."
+        )
+    endif()
 endif()
 
 add_executable(litenn_llama_cpp_stage_profile main.cpp)
