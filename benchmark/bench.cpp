@@ -41,6 +41,8 @@
 using namespace LiteNN;
 
 #ifdef LITENN_BENCH_HAS_AOT
+extern "C" void ggml_vec_swiglu_f32(int n, float* y, const float* x, const float* g);
+
 extern "C" void
 litenn_cpu_ggml_block_matmul_f32(const float*, const float* lhsAligned, std::int64_t lhsOffset, std::int64_t lhsRows,
                                  std::int64_t lhsColumns, std::int64_t lhsRowStride, std::int64_t lhsColumnStride,
@@ -1700,12 +1702,28 @@ namespace
 		state.counters["threads"] = benchmark::Counter(static_cast<double>(threadCount));
 	}
 
+	enum class SwiGLUBenchmarkMathPolicy
+	{
+		StrictStdExp,
+		GGMLBoundedApproximate,
+	};
+
 	void BMSwiGLUF32ProductionSequence(benchmark::State& state, std::size_t width, std::size_t callCount,
-	                                   std::int64_t columnStride)
+	                                   std::int64_t columnStride, SwiGLUBenchmarkMathPolicy mathPolicy)
 	{
 		if (width == 0 || callCount == 0 || columnStride <= 0)
 		{
 			state.SkipWithError("SwiGLU production sequence requires positive dimensions and stride");
+			return;
+		}
+		if (mathPolicy == SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate && columnStride != 1)
+		{
+			state.SkipWithError("GGML SwiGLU comparison requires contiguous inputs");
+			return;
+		}
+		if (width > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+		{
+			state.SkipWithError("GGML SwiGLU comparison width exceeds its int ABI");
 			return;
 		}
 		const auto stride = static_cast<std::size_t>(columnStride);
@@ -1730,12 +1748,22 @@ namespace
 		const auto invoke = [&] {
 			for (std::size_t call = 0; call < callCount; ++call)
 			{
-				const auto offset = static_cast<std::int64_t>(call * rowStorage);
-				litenn_cpu_swiglu_f32(nullptr, gate.data(), offset, 1, static_cast<std::int64_t>(width),
-				                      static_cast<std::int64_t>(rowStorage), columnStride, nullptr, up.data(), offset,
-				                      1, static_cast<std::int64_t>(width), static_cast<std::int64_t>(rowStorage),
-				                      columnStride, nullptr, output.data(), offset, 1, static_cast<std::int64_t>(width),
-				                      static_cast<std::int64_t>(rowStorage), columnStride);
+				const auto base = call * rowStorage;
+				if (mathPolicy == SwiGLUBenchmarkMathPolicy::StrictStdExp)
+				{
+					const auto offset = static_cast<std::int64_t>(base);
+					litenn_cpu_swiglu_f32(nullptr, gate.data(), offset, 1, static_cast<std::int64_t>(width),
+					                      static_cast<std::int64_t>(rowStorage), columnStride, nullptr, up.data(),
+					                      offset, 1, static_cast<std::int64_t>(width),
+					                      static_cast<std::int64_t>(rowStorage), columnStride, nullptr, output.data(),
+					                      offset, 1, static_cast<std::int64_t>(width),
+					                      static_cast<std::int64_t>(rowStorage), columnStride);
+				}
+				else
+				{
+					ggml_vec_swiglu_f32(static_cast<int>(width), output.data() + base, gate.data() + base,
+					                    up.data() + base);
+				}
 			}
 		};
 
@@ -1760,11 +1788,20 @@ namespace
 			                          std::numeric_limits<float>::quiet_NaN() };
 		const std::array specialUp{ 1.0F, -1.0F, 1.0F, 1.0F, 1.0F };
 		std::array<float, specialGate.size()> specialOutput{};
-		litenn_cpu_swiglu_f32(nullptr, specialGate.data(), 0, 1, static_cast<std::int64_t>(specialGate.size()),
-		                      static_cast<std::int64_t>(specialGate.size()), 1, nullptr, specialUp.data(), 0, 1,
-		                      static_cast<std::int64_t>(specialUp.size()), static_cast<std::int64_t>(specialUp.size()),
-		                      1, nullptr, specialOutput.data(), 0, 1, static_cast<std::int64_t>(specialOutput.size()),
-		                      static_cast<std::int64_t>(specialOutput.size()), 1);
+		if (mathPolicy == SwiGLUBenchmarkMathPolicy::StrictStdExp)
+		{
+			litenn_cpu_swiglu_f32(nullptr, specialGate.data(), 0, 1, static_cast<std::int64_t>(specialGate.size()),
+			                      static_cast<std::int64_t>(specialGate.size()), 1, nullptr, specialUp.data(), 0, 1,
+			                      static_cast<std::int64_t>(specialUp.size()),
+			                      static_cast<std::int64_t>(specialUp.size()), 1, nullptr, specialOutput.data(), 0, 1,
+			                      static_cast<std::int64_t>(specialOutput.size()),
+			                      static_cast<std::int64_t>(specialOutput.size()), 1);
+		}
+		else
+		{
+			ggml_vec_swiglu_f32(static_cast<int>(specialGate.size()), specialOutput.data(), specialGate.data(),
+			                    specialUp.data());
+		}
 		std::size_t specialValueMismatches = 0;
 		for (std::size_t i = 0; i < specialGate.size(); ++i)
 		{
@@ -1791,6 +1828,8 @@ namespace
 		state.counters["calls_per_iteration"] = benchmark::Counter(static_cast<double>(callCount));
 		state.counters["column_stride"] = benchmark::Counter(static_cast<double>(columnStride));
 		state.counters["elements_per_call"] = benchmark::Counter(static_cast<double>(width));
+		state.counters["approximate_math"] =
+		    benchmark::Counter(mathPolicy == SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate ? 1.0 : 0.0);
 		state.counters["max_abs_delta"] = benchmark::Counter(maxAbsDelta);
 		state.counters["max_relative_delta"] = benchmark::Counter(maxRelativeDelta);
 		state.counters["special_value_mismatches"] = benchmark::Counter(static_cast<double>(specialValueMismatches));
@@ -5311,10 +5350,20 @@ namespace
 				    std::format("SwiGLUF32ProductionSequence/strict_std_exp/{}/calls:{}/width:13824", layoutName,
 				                callCount),
 				    [callCount, columnStride](benchmark::State& state) {
-					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride);
+					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride,
+					                                  SwiGLUBenchmarkMathPolicy::StrictStdExp);
 				    });
 				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
+			auto* ggmlComparison = benchmark::RegisterBenchmark(
+			    std::format(
+			        "SwiGLUF32ProductionSequence/third_party_ggml_bounded_1p5ulp/contiguous/calls:{}/width:13824",
+			        callCount),
+			    [callCount](benchmark::State& state) {
+				    BMSwiGLUF32ProductionSequence(state, 13824, callCount, 1,
+				                                  SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate);
+			    });
+			ggmlComparison->Unit(benchmark::kMillisecond);
 		}
 		const auto registerProjectionStream =
 		    [projectionStreamThreadCount](std::string_view name, std::span<const QuantizedBlockFormat> formats,
