@@ -3215,8 +3215,9 @@ Priority classes:
       evidence is recorded separately in `docs/QwenCPUDecodeProjectionProfile_2026-08-04.md`; controlled build/runtime
       evidence is in `docs/QwenCPUDecodeBuildControl_2026-08-04.md`; low-overhead matched-stage evidence is in
       `docs/QwenCPUDecodeStageControl_2026-08-04.md`; the completed Down experiment and FFN re-ranking are in
-      `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. The earlier GNU/OpenMP stage attribution remains
-      historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
+      `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact-root-cause and production-shape
+      SwiGLU evidence is in `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`. The earlier GNU/OpenMP stage attribution
+      remains historical and no longer selects implementation work. The accepted stronger paired control places LiteNN
       `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut run reproduced the reference near `166 ms/token`, but its
       `10.53-82.51%` stage CV rejected fine attribution. Stable LiteNN accounting measured `176.063 ms/token` module
       time, `164.155 ms` helper time, and an `11.408 ms` non-helper residual. The replacement exact-token,
@@ -3263,6 +3264,22 @@ Priority classes:
             - [x] Mark only single-consumer SwiGLU values that are not public results before bufferization.
             - [x] Lower the marked pair to the fused field-v4 Q4_K/Q6_K runtime helper and verify object imports.
             - [x] Pass runtime, artifact-load, and AOT execution parity and complete a paired mixed-format cold stream.
+            - [x] Add a real mixed Q4_K/Q6_K importer regression. It proves a source-layout plan can emit seven
+                  field-interleaved-v4 weights and the fused helper, then load and run. The missing production fusion
+                  was a stale cache-v2 artifact, so CPU AOT cache version 3 invalidates it; grouped quantized remapping
+                  exposed by the regression is also complete.
+            - [x] Add strict production-shape standalone SwiGLU rows for width 13824, 1/48 calls, and contiguous/stride-2
+                  layouts. The 48-call means are `13.3/13.5 ms`, zero numerical/special-value mismatches, and only about
+                  `1.5%` layout difference, selecting vector exponential math over layout or dispatch work.
+      - [ ] Split the controlled reference's SwiGLU activation from Q4_K/Q6_K Down with non-synchronizing aggregate
+            counters before promoting another projection rewrite. Preserve the accepted overhead, coverage, and CV
+            gates.
+      - [ ] Evaluate exact SIMD exponential/SwiGLU first, preserving strict finite, signed-zero, NaN, and infinity
+            behavior. If it cannot clear the standalone gate, evaluate approximation only as a separately named policy
+            with an explicit numerical and saturation contract.
+      - [ ] Promote a candidate to full Qwen decode only after the 48-call row improves by at least `2x` or `5 ms`.
+            Retention requires three alternating cache-hit pairs, at least `3%` median token-latency gain, identical
+            token ids/text, no fallback, and a regenerated cache-v3 artifact that imports the intended helper.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were

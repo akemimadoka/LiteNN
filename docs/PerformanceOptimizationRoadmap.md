@@ -269,18 +269,22 @@ P0 implementation order:
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
 - [ ] P0 active: split and reduce the FFN activation/Down composite deficit.
-  - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`. Do not reopen a projection
+  - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact evidence and
+    production-shape SwiGLU measurements: `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`. Do not reopen a projection
     microkernel branch until the reference-side activation cost is separated or PMU evidence selects that branch.
   - [ ] Split llama.cpp SwiGLU from Q4_K/Q6_K Down with the accepted non-synchronizing aggregate-counter method.
     Preserve at most `3%` instrumentation overhead, `95-102%` coverage, at most `3%` whole-run CV, and at most `15%`
     CV for every promoted substage.
-  - [ ] Add an imported-plan and generated-artifact fusion regression. The profiled real artifact called standalone
-    `litenn_cpu_swiglu_f32` 48 times and never imported the fused field-v4 helper. Prove whether source-layout gating
-    prevents fusion when field-interleaved-v4 is selected only as the prepared layout, then key the contract to the
-    layout actually emitted.
-  - [ ] Add production-shaped standalone and fused SwiGLU benchmark rows that report scalar/SIMD math policy,
-    contiguous/strided layout, calls, elements, latency, throughput, maximum absolute/relative error, and special-value
-    behavior.
+  - [x] Add an imported-plan and generated-artifact fusion regression. A fresh mixed Q4_K/Q6_K imported plan retains
+    seven `Source` projections but emits seven field-v4 external weights, imports the fused helper, omits standalone
+    SwiGLU, loads, and runs. This disproved source-layout gating. The real profile used a stale cache-v2 artifact because
+    SwiGLU fusion had landed without a cache-version bump; cache version 3 now invalidates it. The regression also
+    exposed and closed grouped-quantized consumer accounting/remapping in `FusionPass`.
+  - [x] Add the production-shaped standalone SwiGLU benchmark row with scalar math-policy naming,
+    contiguous/stride-2 layouts, 1/48 calls, width 13824, latency, throughput, maximum absolute/relative error, and
+    signed-zero/NaN/infinity behavior. Five strict `std::exp` repetitions measured `13.3 ms` mean for 48 contiguous
+    calls and `13.5 ms` for stride 2, both with zero error/mismatches. The fused cold-stream row already exists and was
+    neutral within noise; it remains projection-stream evidence rather than a vector-math benchmark.
   - [ ] Evaluate an exact SIMD SwiGLU path before approximate math. If scalar `std::exp` remains dominant, evaluate a
     separately named bounded fast-exp policy with an explicit numerical contract; never silently change the strict
     helper's semantics.

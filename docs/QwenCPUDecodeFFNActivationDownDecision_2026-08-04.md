@@ -98,19 +98,14 @@ vector-math/projection kernel.
 
 The accepted real Qwen helper profile reports 48 calls to `litenn_cpu_swiglu_f32` per token and no calls to
 `litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32`. Thus the profiled production artifact did not use
-the already implemented fusion helper. This is an artifact fact, not yet a root-cause proof.
+the already implemented fusion helper.
 
-The source audit found a likely contract mismatch:
-
-- `getFusableSwiGLUDownConsumer` requires the plan node's source `storageLayout` to already be
-  `GGMLFieldInterleavedV4`;
-- the selected prepared layout is attached later while emitting the quantized MatMul;
-- imported graphs may retain source GGML storage in the plan and select field-interleaved-v4 only during AOT
-  preparation.
-
-The next implementation must first add a real imported-plan/artifact regression that proves this condition is the
-reason fusion is absent. The fix must key fusion eligibility to the prepared layout actually emitted, not assume the
-source layout. A symbol/IR assertion must prevent a synthetic graph from being mistaken for production coverage.
+Follow-up evidence on 2026-08-09 disproved the source-layout-gating hypothesis recorded by the first audit. A fresh
+mixed Q4_K/Q6_K imported plan retains `Source` layouts yet emits seven field-interleaved-v4 external weights, imports
+the fused helper, omits standalone SwiGLU, and executes after loading. The actual cause was an unchanged CPU AOT cache
+version: pre-fusion version-2 objects remained valid hits after fusion lowering landed. Cache version 3 now invalidates
+those objects, and `FusionPass` also remaps grouped quantized projections discovered by the importer regression. See
+`QwenCPUDecodeSwiGLUEvidence_2026-08-09.md` for the corrected root cause and production-shape activation benchmark.
 
 ## Source-Level Activation Candidate
 
