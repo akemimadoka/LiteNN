@@ -631,10 +631,7 @@ int main(int argc, char** argv)
 	if (mode == ProfileMode::Aggregate)
 	{
 		const char* stageNames[GGML_CPU_STAGE_PROFILE_COUNT] = {
-			"attention",
-			"ffn.gate_up",
-			"ffn.down",
-			"logits",
+			"attention", "ffn.gate_up", "ffn.activation", "ffn.down", "logits",
 		};
 		for (int stage = 0; stage < GGML_CPU_STAGE_PROFILE_COUNT; ++stage)
 		{

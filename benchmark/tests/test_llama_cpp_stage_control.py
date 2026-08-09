@@ -24,7 +24,8 @@ class LlamaCppStageControlTest(unittest.TestCase):
 mode=aggregate threads=8 warmup=9 steps=15 mean_decode_ms=155.500000 tokens_per_second=6.430868
 stage=attention ms_per_token=34.250000 calls_per_token=49.000 percent_of_decode=22.026
 stage=ffn.gate_up ms_per_token=67.250000 calls_per_token=48.000 percent_of_decode=43.248
-stage=ffn.down ms_per_token=41.250000 calls_per_token=48.000 percent_of_decode=26.527
+stage=ffn.activation ms_per_token=0.750000 calls_per_token=48.000 percent_of_decode=0.482
+stage=ffn.down ms_per_token=40.500000 calls_per_token=48.000 percent_of_decode=26.045
 stage=logits ms_per_token=10.800000 calls_per_token=1.000 percent_of_decode=6.945
 """
         metrics = parse_output(output, "aggregate")
@@ -43,7 +44,8 @@ stage=logits ms_per_token=10.800000 calls_per_token=1.000 percent_of_decode=6.94
                 "stages": {
                     "attention": {"ms_per_token": 30.0, "calls_per_token": 49.0},
                     "ffn.gate_up": {"ms_per_token": 65.0, "calls_per_token": 48.0},
-                    "ffn.down": {"ms_per_token": 40.0, "calls_per_token": 48.0},
+                    "ffn.activation": {"ms_per_token": 1.0, "calls_per_token": 48.0},
+                    "ffn.down": {"ms_per_token": 39.0, "calls_per_token": 48.0},
                     "logits": {"ms_per_token": 12.0, "calls_per_token": 1.0},
                 },
             },

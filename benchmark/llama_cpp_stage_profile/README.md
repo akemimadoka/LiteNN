@@ -3,7 +3,8 @@
 This tool measures coarse CPU decode stages without using `cb_eval`. The callback path synchronizes the backend at
 every selected tensor and is retained only for historical/cumulative-cut diagnostics. The aggregate path applies a
 benchmark-only patch to a detached llama.cpp worktree and records stage transitions on thread 0 after ggml's existing
-node barriers. It does not add a scheduler synchronization.
+node barriers. It does not add a scheduler synchronization. The aggregate FFN contract separates Gate/Up, activation,
+and Down by closing the activation segment immediately before the named `ffn_down` MatMul begins.
 
 ## Prepare An Instrumented Source Tree
 

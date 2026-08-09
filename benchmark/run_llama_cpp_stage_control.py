@@ -39,7 +39,7 @@ STAGE_RE = re.compile(
     re.MULTILINE,
 )
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
-AGGREGATE_STAGES = {"attention", "ffn.gate_up", "ffn.down", "logits"}
+AGGREGATE_STAGES = {"attention", "ffn.gate_up", "ffn.activation", "ffn.down", "logits"}
 
 
 def positive_int(raw: str) -> int:
