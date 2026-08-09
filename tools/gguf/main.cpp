@@ -3,10 +3,11 @@
 #include "LLMGeneration.h"
 #include "LLaMABuilder.h"
 
+#include <LiteNN/Compiler/CompiledModule.h>
+#include <LiteNN/Misc.h>
+
 #ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
 #include "DecodeAOTCache.h"
-
-#include <LiteNN/Compiler/CompiledModule.h>
 #endif
 #ifdef LITENN_GGUF_CONVERT_ENABLE_LLAMA_CPP_TOKENIZER
 #include <LlamaCppTokenizerAdapter.h>
@@ -93,6 +94,7 @@ namespace
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-activation-math strict|bounded] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -106,6 +108,7 @@ namespace
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-activation-math strict|bounded] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -119,6 +122,7 @@ namespace
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
+		       "[--cpu-aot-activation-math strict|bounded] "
 		       "[--cpu-aot-parallel-min-flops N] [--compile-diagnostics|--no-compile-diagnostics] "
 		       "[--cpu-aot-q8k-staged-matmul] [--cpu-aot-ggml-prepacked-weights] "
 		       "[--cpu-aot-ggml-prepacked-weight-policy disabled|profitable|all] "
@@ -285,6 +289,22 @@ namespace
 		return value;
 	}
 
+	LiteNN::CPUAOTActivationMathPolicy ParseCPUAOTActivationMathPolicy(std::string_view text)
+	{
+		std::string value{ text };
+		std::ranges::transform(value, value.begin(),
+		                       [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+		if (!value.empty())
+		{
+			value.front() = static_cast<char>(std::toupper(static_cast<unsigned char>(value.front())));
+		}
+		if (const auto parsed = LiteNN::TryParseUnqualifiedEnum<LiteNN::CPUAOTActivationMathPolicy>(value))
+		{
+			return *parsed;
+		}
+		throw std::runtime_error("cpu-aot-activation-math must be strict or bounded");
+	}
+
 	struct DecodeLoopCommandOptions
 	{
 		std::string inputPath;
@@ -312,6 +332,7 @@ namespace
 		std::optional<std::size_t> cpuAOTThreadCount;
 		std::optional<std::uint64_t> cpuAOTParallelMinFlops;
 		std::optional<std::uint8_t> cpuAOTLLVMOptLevel;
+		std::optional<LiteNN::CPUAOTActivationMathPolicy> cpuAOTActivationMathPolicy;
 		std::optional<std::string> cpuAOTAffinityPolicy;
 		std::optional<std::string> cpuAOTWorkerWaitPolicy;
 		std::optional<bool> enableCompileDiagnostics;
@@ -440,6 +461,10 @@ namespace
 					throw std::runtime_error("cpu-aot-llvm-opt-level must be between 0 and 3");
 				}
 				options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(optLevel);
+			}
+			else if (arg == "--cpu-aot-activation-math")
+			{
+				options.cpuAOTActivationMathPolicy = ParseCPUAOTActivationMathPolicy(requireValue(arg));
 			}
 			else if (arg == "--cpu-aot-affinity")
 			{
@@ -1555,7 +1580,7 @@ namespace
 		constexpr std::uint32_t decodePlanCacheVersion = 8;
 		const auto keyText = std::format(
 		    "gguf-decode-{}-v{}|cpu_aot_compilation_v{}|{}|{}|{}|tokens={}|opt={}|external={}|threads={}|"
-		    "affinity={}|worker_wait={}|min_flops={}|node_profile={}|"
+		    "affinity={}|worker_wait={}|min_flops={}|activation_math={}|node_profile={}|"
 		    "q8k_staged={}|ggml_prepacked_weights={}|ggml_prepacked_weight_policy={}|ggml_prepacked_layout={}|"
 		    "paged_resident_pages={}",
 		    decodeMode, decodePlanCacheVersion, LiteNN::CPUAOTCompilationCacheVersion,
@@ -1563,8 +1588,8 @@ namespace
 		    options.cpuAOTLLVMOptLevel, options.enableCPUAOTExternalRegions ? 1 : 0, options.cpuAOTThreadCount,
 		    static_cast<std::uint32_t>(options.cpuAOTAffinityPolicy),
 		    static_cast<std::uint32_t>(options.cpuAOTWorkerWaitPolicy), options.cpuAOTParallelMinFlops,
-		    options.enableCPUAOTNodeProfiling ? 1 : 0, options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0,
-		    options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
+		    static_cast<std::uint32_t>(options.cpuAOTActivationMathPolicy), options.enableCPUAOTNodeProfiling ? 1 : 0,
+		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
 		    CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout), residentPagesText);
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(keyText));
@@ -2493,6 +2518,10 @@ namespace
 		{
 			options.cpuAOTLLVMOptLevel = static_cast<std::uint8_t>(std::min<std::uint64_t>(*optLevel, 3));
 		}
+		if (const char* activationMath = std::getenv("LITENN_CPU_AOT_ACTIVATION_MATH"))
+		{
+			options.cpuAOTActivationMathPolicy = ParseCPUAOTActivationMathPolicy(activationMath);
+		}
 		if (const char* affinity = std::getenv("LITENN_CPU_AOT_AFFINITY"))
 		{
 			std::string value{ affinity };
@@ -2559,6 +2588,10 @@ namespace
 		if (decodeOptions.cpuAOTLLVMOptLevel)
 		{
 			compilerOptions.cpuAOTLLVMOptLevel = *decodeOptions.cpuAOTLLVMOptLevel;
+		}
+		if (decodeOptions.cpuAOTActivationMathPolicy)
+		{
+			compilerOptions.cpuAOTActivationMathPolicy = *decodeOptions.cpuAOTActivationMathPolicy;
 		}
 		if (decodeOptions.cpuAOTAffinityPolicy)
 		{

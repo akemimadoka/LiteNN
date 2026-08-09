@@ -305,6 +305,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="CPU AOT LLVM optimization level for LiteNN decode smoke; default keeps first-run latency lower",
     )
     parser.add_argument(
+        "--cpu-aot-activation-math",
+        choices=("strict", "bounded"),
+        default="strict",
+        help="CPU AOT activation math policy; bounded requires a configured vector-math provider",
+    )
+    parser.add_argument(
         "--cpu-aot-threads",
         type=int,
         help="CPU AOT helper thread count passed to litenn_gguf_convert; 0 selects the runtime auto policy",
@@ -686,6 +692,7 @@ def main() -> int:
         if args.max_cache_length is not None:
             decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
         decode_cmd.extend(["--cpu-aot-llvm-opt-level", str(args.llvm_opt_level)])
+        decode_cmd.extend(["--cpu-aot-activation-math", args.cpu_aot_activation_math])
         if args.cpu_aot_threads is not None:
             if args.cpu_aot_threads < 0:
                 raise SystemExit("--cpu-aot-threads must be non-negative")
@@ -766,6 +773,7 @@ def main() -> int:
         "max_cache_length": args.max_cache_length,
         "cpu_aot_options": {
             "llvm_opt_level": args.llvm_opt_level,
+            "activation_math": args.cpu_aot_activation_math,
             "thread_count": args.cpu_aot_threads,
             "affinity": args.cpu_aot_affinity,
             "worker_wait": args.cpu_aot_worker_wait,
