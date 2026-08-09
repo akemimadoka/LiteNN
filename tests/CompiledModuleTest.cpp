@@ -42,7 +42,8 @@ using namespace LiteNN;
 
 namespace
 {
-	static_assert(CPUAOTCompilationCacheVersion > 0);
+	static_assert(CPUAOTCompilationCacheVersion >= 3,
+	              "CPU AOT caches must invalidate artifacts emitted before SwiGLU/Down fusion");
 
 	class ScopedCerrCapture
 	{
