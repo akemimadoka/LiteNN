@@ -88,7 +88,8 @@ namespace
 		    << "  " << executable
 		    << " --run-llama-decode-loop-token-id <input.gguf> <initial-token-id> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--seed N] [--forced-generated-token-ids ids] [--logits-output output.txt] "
+		       "[--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
@@ -102,7 +103,8 @@ namespace
 		    << "  " << executable
 		    << " --run-llama-decode-loop-token-ids <input.gguf> <comma-token-ids> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--seed N] [--forced-generated-token-ids ids] [--logits-output output.txt] "
+		       "[--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
@@ -116,7 +118,8 @@ namespace
 		    << "  " << executable
 		    << " --run-llama-prompt-decode-loop <input.gguf> <prompt> <steps> [output.txt] "
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
-		       "[--seed N] [--logits-output output.txt] [--logits-output-dir dir] [--ignore-eos] "
+		       "[--seed N] [--forced-generated-token-ids ids] [--logits-output output.txt] "
+		       "[--logits-output-dir dir] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
@@ -315,6 +318,7 @@ namespace
 		std::optional<std::string> outputPath;
 		std::optional<std::string> logitsOutputPath;
 		std::optional<std::string> logitsOutputDirectory;
+		std::vector<std::int32_t> forcedGeneratedTokenIds;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
 		bool statefulDecode{ true };
@@ -387,6 +391,10 @@ namespace
 			else if (arg == "--seed")
 			{
 				options.sampling.seed = ParseU64(requireValue(arg), "seed");
+			}
+			else if (arg == "--forced-generated-token-ids")
+			{
+				options.forcedGeneratedTokenIds = ParseTokenIds(requireValue(arg));
 			}
 			else if (arg == "--ignore-eos")
 			{
@@ -1925,8 +1933,22 @@ namespace
 		{
 			throw std::runtime_error("decode-loop requires at least one initial token");
 		}
+		if (!options.forcedGeneratedTokenIds.empty() && options.forcedGeneratedTokenIds.size() != options.steps)
+		{
+			throw std::runtime_error("--forced-generated-token-ids must contain exactly one token per generated step");
+		}
+		if (!options.forcedGeneratedTokenIds.empty() && options.stopAtEos)
+		{
+			throw std::runtime_error("--forced-generated-token-ids requires --ignore-eos");
+		}
 		const auto hyperparameters = LiteNN::GGUF::ParseLLaMAHyperparameters(metadataImport.model.UnsafeGraphView());
 		const auto tokenizer = LiteNN::GGUF::SummarizeLLMTokenizerMetadata(metadataImport.model.UnsafeGraphView());
+		if (std::ranges::any_of(options.forcedGeneratedTokenIds, [&](std::int32_t tokenId) {
+			    return std::cmp_greater_equal(tokenId, tokenizer.tokenCount);
+		    }))
+		{
+			throw std::runtime_error("--forced-generated-token-ids contains an out-of-vocabulary token id");
+		}
 		auto tokenPieces = CopyTokenPieces(metadataImport.model.UnsafeGraphView());
 		metadataImport = {};
 		const auto requestedTokenCount = initialTokenIds.size() + options.steps;
@@ -2075,6 +2097,8 @@ namespace
 		std::size_t lastOutputCount = 0;
 		std::vector<std::size_t> lastLogitsShape;
 		std::size_t generatedTokenCount = 0;
+		std::size_t forcedTokenMismatchCount = 0;
+		std::optional<std::size_t> firstForcedTokenMismatchIndex;
 		bool stoppedOnEos = false;
 		std::vector<double> stepTimesMs;
 		stepTimesMs.reserve(maxRunCount);
@@ -2246,7 +2270,24 @@ namespace
 				    !options.stopAtEos && tokenizer.eosTokenId
 				        ? std::optional<std::int32_t>{ static_cast<std::int32_t>(*tokenizer.eosTokenId) }
 				        : std::nullopt;
-				currentToken = LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history, suppressedEosToken);
+				const auto sampledToken =
+				    LiteNN::GGUF::SelectNextToken(outputs.front(), sampler, history, suppressedEosToken);
+				if (options.forcedGeneratedTokenIds.empty())
+				{
+					currentToken = sampledToken;
+				}
+				else
+				{
+					currentToken = options.forcedGeneratedTokenIds[generatedTokenCount];
+					if (sampledToken != currentToken)
+					{
+						++forcedTokenMismatchCount;
+						if (!firstForcedTokenMismatchIndex)
+						{
+							firstForcedTokenMismatchIndex = generatedTokenCount;
+						}
+					}
+				}
 				history.push_back(currentToken);
 				++generatedTokenCount;
 				if (options.stopAtEos && tokenizer.eosTokenId &&
@@ -2326,6 +2367,7 @@ namespace
 				          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
 				          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
 				          << " generated_tokens=" << generatedTokenCount
+				          << " forced_token_mismatches=" << forcedTokenMismatchCount
 				          << " generated_tokens_per_second=" << liveTokensPerSecond
 				          << " eos=" << (stoppedOnEos ? "true" : "false") << '\n';
 				std::cout.flush();
@@ -2396,7 +2438,13 @@ namespace
 		          << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
 		          << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
 		          << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
-		          << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
+		          << " forced_replay=" << (!options.forcedGeneratedTokenIds.empty() ? "true" : "false")
+		          << " forced_token_mismatch_count=" << forcedTokenMismatchCount;
+		if (firstForcedTokenMismatchIndex)
+		{
+			std::cout << " first_forced_token_mismatch_index=" << *firstForcedTokenMismatchIndex;
+		}
+		std::cout << " outputs_per_step=" << lastOutputCount << " last_logits_shape=";
 		PrintTensorShape(lastLogitsShape);
 		if (options.logitsOutputPath)
 		{
@@ -2429,7 +2477,13 @@ namespace
 			       << " prompt_replay_steps=" << promptReplayStepCount << " prompt_replay_ms=" << promptReplayMs
 			       << " generation_steps=" << generationStepCount << " generation_ms=" << generationMs
 			       << " ms_per_generated_token=" << msPerToken << " generated_tokens_per_second=" << tokensPerSecond
-			       << '\n';
+			       << " forced_replay=" << (!options.forcedGeneratedTokenIds.empty() ? "true" : "false")
+			       << " forced_token_mismatch_count=" << forcedTokenMismatchCount;
+			if (firstForcedTokenMismatchIndex)
+			{
+				output << " first_forced_token_mismatch_index=" << *firstForcedTokenMismatchIndex;
+			}
+			output << '\n';
 			if (!output)
 			{
 				throw std::runtime_error("Failed to write decode-loop output file: " + *options.outputPath);

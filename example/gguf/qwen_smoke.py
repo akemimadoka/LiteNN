@@ -24,6 +24,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,16 @@ PREPACKED_LAYOUT_TOKENS = {
     "compact-v3": "compact_block_grouped_v3",
     "field-interleaved-v4": "field_interleaved_v4",
 }
+
+
+def comma_token_ids(raw: str) -> tuple[int, ...]:
+    try:
+        values = tuple(int(part) for part in raw.split(","))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("token ids must be comma-separated integers") from error
+    if not values or any(value < 0 for value in values):
+        raise argparse.ArgumentTypeError("token ids must be non-empty and non-negative")
+    return values
 
 
 def repo_root() -> Path:
@@ -298,6 +309,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample", choices=("greedy", "random"), default="greedy")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--forced-generated-token-ids",
+        type=comma_token_ids,
+        help="Replay this exact generated-token trajectory while still recording natural sampler mismatches",
+    )
+    parser.add_argument(
         "--llvm-opt-level",
         type=int,
         default=0,
@@ -429,6 +445,11 @@ def main() -> int:
         raise SystemExit("--steps must be positive")
     if args.until_eos and args.ignore_eos:
         raise SystemExit("--until-eos and --ignore-eos cannot be used together")
+    if args.forced_generated_token_ids is not None:
+        if not args.ignore_eos:
+            raise SystemExit("--forced-generated-token-ids requires --ignore-eos")
+        if len(args.forced_generated_token_ids) != args.steps:
+            raise SystemExit("--forced-generated-token-ids must contain exactly --max-tokens token ids")
     if args.llamacpp_decode_golden_tool and args.steps < 2:
         raise SystemExit("--llamacpp-decode-golden-tool requires at least two generated steps")
     if args.capture_llamacpp and not args.prompt:
@@ -673,8 +694,14 @@ def main() -> int:
         ]
         if args.stateful:
             decode_cmd.append("--stateful")
+        else:
+            decode_cmd.append("--functional")
         if args.ignore_eos:
             decode_cmd.append("--ignore-eos")
+        if args.forced_generated_token_ids is not None:
+            decode_cmd.extend(
+                ["--forced-generated-token-ids", ",".join(str(value) for value in args.forced_generated_token_ids)]
+            )
         if args.stream_tokens:
             decode_cmd.append("--stream-tokens")
         if args.stream_stats:
@@ -771,6 +798,17 @@ def main() -> int:
         "stream_stats": args.stream_stats,
         "compile_only": args.compile_only,
         "max_cache_length": args.max_cache_length,
+        "forced_replay": (
+            {
+                "enabled": True,
+                "token_count": len(args.forced_generated_token_ids),
+                "token_sha256": hashlib.sha256(
+                    ",".join(str(value) for value in args.forced_generated_token_ids).encode("ascii")
+                ).hexdigest(),
+            }
+            if args.forced_generated_token_ids is not None
+            else {"enabled": False, "token_count": 0, "token_sha256": None}
+        ),
         "cpu_aot_options": {
             "llvm_opt_level": args.llvm_opt_level,
             "activation_math": args.cpu_aot_activation_math,
