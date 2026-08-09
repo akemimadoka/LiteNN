@@ -11,6 +11,7 @@ import locale
 import math
 import os
 import platform
+import re
 import statistics
 import subprocess
 import sys
@@ -27,6 +28,9 @@ from run_llama_cpp_completion_control import (
     sha256_file,
     version_metadata,
 )
+
+
+METRIC_RE = re.compile(r"(?P<name>[a-zA-Z0-9_]+)=(?P<value>[^\s]+)")
 
 
 def repo_root() -> Path:
@@ -461,8 +465,56 @@ def text_identity(text: str) -> dict[str, object]:
     return {"sha256": hashlib.sha256(encoded).hexdigest(), "utf8_bytes": len(encoded)}
 
 
+def normalize_completion_text(stdout_text: str) -> str:
+    # llama-completion writes model LF bytes through the Windows text-mode stdout.
+    # Undo that platform translation before recovering the generated token stream.
+    return stdout_text.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+
 def binary_identity(path: Path) -> dict[str, object]:
     return {"sha256": sha256_file(path), "size_bytes": path.stat().st_size}
+
+
+def token_ids_identity(token_ids: list[int]) -> dict[str, object]:
+    encoded = ",".join(str(token_id) for token_id in token_ids).encode("ascii")
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "count": len(token_ids)}
+
+
+def load_tokenizer_token_ids(path: Path) -> list[int]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("schema") != "litenn.llamacpp_tokens.v1":
+        raise RuntimeError(f"unsupported tokenizer output schema: {document.get('schema')!r}")
+    values = document.get("tokenIds")
+    if not isinstance(values, list) or not values or any(not isinstance(value, int) or value < 0 for value in values):
+        raise RuntimeError("tokenizer output contains invalid token ids")
+    return values
+
+
+def parse_forced_replay_metrics(path: Path) -> dict[str, object]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) < 3:
+        raise RuntimeError(f"LiteNN decode output is missing its metrics row: {path}")
+    values = {match.group("name"): match.group("value") for match in METRIC_RE.finditer(lines[2])}
+    if "forced_replay" not in values or "forced_token_mismatch_count" not in values:
+        raise RuntimeError(f"LiteNN decode output is missing fixed-replay metrics: {path}")
+    first_mismatch = values.get("first_forced_token_mismatch_index")
+    return {
+        "enabled": values["forced_replay"] == "true",
+        "natural_mismatch_count": int(values["forced_token_mismatch_count"]),
+        "first_natural_mismatch_index": int(first_mismatch) if first_mismatch is not None else None,
+    }
+
+
+def load_litenn_generated_token_ids(path: Path, prompt_token_count: int) -> list[int]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        raise RuntimeError(f"LiteNN decode output contains no token ids: {path}")
+    values = json.loads(lines[0])
+    if not isinstance(values, list) or any(not isinstance(value, int) or value < 0 for value in values):
+        raise RuntimeError(f"LiteNN decode output contains invalid token ids: {path}")
+    if prompt_token_count < 0 or len(values) < prompt_token_count:
+        raise RuntimeError(f"LiteNN decode output is shorter than its prompt: {path}")
+    return values[prompt_token_count:]
 
 
 def build_llama_command(args: argparse.Namespace, model: Path, completion: Path) -> list[str]:
@@ -529,6 +581,7 @@ def build_litenn_command(
     tokenizer: Path,
     workdir: Path,
     cache_dir: Path,
+    forced_generated_token_ids: list[int] | None = None,
 ) -> list[str]:
     command = [
         args.python,
@@ -564,7 +617,62 @@ def build_litenn_command(
     ]
     if args.litenn_affinity != "default":
         command.extend(("--cpu-aot-affinity", args.litenn_affinity))
+    if forced_generated_token_ids is not None:
+        command.extend(
+            ("--forced-generated-token-ids", ",".join(str(token_id) for token_id in forced_generated_token_ids))
+        )
     return command
+
+
+def capture_fixed_reference_trajectory(
+    args: argparse.Namespace,
+    model: Path,
+    completion: Path,
+    tokenizer: Path,
+    output_dir: Path,
+    replacements: dict[str, str],
+) -> tuple[list[int], dict[str, object]]:
+    capture_dir = output_dir / "fixed_replay_reference"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    llama_process, stdout_text, stderr_text = run_monitored(
+        build_llama_command(args, model, completion),
+        capture_dir / "llama_cpp",
+        replacements,
+        args.monitor_interval,
+    )
+    if llama_process["returncode"] != 0:
+        raise RuntimeError("llama.cpp fixed-trajectory capture failed")
+    generated_text = normalize_completion_text(stdout_text)
+    if not generated_text:
+        raise RuntimeError("llama.cpp fixed-trajectory capture produced no text")
+    perf = parse_perf_output(f"{stdout_text}\n{stderr_text}")
+    generated_text_input = capture_dir / "generated_text.bin"
+    generated_text_input.write_bytes(generated_text.encode("utf-8"))
+    token_output = capture_dir / "generated_tokens.json"
+    tokenizer_process, _, _ = run_monitored(
+        [str(tokenizer), "tokenize-file", str(model), str(generated_text_input), str(token_output)],
+        capture_dir / "tokenize",
+        replacements,
+        args.monitor_interval,
+    )
+    if tokenizer_process["returncode"] != 0:
+        raise RuntimeError("fixed-trajectory tokenization failed")
+    token_ids = load_tokenizer_token_ids(token_output)
+    if len(token_ids) != args.predict:
+        raise RuntimeError(
+            f"fixed-trajectory token count mismatch: expected {args.predict}, tokenized {len(token_ids)}"
+        )
+    return token_ids, {
+        "source": "unmeasured_llama_cpp_completion_then_tokenizer_round_trip",
+        "llama_cpp_process": llama_process,
+        "tokenizer_process": tokenizer_process,
+        "text": text_identity(generated_text),
+        "tokens": token_ids_identity(token_ids),
+        "prompt_tokens": perf["prompt_count"],
+        "eval_tokens": perf["eval_count"],
+        "ms_per_token": perf["eval_ms_per_token"],
+        "tokens_per_second": perf["eval_tokens_per_second"],
+    }
 
 
 def write_markdown(path: Path, document: dict[str, object]) -> None:
@@ -579,9 +687,10 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Prompt/eval tokens: `{document['configuration']['prompt_tokens']}/"  # type: ignore[index]
         f"{document['configuration']['eval_tokens']}`",  # type: ignore[index]
         f"- Variance threshold: `{document['configuration']['variance_threshold_percent']}%`",  # type: ignore[index]
+        f"- Trajectory mode: `{'fixed reference replay' if document['configuration']['fixed_token_replay'] else 'natural greedy'}`",  # type: ignore[index]
         "",
         "| Pair | Order | llama ms/token | llama t/s | LiteNN ms/token | LiteNN t/s | LiteNN delta | "
-        "llama MHz | LiteNN MHz | Text parity |",
+        "llama MHz | LiteNN MHz | Trajectory parity |",
         "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for pair in document["pairs"]:  # type: ignore[union-attr]
@@ -601,7 +710,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"{llama['ms_per_token']:.3f} | {llama['tokens_per_second']:.3f} | "
             f"{litenn['ms_per_token']:.3f} | {litenn['tokens_per_second']:.3f} | "
             f"{pair['litenn_vs_llama_percent']:+.2f}% | {frequency_value(llama_frequency)} | "
-            f"{frequency_value(litenn_frequency)} | {pair['text_match']} |"
+            f"{frequency_value(litenn_frequency)} | {pair['trajectory_match']} |"
         )
     lines.extend(
         [
@@ -614,11 +723,22 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"CV `{summary['litenn']['coefficient_of_variation_percent']:.2f}%`",  # type: ignore[index]
             f"- Median paired LiteNN delta: `{summary['paired_delta_percent']['median']:+.2f}%`",  # type: ignore[index]
             f"- Text parity: `{gate['text_parity']}`",  # type: ignore[index]
+            f"- Text parity kind: `{gate['text_parity_kind']}`",  # type: ignore[index]
+            f"- Trajectory parity: `{gate['trajectory_parity']}`",  # type: ignore[index]
+            f"- Natural sampler parity: `{gate['natural_sampler_parity']}`",  # type: ignore[index]
             f"- No fallback: `{gate['no_fallback']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
     )
+    if document["configuration"]["fixed_token_replay"]:  # type: ignore[index]
+        mismatch_summary = summary["natural_mismatch_count"]
+        lines.extend(
+            [
+                f"- LiteNN natural mismatch count median: `{mismatch_summary['median']:.0f}`",  # type: ignore[index]
+                f"- First natural mismatch indices: `{summary['first_natural_mismatch_indices']}`",  # type: ignore[index]
+            ]
+        )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -649,6 +769,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--monitor-interval", default=0.25, type=positive_float)
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--require-variance-gate", action="store_true")
+    parser.add_argument(
+        "--fixed-token-replay",
+        action="store_true",
+        help="Capture one llama.cpp trajectory, force LiteNN to replay it, and report natural sampler divergences",
+    )
     parser.add_argument("--keep-prompt", action="store_true")
     return parser
 
@@ -686,7 +811,7 @@ def main() -> int:
         args.prompt: "<prompt>",
     }
     document: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "tool": "litenn-paired-gguf-decode-control",
         "status": "running",
         "host": host_metadata(),
@@ -713,6 +838,7 @@ def main() -> int:
             "llama_priority": args.llama_priority,
             "monitor_interval_seconds": args.monitor_interval,
             "variance_threshold_percent": args.variance_threshold_percent,
+            "fixed_token_replay": args.fixed_token_replay,
             "run_order": "odd=llama_cpp_then_litenn,even=litenn_then_llama_cpp",
         },
         "pairs": [],
@@ -724,6 +850,21 @@ def main() -> int:
         output_json.write_text(json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
     checkpoint()
+    forced_generated_token_ids: list[int] | None = None
+    if args.fixed_token_replay:
+        print("[paired decode] capturing fixed reference trajectory", file=sys.stderr, flush=True)
+        try:
+            forced_generated_token_ids, fixed_reference = capture_fixed_reference_trajectory(
+                args, model, completion, tokenizer, output_dir, replacements
+            )
+        except RuntimeError as error:
+            document["status"] = "failed"
+            document["failure"] = str(error)
+            checkpoint()
+            raise SystemExit(str(error)) from error
+        document["fixed_replay_reference"] = fixed_reference
+        print("[paired decode] fixed reference trajectory ready", file=sys.stderr, flush=True)
+        checkpoint()
     pairs_document = document["pairs"]
     assert isinstance(pairs_document, list)
     for repetition in range(1, args.repetitions + 1):
@@ -749,7 +890,7 @@ def main() -> int:
                     checkpoint()
                     raise SystemExit(document["failure"])
                 metrics = parse_perf_output(f"{stdout_text}\n{stderr_text}")
-                generated_text = stdout_text.strip()
+                generated_text = normalize_completion_text(stdout_text)
                 pair["llama_cpp"] = {
                     "process": process_record,
                     "prompt_tokens": metrics["prompt_count"],
@@ -760,7 +901,9 @@ def main() -> int:
                 }
             else:
                 workdir = pair_dir / "litenn_workdir"
-                command = build_litenn_command(args, model, litenn, tokenizer, workdir, cache_dir)
+                command = build_litenn_command(
+                    args, model, litenn, tokenizer, workdir, cache_dir, forced_generated_token_ids
+                )
                 process_record, _, _ = run_monitored(
                     command, pair_dir / "litenn", replacements, args.monitor_interval
                 )
@@ -773,6 +916,9 @@ def main() -> int:
                 base = litenn_row(report_path)
                 steady = litenn_steady_generation_row(report_path, base)
                 generated_text = (workdir / "generated_text.bin").read_text(encoding="utf-8").strip()
+                token_output = workdir / "litenn_decode_tokens.txt"
+                replay = parse_forced_replay_metrics(token_output)
+                generated_token_ids = load_litenn_generated_token_ids(token_output, int(base["promptTokens"]))
                 pair["litenn"] = {
                     "process": process_record,
                     "prompt_tokens": base["promptTokens"],
@@ -784,6 +930,8 @@ def main() -> int:
                     "fallback_used": base["fallbackUsed"],
                     "fallback_count": base["fallbackCount"],
                     "text": text_identity(generated_text),
+                    "tokens": token_ids_identity(generated_token_ids),
+                    "fixed_replay": replay,
                 }
             print(
                 f"[paired decode] pair {repetition}/{args.repetitions} {runtime} finished",
@@ -795,6 +943,15 @@ def main() -> int:
         llama = pair["llama_cpp"]
         litenn_result = pair["litenn"]
         pair["text_match"] = llama["text"] == litenn_result["text"]  # type: ignore[index]
+        if args.fixed_token_replay:
+            assert forced_generated_token_ids is not None
+            fixed_reference = document["fixed_replay_reference"]
+            pair["trajectory_match"] = (
+                litenn_result["tokens"] == token_ids_identity(forced_generated_token_ids)  # type: ignore[index]
+                and llama["text"] == fixed_reference["text"]  # type: ignore[index]
+            )
+        else:
+            pair["trajectory_match"] = pair["text_match"]
         pair["litenn_vs_llama_percent"] = (
             float(litenn_result["tokens_per_second"]) / float(llama["tokens_per_second"]) - 1.0  # type: ignore[index]
         ) * 100.0
@@ -807,9 +964,12 @@ def main() -> int:
         elif int(llama["prompt_tokens"]) != int(litenn_result["prompt_tokens"]):  # type: ignore[index]
             document["status"] = "failed"
             document["failure"] = f"prompt token count mismatch in pair {repetition}"
-        elif not pair["text_match"]:
+        elif args.fixed_token_replay and not bool(litenn_result["fixed_replay"]["enabled"]):  # type: ignore[index]
             document["status"] = "failed"
-            document["failure"] = f"generated text mismatch in pair {repetition}"
+            document["failure"] = f"LiteNN fixed replay was not enabled in pair {repetition}"
+        elif not pair["trajectory_match"]:
+            document["status"] = "failed"
+            document["failure"] = f"generated trajectory mismatch in pair {repetition}"
         elif bool(litenn_result["fallback_used"]):  # type: ignore[index]
             document["status"] = "failed"
             document["failure"] = f"LiteNN fallback in pair {repetition}"
@@ -826,16 +986,34 @@ def main() -> int:
         "litenn": series_statistics(litenn_values),
         "paired_delta_percent": series_statistics(deltas),
     }
+    if args.fixed_token_replay:
+        mismatch_counts = [
+            float(pair["litenn"]["fixed_replay"]["natural_mismatch_count"]) for pair in pairs  # type: ignore[index]
+        ]
+        summary["natural_mismatch_count"] = series_statistics(mismatch_counts)
+        summary["first_natural_mismatch_indices"] = [
+            pair["litenn"]["fixed_replay"]["first_natural_mismatch_index"] for pair in pairs  # type: ignore[index]
+        ]
     variance_passed = (
         float(summary["llama_cpp"]["coefficient_of_variation_percent"]) <= args.variance_threshold_percent
         and float(summary["litenn"]["coefficient_of_variation_percent"]) <= args.variance_threshold_percent
     )
     gate = {
         "text_parity": all(bool(pair["text_match"]) for pair in pairs),  # type: ignore[index]
+        "text_parity_kind": "fixed_reference_trajectory" if args.fixed_token_replay else "natural_greedy",
+        "trajectory_parity": all(bool(pair["trajectory_match"]) for pair in pairs),  # type: ignore[index]
+        "natural_sampler_parity": (
+            all(
+                int(pair["litenn"]["fixed_replay"]["natural_mismatch_count"]) == 0  # type: ignore[index]
+                for pair in pairs
+            )
+            if args.fixed_token_replay
+            else all(bool(pair["text_match"]) for pair in pairs)  # type: ignore[index]
+        ),
         "no_fallback": all(not bool(pair["litenn"]["fallback_used"]) for pair in pairs),  # type: ignore[index]
         "variance": variance_passed,
     }
-    gate["accepted"] = all(gate.values())
+    gate["accepted"] = bool(gate["trajectory_parity"] and gate["no_fallback"] and gate["variance"])
     document["summary"] = summary
     document["gate"] = gate
     document["status"] = "complete"
