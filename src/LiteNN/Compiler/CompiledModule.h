@@ -190,6 +190,31 @@ namespace LiteNN
 		Latency = 2,
 	};
 
+	enum class CPUAOTActivationMathPolicy : std::uint32_t
+	{
+		/// Preserve the scalar libm result contract used by the interpreter and existing CPU AOT artifacts.
+		Strict = 0,
+		/// Permit an explicitly bounded vector approximation supplied by the configured runtime provider.
+		Bounded = 1,
+	};
+
+	enum class CPUAOTActivationMathProvider : std::uint32_t
+	{
+		None = 0,
+		SLEEF = 1,
+		BuiltIn = 2,
+	};
+
+	struct CPUAOTActivationMathCapabilities
+	{
+		CPUAOTActivationMathProvider provider{ CPUAOTActivationMathProvider::None };
+		bool strictSupported{ true };
+		bool boundedSupported{};
+	};
+
+	CPUAOTActivationMathCapabilities QueryCPUAOTActivationMathCapabilities() noexcept;
+	bool IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy policy) noexcept;
+
 	enum class CPUAOTGGMLPrepackedWeightPolicy : std::uint32_t
 	{
 		Disabled = 0,
@@ -206,7 +231,7 @@ namespace LiteNN
 
 	/// Increment when CPU AOT lowering or code generation changes the instructions produced for an unchanged plan.
 	/// Persistent compilation caches must include this value in their cache key.
-	inline constexpr std::uint32_t CPUAOTCompilationCacheVersion = 3;
+	inline constexpr std::uint32_t CPUAOTCompilationCacheVersion = 4;
 
 	struct CompiledModuleExternalTensorInfo
 	{
@@ -230,6 +255,8 @@ namespace LiteNN
 		CPUAOTAffinityPolicy cpuAOTAffinityPolicy{ CPUAOTAffinityPolicy::None };
 		/// Worker wait behavior between consecutive CPU AOT helpers.
 		CPUAOTWorkerWaitPolicy cpuAOTWorkerWaitPolicy{ CPUAOTWorkerWaitPolicy::Adaptive };
+		/// Activation math semantics used by CPU AOT helpers. Bounded requires an available vector-math provider.
+		CPUAOTActivationMathPolicy cpuAOTActivationMathPolicy{ CPUAOTActivationMathPolicy::Strict };
 		/// Minimum f32 linear-chain FLOPs before the CPU parallel AOT path is used.
 		std::uint64_t cpuAOTParallelMinFlops{ 1ull << 28 };
 		/// Store CPU AOT constants/variable weights in separated artifact regions when supported.

@@ -42,8 +42,8 @@ using namespace LiteNN;
 
 namespace
 {
-	static_assert(CPUAOTCompilationCacheVersion >= 3,
-	              "CPU AOT caches must invalidate artifacts emitted before SwiGLU/Down fusion");
+	static_assert(CPUAOTCompilationCacheVersion >= 4,
+	              "CPU AOT caches must include activation math policy and rodata feature identity");
 
 	class ScopedCerrCapture
 	{
@@ -120,6 +120,14 @@ namespace
 		return value;
 	}
 
+	void WriteU64LE(std::span<std::byte> bytes, std::size_t offset, std::uint64_t value)
+	{
+		for (int i = 0; i < 8; ++i)
+		{
+			bytes[offset + i] = std::byte{ static_cast<unsigned char>((value >> (i * 8)) & 0xff) };
+		}
+	}
+
 	std::size_t RodataBackendOffset(std::span<const std::byte> rodata)
 	{
 		constexpr std::size_t kMagicSize = 8;
@@ -129,6 +137,11 @@ namespace
 		const auto tripleSize = ReadU64LE(rodata, offset);
 		offset += kU64Size + static_cast<std::size_t>(tripleSize);
 		return offset;
+	}
+
+	std::size_t RodataRequiredRuntimeFeaturesOffset(std::span<const std::byte> rodata)
+	{
+		return RodataBackendOffset(rodata) + sizeof(std::uint32_t);
 	}
 
 	const CompiledModuleRegionInfo* FindRegionInfo(std::span<const CompiledModuleRegionInfo> infos,
@@ -1349,6 +1362,48 @@ TEST(CompiledModuleTest, CPUFloat16GELUArtifactUsesStableTanh)
 	}
 	EXPECT_GT(ReadAsFloat(outputs[0], 0), 9.9f);
 	EXPECT_NEAR(ReadAsFloat(outputs[0], 1), 0.0f, 1e-3f);
+}
+
+TEST(CompiledModuleTest, CPUActivationMathCapabilitiesAreExplicit)
+{
+	static_assert(static_cast<std::uint32_t>(CPUAOTActivationMathPolicy::Strict) == 0);
+	static_assert(static_cast<std::uint32_t>(CPUAOTActivationMathPolicy::Bounded) == 1);
+
+	const auto options = CompilerOptions::Defaults();
+	EXPECT_EQ(options.cpuAOTActivationMathPolicy, CPUAOTActivationMathPolicy::Strict);
+	const auto capabilities = QueryCPUAOTActivationMathCapabilities();
+	EXPECT_EQ(capabilities.provider, CPUAOTActivationMathProvider::None);
+	EXPECT_TRUE(capabilities.strictSupported);
+	EXPECT_FALSE(capabilities.boundedSupported);
+	EXPECT_TRUE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Strict));
+	EXPECT_FALSE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Bounded));
+	EXPECT_FALSE(IsCPUAOTActivationMathPolicySupported(static_cast<CPUAOTActivationMathPolicy>(999)));
+}
+
+TEST(CompiledModuleTest, CPURejectsBoundedActivationMathWithoutProvider)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto gate = sg.AddParam(DataType::Float32, { 1, 4 });
+	const auto up = sg.AddParam(DataType::Float32, { 1, 4 });
+	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
+	                               { OutputInfo{ DataType::Float32, { 1, 4 } } });
+	sg.SetResults({ { output, 0 } });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	auto options = CompilerOptions::Defaults();
+	options.cpuAOTActivationMathPolicy = CPUAOTActivationMathPolicy::Bounded;
+	try
+	{
+		(void) Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+		FAIL() << "expected unavailable bounded activation math to be rejected";
+	}
+	catch (const std::invalid_argument& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("bounded activation math"), std::string::npos);
+		EXPECT_NE(message.find("vector-math provider"), std::string::npos);
+	}
 }
 
 TEST(CompiledModuleTest, CPUFusedSwiGLUArtifactMatchesInterpreter)
@@ -2707,6 +2762,36 @@ TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
 	{
 		const std::string message = ex.what();
 		EXPECT_NE(message.find("backend"), std::string::npos);
+	}
+}
+
+TEST(CompiledModuleTest, RejectsRodataRequiringUnavailableBoundedActivationMath)
+{
+	auto graph = BuildSimpleAddGraph();
+	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+
+	std::vector<std::byte> rodata(compiled.Rodata().begin(), compiled.Rodata().end());
+	const auto featureOffset = RodataRequiredRuntimeFeaturesOffset(rodata);
+	ASSERT_LE(featureOffset + sizeof(std::uint64_t), rodata.size());
+	WriteU64LE(rodata, featureOffset, UINT64_C(1));
+
+	const auto image = CompiledModuleImage{
+		.rodata = rodata.data(),
+		.rodataSize = rodata.size(),
+		.instructions = compiled.Instructions().data(),
+		.instructionSize = compiled.Instructions().size(),
+	};
+
+	try
+	{
+		(void) CompiledModule<CPU>::Load(image);
+		FAIL() << "expected unavailable artifact feature validation to throw";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		const std::string message = ex.what();
+		EXPECT_NE(message.find("bounded activation math"), std::string::npos);
+		EXPECT_NE(message.find("vector-math provider"), std::string::npos);
 	}
 }
 

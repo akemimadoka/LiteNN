@@ -73,6 +73,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kSwiGLUF32Attr = "litenn.swiglu_f32";
 		constexpr llvm::StringLiteral kSwiGLUDownFusionIdAttr = "litenn.swiglu_down_fusion_id";
 		constexpr llvm::StringLiteral kSwiGLUF32Helper = "litenn_cpu_swiglu_f32";
+		constexpr llvm::StringLiteral kSwiGLUBoundedF32Helper = "litenn_cpu_swiglu_bounded_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulHelper = "litenn_cpu_ggml_block_matmul_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ8KStagedHelper = "litenn_cpu_ggml_block_matmul_q8k_staged_f32";
 		constexpr llvm::StringLiteral kGGMLBlockMatMulQ4KPrepackedHelper =
@@ -84,6 +85,8 @@ namespace litenn
 		    "litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
 		constexpr llvm::StringLiteral kSwiGLUGGMLBlockMatMulFieldInterleavedV4Q8KHelper =
 		    "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32";
+		constexpr llvm::StringLiteral kSwiGLUBoundedGGMLBlockMatMulFieldInterleavedV4Q8KHelper =
+		    "litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Helper = "litenn_cpu_ggml_block_grouped_matmul2_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul3Helper = "litenn_cpu_ggml_block_grouped_matmul3_f32";
 		constexpr llvm::StringLiteral kGGMLBlockGroupedMatMul2Q8KStagedHelper =
@@ -384,7 +387,9 @@ namespace litenn
 			llvm::StringRef helperName = kGGMLBlockMatMulHelper;
 			if (fuseSwiGLU)
 			{
-				helperName = kSwiGLUGGMLBlockMatMulFieldInterleavedV4Q8KHelper;
+				helperName = options.enableBoundedActivationMath
+				                 ? kSwiGLUBoundedGGMLBlockMatMulFieldInterleavedV4Q8KHelper
+				                 : kSwiGLUGGMLBlockMatMulFieldInterleavedV4Q8KHelper;
 			}
 			else if (hasPreparedLayout)
 			{
@@ -1281,7 +1286,7 @@ namespace litenn
 		}
 
 		mlir::LogicalResult rewriteSwiGLUF32Call(mlir::ModuleOp module, mlir::linalg::GenericOp op,
-		                                         mlir::OpBuilder& builder)
+		                                         mlir::OpBuilder& builder, const LLVMCodegenOptions& options)
 		{
 			if (!op->hasAttr(kSwiGLUF32Attr) || op->getNumResults() != 0 || op.getInputs().size() != 2 ||
 			    op.getOutputs().size() != 1)
@@ -1309,12 +1314,14 @@ namespace litenn
 			                                             gateType.getElementType(), dynamicLayoutRank2);
 			auto funcType = builder.getFunctionType(
 			    mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank2, dynamicF32Rank2 }, mlir::TypeRange{});
-			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kSwiGLUF32Helper);
+			const llvm::StringRef helperName =
+			    options.enableBoundedActivationMath ? kSwiGLUBoundedF32Helper : kSwiGLUF32Helper;
+			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
 			if (!helper)
 			{
 				mlir::OpBuilder::InsertionGuard guard(builder);
 				builder.setInsertionPointToStart(module.getBody());
-				helper = builder.create<mlir::func::FuncOp>(loc, kSwiGLUF32Helper, funcType);
+				helper = builder.create<mlir::func::FuncOp>(loc, helperName, funcType);
 				helper.setPrivate();
 			}
 			else if (helper.getFunctionType() != funcType)
@@ -2455,7 +2462,7 @@ namespace litenn
 				for (auto op : candidates)
 				{
 					builder.setInsertionPoint(op);
-					if (mlir::succeeded(rewriteSwiGLUF32Call(getOperation(), op, builder)))
+					if (mlir::succeeded(rewriteSwiGLUF32Call(getOperation(), op, builder, options_)))
 					{
 						continue;
 					}

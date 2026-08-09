@@ -7117,7 +7117,7 @@ namespace
 		std::byte{ 'L' }, std::byte{ 'T' }, std::byte{ 'N' }, std::byte{ 'N' },
 		std::byte{ 'S' }, std::byte{ 'E' }, std::byte{ 'P' }, std::byte{ 0 },
 	};
-	constexpr std::uint32_t kRodataVersion = 5;
+	constexpr std::uint32_t kRodataVersion = 6;
 	constexpr std::uint32_t kSeparatedMetadataVersion = 2;
 	constexpr std::uint32_t kRodataLittleEndian = 1;
 	constexpr std::uint32_t kRodataBigEndian = 2;
@@ -7125,6 +7125,8 @@ namespace
 	constexpr std::string_view kConstantsRegionName = "constants";
 	constexpr std::string_view kWeightsRegionName = "weights";
 	constexpr std::string_view kInstructionsRegionName = "instructions";
+	constexpr std::uint64_t kCPUAOTBoundedActivationMathFeature = UINT64_C(1) << 0;
+	constexpr std::uint64_t kKnownCompiledModuleRuntimeFeatures = kCPUAOTBoundedActivationMathFeature;
 
 	using EntryFn = void (*)(void**, void**);
 
@@ -7139,6 +7141,7 @@ namespace
 	struct RodataMetadata
 	{
 		CompiledModuleBackend backend{ CompiledModuleBackend::CPUNative };
+		std::uint64_t requiredRuntimeFeatures{};
 		std::vector<CompiledTensorSpec> inputSpecs;
 		std::vector<CompiledTensorSpec> outputSpecs;
 	};
@@ -7641,10 +7644,56 @@ namespace
 		}
 	}
 
+	std::uint64_t CPUAOTRequiredRuntimeFeatures(const CompilerOptions& options)
+	{
+		return options.cpuAOTActivationMathPolicy == CPUAOTActivationMathPolicy::Bounded
+		           ? kCPUAOTBoundedActivationMathFeature
+		           : 0;
+	}
+
+	void ValidateCPUAOTCompilerOptions(const CompilerOptions& options)
+	{
+		switch (options.cpuAOTActivationMathPolicy)
+		{
+		case CPUAOTActivationMathPolicy::Strict:
+			return;
+		case CPUAOTActivationMathPolicy::Bounded:
+			if (IsCPUAOTActivationMathPolicySupported(options.cpuAOTActivationMathPolicy))
+			{
+				return;
+			}
+			throw std::invalid_argument("CPU AOT bounded activation math requires a configured vector-math provider");
+		default:
+			throw std::invalid_argument("CPU AOT activation math policy is invalid");
+		}
+	}
+
+	void ValidateCompiledModuleRuntimeFeatures(CompiledModuleBackend backend, std::uint64_t features)
+	{
+		if ((features & ~kKnownCompiledModuleRuntimeFeatures) != 0)
+		{
+			throw std::runtime_error("Compiled module rodata requires unknown runtime features");
+		}
+		if ((features & kCPUAOTBoundedActivationMathFeature) != 0)
+		{
+			if (backend != CompiledModuleBackend::CPUNative)
+			{
+				throw std::runtime_error(
+				    "Compiled module rodata applies the CPU bounded activation feature to a non-CPU backend");
+			}
+			if (!IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Bounded))
+			{
+				throw std::runtime_error(
+				    "Compiled module requires CPU bounded activation math, but no vector-math provider is available");
+			}
+		}
+	}
+
 	std::vector<std::byte> SerializeRodata(std::span<const CompiledTensorSpec> inputs,
 	                                       std::span<const CompiledTensorSpec> outputs, std::string_view targetTriple,
-	                                       CompiledModuleBackend backend)
+	                                       CompiledModuleBackend backend, std::uint64_t requiredRuntimeFeatures = 0)
 	{
+		ValidateCompiledModuleRuntimeFeatures(backend, requiredRuntimeFeatures);
 		std::vector<std::byte> rodata;
 		rodata.insert(rodata.end(), kRodataMagic.begin(), kRodataMagic.end());
 		AppendU32(rodata, kRodataVersion);
@@ -7652,6 +7701,7 @@ namespace
 		AppendU32(rodata, NativeEndianTag());
 		AppendString(rodata, targetTriple);
 		AppendU32(rodata, static_cast<std::uint32_t>(backend));
+		AppendU64(rodata, requiredRuntimeFeatures);
 		AppendU32(rodata, static_cast<std::uint32_t>(inputs.size()));
 		AppendU32(rodata, static_cast<std::uint32_t>(outputs.size()));
 
@@ -7720,6 +7770,8 @@ namespace
 		{
 			backend = DecodeBackend(ReadU32(rodata, offset));
 		}
+		const auto requiredRuntimeFeatures = ReadU64(rodata, offset);
+		ValidateCompiledModuleRuntimeFeatures(backend, requiredRuntimeFeatures);
 
 		const auto inputCount = ReadU32(rodata, offset);
 		const auto outputCount = ReadU32(rodata, offset);
@@ -7788,6 +7840,7 @@ namespace
 
 		return {
 			.backend = backend,
+			.requiredRuntimeFeatures = requiredRuntimeFeatures,
 			.inputSpecs = std::move(inputs),
 			.outputSpecs = std::move(outputs),
 		};
@@ -9760,7 +9813,8 @@ namespace
 		auto config = CreateNativeTargetMachine();
 		ConfigureForNativeObject(*module, config);
 		OptimizeLLVMModule(*module, *config.targetMachine, options.cpuAOTLLVMOptLevel);
-		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto rodata = SerializeRodata(inputSpecs, outputSpecs, config.triple, CompiledModuleBackend::CPUNative,
+		                              CPUAOTRequiredRuntimeFeatures(options));
 		auto instructions = EmitObjectFile(*module);
 		return CompiledArtifactParts{ std::move(rodata),
 			                          std::move(instructions),
@@ -19599,6 +19653,8 @@ namespace
 			            .enableGGMLPrepackedWeights =
 			                options.enableCPUAOTGGMLPrepackedWeights ||
 			                options.cpuAOTGGMLPrepackedWeightPolicy != CPUAOTGGMLPrepackedWeightPolicy::Disabled,
+			            .enableBoundedActivationMath =
+			                options.cpuAOTActivationMathPolicy == CPUAOTActivationMathPolicy::Bounded,
 			        });
 			if (mlir::failed(pm.run(*module)))
 			{
@@ -19690,7 +19746,8 @@ namespace
 		LogLLVMModuleStats(options, "cpu-llvm after optimize", *llvmModule);
 
 		auto rodata = TimedCompileDiagnostic(options, "cpu-aot serialize rodata", [&] {
-			return SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+			return SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative,
+			                       CPUAOTRequiredRuntimeFeatures(options));
 		});
 		auto instructions =
 		    TimedCompileDiagnostic(options, "cpu-aot emit object file", [&] { return EmitObjectFile(*llvmModule); });
@@ -19809,6 +19866,25 @@ double CompiledModuleCPUHelperProfiler::NodeInstrumentationMilliseconds() const
 }
 
 CompiledModule<CPU>::CompiledModule() = default;
+
+CPUAOTActivationMathCapabilities LiteNN::QueryCPUAOTActivationMathCapabilities() noexcept
+{
+	return {};
+}
+
+bool LiteNN::IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy policy) noexcept
+{
+	const auto capabilities = QueryCPUAOTActivationMathCapabilities();
+	switch (policy)
+	{
+	case CPUAOTActivationMathPolicy::Strict:
+		return capabilities.strictSupported;
+	case CPUAOTActivationMathPolicy::Bounded:
+		return capabilities.boundedSupported;
+	default:
+		return false;
+	}
+}
 
 CompilerOptions CompilerOptions::Defaults()
 {
@@ -22199,6 +22275,7 @@ namespace
 	CompileCPUArtifactPartsFromGraph(const Graph& graph, const CompilerOptions& options,
 	                                 const Runtime::RuntimeScheduleOutputProjection* outputProjection = nullptr)
 	{
+		ValidateCPUAOTCompilerOptions(options);
 		Validation::ValidateGraph(graph);
 		if (!outputProjection)
 		{
@@ -22245,7 +22322,8 @@ namespace
 		}
 		OptimizeLLVMModule(*llvmModule, *config.targetMachine, EffectiveCPUAOTLLVMOptLevel(options, outputProjection));
 
-		auto rodata = SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative);
+		auto rodata = SerializeRodata(inputSpecs, entryOutputSpecs, config.triple, CompiledModuleBackend::CPUNative,
+		                              CPUAOTRequiredRuntimeFeatures(options));
 		auto instructions = EmitObjectFile(*llvmModule);
 		return MakeCompiledArtifactParts(std::move(rodata), std::move(instructions), inputSpecs, entryOutputSpecs,
 		                                 CompiledModuleBackend::CPUNative);
