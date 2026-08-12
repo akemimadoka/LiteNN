@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import statistics
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,6 +175,10 @@ def compare_values(reference: list[float], candidate: list[float], absolute: flo
     count = len(reference)
     denominator = math.sqrt(reference_square * candidate_square)
     cosine_similarity = dot / denominator if denominator != 0.0 else (1.0 if reference == candidate else 0.0)
+    reference_rms = math.sqrt(reference_square / count)
+    candidate_rms = math.sqrt(candidate_square / count)
+    rms_error = math.sqrt(square_sum / count)
+    normalized_rms_error = rms_error / reference_rms if reference_rms != 0.0 else (0.0 if rms_error == 0.0 else None)
     return {
         "element_count": count,
         "mismatch_count": mismatch_count,
@@ -182,9 +187,91 @@ def compare_values(reference: list[float], candidate: list[float], absolute: flo
         "max_absolute_error_index": max_index,
         "max_relative_error": max_relative,
         "mean_absolute_error": absolute_sum / count,
-        "rms_error": math.sqrt(square_sum / count),
+        "rms_error": rms_error,
+        "reference_rms": reference_rms,
+        "candidate_rms": candidate_rms,
+        "normalized_rms_error": normalized_rms_error,
         "cosine_similarity": cosine_similarity,
         "passed": mismatch_count == 0,
+    }
+
+
+def robust_target_metric(target: float, controls: list[float]) -> dict[str, object]:
+    control_median = statistics.median(controls)
+    deviations = [abs(value - control_median) for value in controls]
+    median_absolute_deviation = statistics.median(deviations)
+    modified_z_score = (
+        0.6744897501960817 * (target - control_median) / median_absolute_deviation
+        if median_absolute_deviation != 0.0
+        else None
+    )
+    return {
+        "target": target,
+        "control_count": len(controls),
+        "control_minimum": min(controls),
+        "control_maximum": max(controls),
+        "control_median": control_median,
+        "control_median_absolute_deviation": median_absolute_deviation,
+        "delta_from_control_median": target - control_median,
+        "ratio_to_control_median": target / control_median if control_median != 0.0 else None,
+        "modified_z_score": modified_z_score,
+        "above_control_maximum": target > max(controls),
+    }
+
+
+def target_outlier_analysis(rows: list[dict[str, object]], target_generated_index: int) -> dict[str, object]:
+    generated_indices = sorted({int(row["generated_index"]) for row in rows})
+    if target_generated_index not in generated_indices:
+        raise RuntimeError(f"target generated index {target_generated_index} is not present in the comparison")
+    control_indices = [index for index in generated_indices if index != target_generated_index]
+    if len(control_indices) < 3:
+        raise RuntimeError("target outlier analysis requires at least three control generated indices")
+
+    rows_by_coordinate = {(int(row["generated_index"]), int(row["layer"])): row for row in rows}
+    layers = sorted({int(row["layer"]) for row in rows if row["generated_index"] == target_generated_index})
+    for generated_index in generated_indices:
+        index_layers = sorted(
+            int(row["layer"]) for row in rows if int(row["generated_index"]) == generated_index
+        )
+        if index_layers != layers:
+            raise RuntimeError(
+                f"target outlier analysis requires identical layer coverage; generated index {generated_index} differs"
+            )
+    analysis_rows: list[dict[str, object]] = []
+    for layer in layers:
+        target_row = rows_by_coordinate[(target_generated_index, layer)]
+        control_rows = [rows_by_coordinate[(index, layer)] for index in control_indices]
+        normalized_rms = target_row["normalized_rms_error"]
+        control_normalized_rms = [row["normalized_rms_error"] for row in control_rows]
+        if normalized_rms is None or any(value is None for value in control_normalized_rms):
+            raise RuntimeError("target outlier analysis requires non-zero reference RMS at every coordinate")
+        cosine_distance = 1.0 - float(target_row["cosine_similarity"])
+        control_cosine_distance = [1.0 - float(row["cosine_similarity"]) for row in control_rows]
+        analysis_rows.append(
+            {
+                "layer": layer,
+                "normalized_rms_error": robust_target_metric(
+                    float(normalized_rms), [float(value) for value in control_normalized_rms]
+                ),
+                "cosine_distance": robust_target_metric(cosine_distance, control_cosine_distance),
+            }
+        )
+
+    def ranking_key(row: dict[str, object]) -> tuple[float, float]:
+        normalized = row["normalized_rms_error"]
+        assert isinstance(normalized, dict)
+        score = normalized["modified_z_score"]
+        return (
+            float(score) if score is not None else float("-inf"),
+            float(normalized["delta_from_control_median"]),
+        )
+
+    ranked_layers = [int(row["layer"]) for row in sorted(analysis_rows, key=ranking_key, reverse=True)]
+    return {
+        "target_generated_index": target_generated_index,
+        "control_generated_indices": control_indices,
+        "ranked_layers_by_normalized_rms_modified_z": ranked_layers,
+        "rows": analysis_rows,
     }
 
 
@@ -194,6 +281,7 @@ def compare_manifests(
     absolute_tolerance: float,
     relative_tolerance: float,
     generated_indices: set[int] | None = None,
+    target_generated_index: int | None = None,
 ) -> dict[str, object]:
     reference = load_manifest(reference_path)
     candidate = load_manifest(candidate_path)
@@ -237,7 +325,7 @@ def compare_manifests(
             None,
         )
         first_failing_by_index[str(generated_index)] = first
-    return {
+    report = {
         "schema": "litenn.layer_checkpoint_comparison.v1",
         "reference_manifest": str(reference_path),
         "candidate_manifest": str(candidate_path),
@@ -249,6 +337,9 @@ def compare_manifests(
         "first_failing_layer_by_generated_index": first_failing_by_index,
         "rows": rows,
     }
+    if target_generated_index is not None:
+        report["target_outlier_analysis"] = target_outlier_analysis(rows, target_generated_index)
+    return report
 
 
 def markdown_report(report: dict[str, object]) -> str:
@@ -261,17 +352,46 @@ def markdown_report(report: dict[str, object]) -> str:
         f"- Absolute/relative tolerance: `{report['absolute_tolerance']}` / `{report['relative_tolerance']}`",
         f"- First failing layers: `{report['first_failing_layer_by_generated_index']}`",
         "",
-        "| Generated | Layer | Max abs | Mean abs | RMS | Max rel | Cosine | Mismatches | Result |",
-        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Generated | Layer | Max abs | Mean abs | RMS | NRMSE | Max rel | Cosine | Mismatches | Result |",
+        "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for row in report["rows"]:
         assert isinstance(row, dict)
+        normalized_rms = row["normalized_rms_error"]
+        normalized_rms_text = "n/a" if normalized_rms is None else f"{normalized_rms:.6g}"
         lines.append(
             f"| {row['generated_index']} | {row['layer']} | {row['max_absolute_error']:.6g} | "
-            f"{row['mean_absolute_error']:.6g} | {row['rms_error']:.6g} | {row['max_relative_error']:.6g} | "
+            f"{row['mean_absolute_error']:.6g} | {row['rms_error']:.6g} | {normalized_rms_text} | "
+            f"{row['max_relative_error']:.6g} | "
             f"{row['cosine_similarity']:.9f} | {row['mismatch_count']} | "
             f"{'PASS' if row['passed'] else 'FAIL'} |"
         )
+    target_analysis = report.get("target_outlier_analysis")
+    if isinstance(target_analysis, dict):
+        lines.extend(
+            [
+                "",
+                f"## Target Index {target_analysis['target_generated_index']} Neighborhood",
+                "",
+                f"Controls: `{target_analysis['control_generated_indices']}`",
+                "",
+                "| Layer | Target NRMSE | Control median | Delta | Modified z | Above max | "
+                "Target cosine distance | Cosine modified z |",
+                "| ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: |",
+            ]
+        )
+        for row in target_analysis["rows"]:
+            normalized = row["normalized_rms_error"]
+            cosine = row["cosine_distance"]
+            normalized_z = normalized["modified_z_score"]
+            cosine_z = cosine["modified_z_score"]
+            lines.append(
+                f"| {row['layer']} | {normalized['target']:.6g} | {normalized['control_median']:.6g} | "
+                f"{normalized['delta_from_control_median']:.6g} | "
+                f"{'n/a' if normalized_z is None else f'{normalized_z:.6g}'} | "
+                f"{'yes' if normalized['above_control_maximum'] else 'no'} | {cosine['target']:.6g} | "
+                f"{'n/a' if cosine_z is None else f'{cosine_z:.6g}'} |"
+            )
     return "\n".join(lines) + "\n"
 
 
@@ -292,10 +412,13 @@ def main() -> int:
     parser.add_argument("--absolute-tolerance", type=float, default=1.0e-5)
     parser.add_argument("--relative-tolerance", type=float, default=1.0e-5)
     parser.add_argument("--generated-indices", type=comma_indices)
+    parser.add_argument("--target-generated-index", type=int)
     parser.add_argument("--output-dir", required=True, type=Path)
     args = parser.parse_args()
     if args.absolute_tolerance < 0 or args.relative_tolerance < 0:
         parser.error("tolerances must be non-negative")
+    if args.target_generated_index is not None and args.target_generated_index < 0:
+        parser.error("target generated index must be non-negative")
 
     try:
         report = compare_manifests(
@@ -304,6 +427,7 @@ def main() -> int:
             args.absolute_tolerance,
             args.relative_tolerance,
             args.generated_indices,
+            args.target_generated_index,
         )
     except RuntimeError as error:
         parser.error(str(error))
