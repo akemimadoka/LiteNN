@@ -7,12 +7,40 @@ from benchmark.profile_bundle import (
     GGUFDecodeAnalysis,
     GGUFDecodeStep,
     GGUFNodeEvent,
+    classify_gguf_helper,
     classify_native_residual_node,
     write_gguf_decode_analysis,
 )
 
 
 class NativeResidualLedgerTest(unittest.TestCase):
+    def test_classifies_qwen_decode_helper_stages(self) -> None:
+        self.assertEqual(
+            classify_gguf_helper(
+                "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32",
+                "lhs=1x5120 out=1x7168",
+            ),
+            ("projection", "qkv_grouped"),
+        )
+        self.assertEqual(
+            classify_gguf_helper(
+                "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
+                "lhs=1x5120 out=1x27648",
+            ),
+            ("projection", "ffn_gate_up_grouped"),
+        )
+        self.assertEqual(
+            classify_gguf_helper("litenn_cpu_swiglu_f32", "gate=1x13824 up=1x13824 out=1x13824"),
+            ("activation", "swiglu"),
+        )
+        self.assertEqual(
+            classify_gguf_helper(
+                "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+                "queries=40x128 keys=25x8x128 out=40x128",
+            ),
+            ("attention", "active_prefix"),
+        )
+
     def test_classifies_high_level_residual_categories(self) -> None:
         self.assertEqual(classify_native_residual_node("CallNode"), "call_control")
         self.assertEqual(classify_native_residual_node("GroupedQuantizedMatMulNode"), "projection_wrapper")

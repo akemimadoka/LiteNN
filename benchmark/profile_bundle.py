@@ -804,6 +804,8 @@ def classify_gguf_helper(helper: str, detail: str) -> tuple[str, str]:
         return "projection", "quantized_matmul"
     if "active_prefix_attention" in helper or "paged_attention" in helper:
         return "attention", "paged" if "paged" in helper else "active_prefix"
+    if "swiglu" in helper:
+        return "activation", "swiglu"
     if "rope" in helper:
         return "position_encoding", "rope"
     if "scatter_update" in helper or "paged_kv_append" in helper:
