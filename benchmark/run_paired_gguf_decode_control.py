@@ -19,15 +19,26 @@ import time
 from ctypes import wintypes
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from gguf_decode_compare import litenn_row, litenn_steady_generation_row
-from run_llama_cpp_completion_control import (
-    host_metadata,
-    parse_perf_output,
-    priority,
-    prompt_metadata,
-    sha256_file,
-    version_metadata,
-)
+try:
+    from .gguf_decode_compare import litenn_row, litenn_steady_generation_row
+    from .run_llama_cpp_completion_control import (
+        host_metadata,
+        parse_perf_output,
+        priority,
+        prompt_metadata,
+        sha256_file,
+        version_metadata,
+    )
+except ImportError:
+    from gguf_decode_compare import litenn_row, litenn_steady_generation_row
+    from run_llama_cpp_completion_control import (
+        host_metadata,
+        parse_perf_output,
+        priority,
+        prompt_metadata,
+        sha256_file,
+        version_metadata,
+    )
 
 
 METRIC_RE = re.compile(r"(?P<name>[a-zA-Z0-9_]+)=(?P<value>[^\s]+)")
