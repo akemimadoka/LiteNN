@@ -164,6 +164,8 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
     try:
         reference_document = load_json(reference_path, MANIFEST_SCHEMA)
         candidate_document = load_json(candidate_path, MANIFEST_SCHEMA)
+        if reference_document.get("sampling") != "greedy" or candidate_document.get("sampling") != "greedy":
+            raise QualityError("both natural-generation manifests must use sampling=greedy")
         reference_prompt = token_ids(reference_document, "promptTokenIds", reference_path)
         candidate_prompt = token_ids(candidate_document, "promptTokenIds", candidate_path)
         if reference_prompt != candidate_prompt:

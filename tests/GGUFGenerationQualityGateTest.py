@@ -39,6 +39,7 @@ def write_manifest(
     manifest = {
         "schema": gate.MANIFEST_SCHEMA,
         "producer": producer,
+        "sampling": "greedy",
         "promptTokenIds": prompt,
         "generatedTokenIds": generated,
         "requestedTokenCount": len(generated),

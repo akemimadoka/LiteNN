@@ -113,6 +113,7 @@ def write_natural_generation_manifest(
         "schema": "litenn.natural_generation.v1",
         "producer": "LiteNN",
         "runtime": "cpu_aot",
+        "sampling": "greedy",
         "promptTokenIds": prompt_token_ids,
         "generatedTokenIds": generated_token_ids,
         "requestedTokenCount": requested_token_count,
@@ -607,6 +608,11 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Natural-generation artifact directory; defaults to WORKDIR/natural_generation/litenn",
     )
+    parser.add_argument(
+        "--capture-natural-generation-reference",
+        action="store_true",
+        help="Run the llama.cpp adapter on the identical prompt token ids and create a paired campaign",
+    )
     parser.add_argument("--llama-debug", type=Path)
     parser.add_argument("--llama-cli", type=Path)
     parser.add_argument("--allow-analysis-failure", action="store_true")
@@ -677,6 +683,10 @@ def main() -> int:
         raise SystemExit("--capture-natural-generation currently requires --sample greedy")
     if args.capture_natural_generation and args.compile_only:
         raise SystemExit("--capture-natural-generation cannot be combined with --compile-only")
+    if args.capture_natural_generation_reference and not args.capture_natural_generation:
+        raise SystemExit("--capture-natural-generation-reference requires --capture-natural-generation")
+    if args.capture_natural_generation_reference and args.llamacpp_tokenizer_tool is None:
+        raise SystemExit("--capture-natural-generation-reference requires --llamacpp-tokenizer-tool")
 
     root = repo_root()
     workdir: Path = args.workdir
@@ -702,6 +712,8 @@ def main() -> int:
     resolved_token_output: Path | None = None
     resolved_text_output: Path | None = None
     resolved_natural_generation_manifest: Path | None = None
+    resolved_natural_generation_reference_manifest: Path | None = None
+    resolved_natural_generation_campaign: Path | None = None
     tokenizer_prompt_ids: list[int] | None = None
     if args.llamacpp_tokenizer_tool is not None:
         tokenizer_dir = workdir / "llamacpp_tokenizer"
@@ -1021,6 +1033,47 @@ def main() -> int:
                 text_output.parent.mkdir(parents=True, exist_ok=True)
                 text_output.write_bytes(b"")
 
+        if args.capture_natural_generation_reference:
+            reference_dir = natural_generation_dir.parent / "reference"
+            reference_cmd = [
+                str(args.llamacpp_tokenizer_tool),
+                "generate-greedy-logits",
+                str(args.model),
+                ",".join(str(token_id) for token_id in direct_prompt_ids),
+                str(args.steps),
+                str(reference_dir),
+            ]
+            reference = run_step("capture_reference_natural_generation", reference_cmd, workdir)
+            steps.append(reference)
+            require_step_ok(reference)
+            resolved_natural_generation_reference_manifest = reference_dir / "manifest.json"
+            reference_document = json.loads(
+                resolved_natural_generation_reference_manifest.read_text(encoding="utf-8")
+            )
+            if reference_document.get("schema") != "litenn.natural_generation.v1":
+                raise SystemExit("llama.cpp natural generation returned an unsupported manifest schema")
+            if reference_document.get("promptTokenIds") != direct_prompt_ids:
+                raise SystemExit("llama.cpp natural generation changed the supplied prompt token ids")
+            campaign_dir = natural_generation_dir.parent
+            campaign_document = {
+                "schema": "litenn.natural_generation_campaign.v1",
+                "cases": [
+                    {
+                        "name": "qwen-smoke",
+                        "referenceManifest": relative_or_absolute(
+                            resolved_natural_generation_reference_manifest, campaign_dir
+                        ),
+                        "candidateManifest": relative_or_absolute(
+                            resolved_natural_generation_manifest, campaign_dir
+                        ),
+                    }
+                ],
+            }
+            resolved_natural_generation_campaign = campaign_dir / "campaign.json"
+            resolved_natural_generation_campaign.write_text(
+                json.dumps(campaign_document, indent=2) + "\n", encoding="utf-8"
+            )
+
     trace_path, waterfall_path = write_profile_artifacts(workdir, steps)
 
     report = {
@@ -1087,6 +1140,16 @@ def main() -> int:
         "natural_generation_manifest": (
             str(resolved_natural_generation_manifest)
             if resolved_natural_generation_manifest is not None
+            else None
+        ),
+        "natural_generation_reference_manifest": (
+            str(resolved_natural_generation_reference_manifest)
+            if resolved_natural_generation_reference_manifest is not None
+            else None
+        ),
+        "natural_generation_campaign": (
+            str(resolved_natural_generation_campaign)
+            if resolved_natural_generation_campaign is not None
             else None
         ),
         "trace": str(trace_path),

@@ -1151,7 +1151,7 @@ namespace LiteNN::LlamaCppAdapter
 			output << ']';
 		};
 		output << "{\n  \"schema\": \"litenn.natural_generation.v1\",\n"
-		       << "  \"producer\": \"llama.cpp\",\n  \"promptTokenIds\": ";
+		       << "  \"producer\": \"llama.cpp\",\n  \"sampling\": \"greedy\",\n  \"promptTokenIds\": ";
 		writeTokens(promptTokenIds);
 		output << ",\n  \"generatedTokenIds\": ";
 		writeTokens(result.generatedTokenIds);
