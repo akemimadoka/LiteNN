@@ -94,6 +94,7 @@
 #include <bit>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -856,10 +857,8 @@ namespace
 			for (auto& worker : workers_)
 			{
 				worker->generation.fetch_add(1, std::memory_order_release);
-				if (worker->sleeping.exchange(false, std::memory_order_acq_rel))
-				{
-					worker->generation.notify_one();
-				}
+				std::lock_guard waitLock(worker->waitMutex);
+				worker->waitCondition.notify_one();
 			}
 			for (auto& worker : workers_)
 			{
@@ -928,9 +927,10 @@ namespace
 			for (std::size_t i = 0; i < desiredWorkers; ++i)
 			{
 				workers_[i]->generation.fetch_add(1, std::memory_order_release);
-				if (workers_[i]->sleeping.exchange(false, std::memory_order_acq_rel))
+				if (workers_[i]->sleeping.load(std::memory_order_acquire))
 				{
-					workers_[i]->generation.notify_one();
+					std::lock_guard waitLock(workers_[i]->waitMutex);
+					workers_[i]->waitCondition.notify_one();
 					if (profile)
 					{
 						++profile->signaledWorkerCount;
@@ -969,6 +969,8 @@ namespace
 		{
 			std::atomic<std::uint64_t> generation{};
 			std::atomic<bool> sleeping{};
+			std::mutex waitMutex;
+			std::condition_variable waitCondition;
 			std::thread thread;
 		};
 
@@ -1034,11 +1036,11 @@ namespace
 				if (!observedWorkWhilePolling)
 				{
 					worker.sleeping.store(true, std::memory_order_release);
-					while (worker.generation.load(std::memory_order_acquire) == observedGeneration &&
-					       !stopping_.load(std::memory_order_acquire))
-					{
-						worker.generation.wait(observedGeneration, std::memory_order_acquire);
-					}
+					std::unique_lock waitLock(worker.waitMutex);
+					worker.waitCondition.wait(waitLock, [&] {
+						return worker.generation.load(std::memory_order_acquire) != observedGeneration ||
+						       stopping_.load(std::memory_order_acquire);
+					});
 					worker.sleeping.store(false, std::memory_order_release);
 				}
 				if (waitPolicy == CPUAOTWorkerWaitPolicy::Adaptive)
