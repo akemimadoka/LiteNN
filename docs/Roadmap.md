@@ -3360,11 +3360,13 @@ Priority classes:
                         index-23 error is distributed and strongest in blocks 39-47. Block 47 RMS error increases
                         `3.03993 -> 3.67006` (`+20.73%`) and NRMSE increases `5.10` percentage points. Evidence:
                         `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
-                  - [ ] P0: capture indices 16-23 and rank index-23 block NRMSE/cosine deltas against neighborhood
-                        token-to-token variance.
-                  - [ ] P0: expose selectable sub-layer boundaries in blocks 9, 19-25, and 38-47, covering attention
-                        norm, biased/rotated QKV, attention output/residual, FFN norm, Gate/Up, SwiGLU, Down, and the
-                        existing post-FFN residual.
+                  - [x] P0: capture indices 16-23 and rank index-23 block NRMSE/cosine deltas against seven control
+                        tokens. Block 46 is the strongest joint outlier (`33.42/15.44` modified-z), block 44 is
+                        secondary, and block 47 returns within the NRMSE control maximum. The comparator now persists
+                        RMS/NRMSE, median/MAD, above-maximum checks, and ranked layers.
+                  - [ ] P0: expose selectable sub-layer boundaries in primary block 46, secondary blocks 44/32, and
+                        their adjacent controls. Cover attention norm, biased/rotated QKV, attention output/residual,
+                        FFN norm, Gate/Up, SwiGLU, Down, and the existing post-FFN residual without expanding all blocks.
                   - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
                         a numerical fix only when one boundary explains the rank crossing.
                   - [ ] P1: gate the eventual fix on 128-token natural parity, corpus perplexity delta, task quality,
@@ -3876,6 +3878,10 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Completed the generated-index 16-23 Qwen neighborhood panel and added native NRMSE/MAD target-outlier analysis to
+  the checkpoint comparator. Index 23 exceeds both NRMSE and cosine-distance control maxima through blocks 38-46;
+  block 46 is the strongest joint outlier, while block 47 is not an NRMSE outlier. Sub-layer localization is narrowed
+  to blocks 46, 44, and 32 plus adjacent controls.
 - Added controlled llama.cpp `l_out-N` capture without patching vendored sources and compared real 14B fixed-trajectory
   indices 0, 22, and 23 against LiteNN. The result rejects a discrete first-failing-layer model: differences start at
   block 0, while index-23 additional error is strongest in blocks 39-47. The next correctness P0 is neighborhood-based

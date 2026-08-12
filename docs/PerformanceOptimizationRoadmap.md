@@ -134,10 +134,13 @@ P0 implementation order:
       from block 0, while the extra index-23 error is distributed and is strongest in blocks 39-47. At block 47, RMS
       error rises `3.03993 -> 3.67006` (`+20.73%`) and NRMSE rises `5.10` percentage points. Evidence:
       `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
-    - [ ] P0: capture an index 16-23 neighborhood panel and rank block-level index-23 NRMSE/cosine deltas against normal
-      token-to-token variance. Do not treat two different input tokens as a causal A/B pair.
-    - [ ] P0: add selectable sub-layer checkpoints in blocks 9, 19-25, and 38-47 for attention norm, Q/K/V after bias
-      and RoPE, attention output, post-attention residual, FFN norm, Gate/Up, SwiGLU, Down, and post-FFN residual.
+    - [x] P0: capture an index 16-23 neighborhood panel and rank block-level index-23 NRMSE/cosine deltas against seven
+      control tokens. Block 46 is the strongest joint outlier (`33.42/15.44` modified-z), block 44 is secondary, and
+      block 47 returns inside the NRMSE control maximum. The comparator now emits reference/candidate RMS, NRMSE,
+      median/MAD, above-maximum checks, and ranked layers.
+    - [ ] P0: add selectable sub-layer checkpoints in primary block 46, secondary blocks 44/32, and their adjacent
+      controls. Cover attention norm, Q/K/V after bias and RoPE, attention output, post-attention residual, FFN norm,
+      Gate/Up, SwiGLU, Down, and post-FFN residual without expanding every block's public diagnostic ABI.
     - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
       math only after a specific boundary exceeds the neighborhood distribution and explains the logit-rank crossing.
     - [ ] P1: add 128-token natural parity, corpus perplexity delta, and task-quality gates independently of throughput.

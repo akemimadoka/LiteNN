@@ -7,11 +7,12 @@ produce different Float32 hidden values at block 0 while following the same toke
 independent quantized kernels and accumulation orders. A zero-tolerance "first failing layer" therefore selects block 0
 at every measured position and is not a useful localization rule.
 
-The useful new signal is relative amplification. Compared with generated index 22, index 23 has lower cross-runtime
-error through the first blocks, crosses above the index-22 normalized error around block 9, and shows its strongest,
-most consistent additional error in blocks 39-47. Block 47 RMS error rises from `3.03993` to `3.67006` (`+20.73%`),
-while reference-RMS-normalized error rises by `5.10` percentage points. This makes the late decoder blocks and final
-normalization/logits path the first diagnostic window, but it does not yet prove that one late-block operator is wrong.
+The useful signal is relative amplification against a neighborhood, not one adjacent token. With generated indices
+16-22 as controls, index 23 exceeds the control maximum for both NRMSE and cosine distance throughout blocks 38-46.
+Block 46 is the strongest robust outlier: NRMSE is `0.185127` versus a `0.140524` control median and `0.155339`
+maximum, producing modified-z `33.42`; cosine-distance modified-z is `15.44`. Blocks 44 and 32 are secondary windows.
+Block 47 is not an NRMSE outlier against this neighborhood, invalidating the earlier broad 39-47 interpretation. The
+next diagnostic should split block 46 internally, with neighboring blocks and blocks 44/32 as controls.
 
 No model path or private artifact location is part of this evidence record.
 
@@ -75,6 +76,32 @@ index-22 control at block 9, falls below it again in blocks 11-18, remains mostl
 reaches the strongest sustained region in blocks 39-47. The evidence supports a distributed accumulation model more
 strongly than a single abrupt bad block.
 
+## Index 16-23 Neighborhood
+
+The second campaign captured all 48 post-FFN residuals at generated indices 16-23 in both runtimes, for 384 matched
+rows. For each block, index 23 is compared with the median and median absolute deviation of indices 16-22. Modified-z
+uses `0.67448975 * (target - median) / MAD`; `above max` is retained because a very small MAD can magnify the score.
+
+| Block | Target NRMSE | Control median | Control max | Delta vs median | Modified-z | Cosine-distance z | Above both maxima |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 32 | 0.337416 | 0.292819 | 0.312752 | +0.044597 | 2.01 | 3.83 | yes |
+| 38 | 0.286960 | 0.245513 | 0.275490 | +0.041446 | 1.22 | 1.23 | yes |
+| 39 | 0.293088 | 0.236570 | 0.265561 | +0.056519 | 2.92 | 2.65 | yes |
+| 40 | 0.278207 | 0.221787 | 0.246782 | +0.056420 | 3.06 | 2.81 | yes |
+| 41 | 0.268713 | 0.217028 | 0.235822 | +0.051685 | 2.82 | 2.71 | yes |
+| 42 | 0.259678 | 0.203705 | 0.220914 | +0.055973 | 2.97 | 3.02 | yes |
+| 43 | 0.252962 | 0.195341 | 0.210975 | +0.057621 | 3.26 | 3.34 | yes |
+| 44 | 0.236826 | 0.183635 | 0.194398 | +0.053191 | 3.33 | 4.33 | yes |
+| 45 | 0.213361 | 0.163759 | 0.178446 | +0.049602 | 2.76 | 3.10 | yes |
+| 46 | 0.185127 | 0.140524 | 0.155339 | +0.044603 | 33.42 | 15.44 | yes |
+| 47 | 0.194739 | 0.162983 | 0.208631 | +0.031756 | 0.83 | 1.43 | no (NRMSE) |
+
+The block-46 score is not merely a large absolute residual: its target NRMSE is `31.74%` above the control median and
+`19.18%` above the largest control. Its unusually small control MAD (`0.00090015`) explains the very large z-score, but
+the independent cosine-distance signal and both above-maximum checks preserve the ranking. Block 47 then partially
+returns to the neighborhood envelope, so final post-FFN residual magnitude alone cannot identify the responsible
+operation.
+
 ## Runtime Observations
 
 The LiteNN diagnostic run reproduced exactly one forced-token argmax mismatch, at generated index 23. It reported:
@@ -92,11 +119,12 @@ the diagnostic ABI changes output liveness and the llama.cpp callback synchroniz
 
 1. Do not change model math based on zero-tolerance hidden-state mismatch. Independent Q4_K/Q6_K kernels differ from
    block 0, while the generated sequence remains equal through index 22.
-2. Measure indices 16-23 (preferably 0-31) to build a per-block neighborhood distribution. Index 23 should be treated
-   as exceptional only where its NRMSE/cosine delta exceeds normal token-to-token variation.
-3. Add selectable sub-layer checkpoints for the late-block window first: attention norm, Q/K/V after bias and RoPE,
-   attention output, post-attention residual, FFN norm, Gate/Up, SwiGLU, Down, and post-FFN residual. Use blocks 9,
-   19-25, and 38-47 as crossover, sustained-growth, and strongest-growth windows.
+2. The index 16-23 neighborhood gate is complete. Block 46 is the primary sub-layer target; blocks 44 and 32 are
+   secondary targets. Include adjacent blocks 45/47, 43/45, and 31/33 as local controls rather than exporting every
+   intermediate from all 48 blocks.
+3. Add selectable sub-layer checkpoints for attention norm, Q/K/V after bias and RoPE, attention output,
+   post-attention residual, FFN norm, Gate/Up, SwiGLU, Down, and post-FFN residual. Determine the first internal
+   boundary at which block 46 becomes exceptional relative to the same index-16-22 neighborhood.
 4. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the
    contribution of output projection error. An argmax mismatch can be benign when the reference margin is tiny.
 5. After localization, validate a candidate with the same forced trajectory, natural greedy parity beyond 128 tokens,
