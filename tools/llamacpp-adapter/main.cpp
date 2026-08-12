@@ -22,6 +22,15 @@ namespace
 		return value;
 	}
 
+	std::vector<std::int32_t> ParseGeneratedPrefix(std::string_view text)
+	{
+		if (text == "-")
+		{
+			return {};
+		}
+		return LiteNN::LlamaCppAdapter::ParseCommaTokenIds(text, "generated token ids");
+	}
+
 	void PrintUsage(std::string_view executable)
 	{
 		std::cerr
@@ -36,11 +45,11 @@ namespace
 		    << "  " << executable
 		    << " generate-greedy-logits <model.gguf> <comma-prompt-token-ids> <max-generated-tokens> <output-dir>\n"
 		    << "  " << executable
-		    << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
+		    << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids-or-dash> "
 		       "<comma-generated-indices> <output-dir>\n"
 		    << "  " << executable
 		    << " decode-sub-layer-checkpoints <model.gguf> <comma-prompt-token-ids> "
-		       "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir> "
+		       "<comma-generated-token-ids-or-dash> <comma-generated-indices> <comma-block-indices> <output-dir> "
 		       "[logits-output-dir]\n";
 	}
 
@@ -130,7 +139,7 @@ try
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
 		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
-		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
+		const auto generatedTokens = ParseGeneratedPrefix(argv[4]);
 		const auto parsedIndices = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[5], "generated indices");
 		std::vector<std::size_t> generatedIndices;
 		generatedIndices.reserve(parsedIndices.size());
@@ -147,7 +156,7 @@ try
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
 		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
-		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
+		const auto generatedTokens = ParseGeneratedPrefix(argv[4]);
 		const auto parsedIndices = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[5], "generated indices");
 		const auto parsedBlocks = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[6], "block indices");
 		std::vector<std::size_t> generatedIndices;
