@@ -22,7 +22,10 @@ namespace
 		          << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
 		          << "  " << executable
 		          << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
-		             "<comma-generated-indices> <output-dir>\n";
+		             "<comma-generated-indices> <output-dir>\n"
+		          << "  " << executable
+		          << " decode-sub-layer-checkpoints <model.gguf> <comma-prompt-token-ids> "
+		             "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir>\n";
 	}
 
 	std::string ReadBinary(const std::filesystem::path& path)
@@ -110,6 +113,30 @@ try
 		model.CaptureDecodeLayerCheckpoints(promptTokens, generatedTokens, generatedIndices, argv[6]);
 		std::cout << "Captured " << generatedIndices.size() << " llama.cpp layer-checkpoint steps in " << argv[6]
 		          << '\n';
+		return 0;
+	}
+	if (command == "decode-sub-layer-checkpoints" && argc == 8)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
+		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
+		const auto parsedIndices = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[5], "generated indices");
+		const auto parsedBlocks = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[6], "block indices");
+		std::vector<std::size_t> generatedIndices;
+		std::vector<std::size_t> blockIndices;
+		generatedIndices.reserve(parsedIndices.size());
+		blockIndices.reserve(parsedBlocks.size());
+		for (const auto index : parsedIndices)
+		{
+			generatedIndices.push_back(static_cast<std::size_t>(index));
+		}
+		for (const auto block : parsedBlocks)
+		{
+			blockIndices.push_back(static_cast<std::size_t>(block));
+		}
+		model.CaptureDecodeSubLayerCheckpoints(promptTokens, generatedTokens, generatedIndices, blockIndices, argv[7]);
+		std::cout << "Captured " << generatedIndices.size() << " llama.cpp sub-layer checkpoint steps for "
+		          << blockIndices.size() << " blocks in " << argv[7] << '\n';
 		return 0;
 	}
 	PrintUsage(argv[0]);

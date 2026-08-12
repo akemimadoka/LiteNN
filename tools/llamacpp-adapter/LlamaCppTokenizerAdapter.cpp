@@ -5,11 +5,13 @@
 #include <llama.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -324,6 +326,387 @@ namespace LiteNN::LlamaCppAdapter
 			std::map<std::size_t, std::vector<float>> layers_;
 			std::string error_;
 		};
+
+		constexpr std::array<std::string_view, 13> SubLayerBoundaries{
+			"attention_norm",   "query_rotated",      "key_rotated", "value",    "attention_context",
+			"attention_output", "attention_residual", "ffn_norm",    "ffn_gate", "ffn_up",
+			"ffn_swiglu",       "ffn_down",           "post_ffn",
+		};
+
+		struct NamedLayerTensor
+		{
+			std::string_view base;
+			std::optional<std::size_t> layer;
+		};
+
+		NamedLayerTensor ParseNamedLayerTensor(const ggml_tensor* tensor)
+		{
+			const std::string_view name = ggml_get_name(tensor);
+			const auto separator = name.rfind('-');
+			if (separator == std::string_view::npos)
+			{
+				return { .base = name };
+			}
+			const auto suffix = name.substr(separator + 1);
+			std::size_t layer{};
+			const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(), layer);
+			if (suffix.empty() || parsed.ec != std::errc{} || parsed.ptr != suffix.data() + suffix.size())
+			{
+				return { .base = name };
+			}
+			return { .base = name.substr(0, separator), .layer = layer };
+		}
+
+		std::vector<float> ReadContiguousTensor(const ggml_tensor* tensor)
+		{
+			if (!ggml_is_contiguous(tensor))
+			{
+				throw std::runtime_error("llama.cpp sub-layer checkpoint tensor is not contiguous: " +
+				                         std::string(ggml_get_name(tensor)));
+			}
+			const auto count = static_cast<std::size_t>(ggml_nelements(tensor));
+			std::size_t elementSize{};
+			switch (tensor->type)
+			{
+			case GGML_TYPE_F32:
+				elementSize = sizeof(float);
+				break;
+			case GGML_TYPE_F16:
+				elementSize = sizeof(ggml_fp16_t);
+				break;
+			case GGML_TYPE_BF16:
+				elementSize = sizeof(ggml_bf16_t);
+				break;
+			default:
+				throw std::runtime_error("llama.cpp sub-layer checkpoint tensor has unsupported dtype " +
+				                         std::string(ggml_type_name(tensor->type)));
+			}
+			std::vector<std::byte> bytes(count * elementSize);
+			ggml_backend_tensor_get(tensor, bytes.data(), 0, bytes.size());
+			std::vector<float> values(count);
+			if (tensor->type == GGML_TYPE_F32)
+			{
+				std::memcpy(values.data(), bytes.data(), bytes.size());
+			}
+			else if (tensor->type == GGML_TYPE_F16)
+			{
+				ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t*>(bytes.data()), values.data(),
+				                      static_cast<std::int64_t>(count));
+			}
+			else
+			{
+				ggml_bf16_to_fp32_row(reinterpret_cast<const ggml_bf16_t*>(bytes.data()), values.data(),
+				                      static_cast<std::int64_t>(count));
+			}
+			return values;
+		}
+
+		class SubLayerCheckpointCapture
+		{
+		public:
+			SubLayerCheckpointCapture(std::size_t layerCount, std::size_t hiddenWidth, std::size_t attentionHeads,
+			                          std::size_t kvHeads, std::span<const std::size_t> selectedBlocks,
+			                          const std::filesystem::path& outputDirectory)
+			    : layerCount_(layerCount), hiddenWidth_(hiddenWidth), attentionHeads_(attentionHeads),
+			      kvHeads_(kvHeads), headWidth_(hiddenWidth / attentionHeads),
+			      selectedBlocks_(selectedBlocks.begin(), selectedBlocks.end())
+			{
+				if (attentionHeads == 0 || kvHeads == 0 || hiddenWidth % attentionHeads != 0 || selectedBlocks_.empty())
+				{
+					throw std::runtime_error("invalid llama.cpp sub-layer checkpoint dimensions or block selection");
+				}
+				if (selectedBlocks_.size() != selectedBlocks.size() || *selectedBlocks_.rbegin() >= layerCount_)
+				{
+					throw std::runtime_error("sub-layer checkpoint block indices must be unique and within the model");
+				}
+				for (const auto boundary : SubLayerBoundaries)
+				{
+					auto [it, inserted] = groups_.try_emplace(std::string(boundary));
+					(void) inserted;
+					it->second.directory = outputDirectory / boundary;
+					std::filesystem::create_directories(it->second.directory);
+					it->second.manifest.open(it->second.directory / "manifest.tsv", std::ios::binary | std::ios::trunc);
+					if (!it->second.manifest)
+					{
+						throw std::runtime_error("failed to open llama.cpp sub-layer checkpoint manifest");
+					}
+					it->second.manifest
+					    << "# litenn-layer-checkpoints-v1\n"
+					    << "generated_index\tabsolute_step\tposition\tinput_token_id\tfile\tlayer\tname\tdtype\tshape\t"
+					       "byte_offset\tbyte_size\tminimum\tmaximum\tmean\trms\tnon_finite\tchecksum_fnv1a64\n";
+				}
+			}
+
+			void Begin(std::size_t generatedIndex)
+			{
+				activeGeneratedIndex_ = generatedIndex;
+				values_.clear();
+				layerOutputs_.clear();
+				inputEmbedding_.clear();
+				error_.clear();
+			}
+
+			void End(std::size_t absoluteStep, std::size_t position, std::int32_t inputTokenId)
+			{
+				if (!error_.empty())
+				{
+					throw std::runtime_error(error_);
+				}
+				if (!activeGeneratedIndex_)
+				{
+					throw std::runtime_error("llama.cpp sub-layer checkpoint capture was not active");
+				}
+				for (const auto block : selectedBlocks_)
+				{
+					const auto& residual = Require("attention_residual", block);
+					const auto& blockInput = block == 0 ? inputEmbedding_ : RequireLayerOutput(block - 1);
+					if (residual.size() != blockInput.size())
+					{
+						throw std::runtime_error("llama.cpp attention residual and block input shapes differ");
+					}
+					auto attentionOutput = residual;
+					for (std::size_t i = 0; i < attentionOutput.size(); ++i)
+					{
+						attentionOutput[i] -= blockInput[i];
+					}
+					values_["attention_output"][block] = std::move(attentionOutput);
+				}
+
+				for (const auto boundary : SubLayerBoundaries)
+				{
+					auto& group = groups_.at(std::string(boundary));
+					const auto fileName = "generated-" + SixDigit(*activeGeneratedIndex_) + ".bin";
+					std::ofstream payload(group.directory / fileName, std::ios::binary | std::ios::trunc);
+					if (!payload)
+					{
+						throw std::runtime_error("failed to open llama.cpp sub-layer checkpoint payload");
+					}
+					std::size_t byteOffset = 0;
+					for (const auto block : selectedBlocks_)
+					{
+						const auto& values = Require(boundary, block);
+						const auto byteSize = values.size() * sizeof(float);
+						payload.write(reinterpret_cast<const char*>(values.data()),
+						              static_cast<std::streamsize>(byteSize));
+						const auto summary = Summarize(values);
+						group.manifest << std::setprecision(17) << *activeGeneratedIndex_ << '\t' << absoluteStep
+						               << '\t' << position << '\t' << inputTokenId << '\t' << fileName << '\t' << block
+						               << '\t' << "layer_checkpoint_" << boundary << '_' << block << "\tFloat32\t"
+						               << ShapeFor(boundary, values.size()) << '\t' << byteOffset << '\t' << byteSize
+						               << '\t' << summary.minimum << '\t' << summary.maximum << '\t' << summary.mean
+						               << '\t' << summary.rms << '\t' << summary.nonFinite << '\t' << std::hex
+						               << std::setw(16) << std::setfill('0') << FNV1a(values) << std::dec
+						               << std::setfill(' ') << '\n';
+						byteOffset += byteSize;
+					}
+					group.manifest.flush();
+					if (!payload || !group.manifest)
+					{
+						throw std::runtime_error("failed to write llama.cpp sub-layer checkpoints");
+					}
+				}
+				activeGeneratedIndex_.reset();
+				values_.clear();
+				layerOutputs_.clear();
+				inputEmbedding_.clear();
+			}
+
+			static bool Callback(ggml_tensor* tensor, bool ask, void* userData) noexcept
+			{
+				auto& self = *static_cast<SubLayerCheckpointCapture*>(userData);
+				if (!self.activeGeneratedIndex_ || !self.Wants(tensor))
+				{
+					return false;
+				}
+				if (ask)
+				{
+					return true;
+				}
+				try
+				{
+					self.Store(tensor);
+					return true;
+				}
+				catch (const std::exception& error)
+				{
+					self.error_ = error.what();
+					return false;
+				}
+			}
+
+		private:
+			struct Group
+			{
+				std::filesystem::path directory;
+				std::ofstream manifest;
+			};
+
+			static std::optional<std::string_view> BoundaryFor(std::string_view base)
+			{
+				if (base == "attn_norm")
+				{
+					return "attention_norm";
+				}
+				if (base == "Qcur")
+				{
+					return "query_rotated";
+				}
+				if (base == "Kcur")
+				{
+					return "key_rotated";
+				}
+				if (base == "Vcur")
+				{
+					return "value";
+				}
+				if (base == "kqv_out")
+				{
+					return "attention_context";
+				}
+				if (base == "ffn_inp")
+				{
+					return "attention_residual";
+				}
+				if (base == "ffn_norm")
+				{
+					return "ffn_norm";
+				}
+				if (base == "ffn_gate")
+				{
+					return "ffn_gate";
+				}
+				if (base == "ffn_up")
+				{
+					return "ffn_up";
+				}
+				if (base == "ffn_swiglu")
+				{
+					return "ffn_swiglu";
+				}
+				if (base == "ffn_out")
+				{
+					return "ffn_down";
+				}
+				if (base == "l_out")
+				{
+					return "post_ffn";
+				}
+				return std::nullopt;
+			}
+
+			bool Wants(const ggml_tensor* tensor) const
+			{
+				const auto named = ParseNamedLayerTensor(tensor);
+				if (named.base == "inp_embd")
+				{
+					return selectedBlocks_.contains(0);
+				}
+				if (!named.layer)
+				{
+					return false;
+				}
+				if (named.base == "l_out")
+				{
+					return selectedBlocks_.contains(*named.layer) || selectedBlocks_.contains(*named.layer + 1);
+				}
+				return selectedBlocks_.contains(*named.layer) && BoundaryFor(named.base).has_value();
+			}
+
+			void Store(const ggml_tensor* tensor)
+			{
+				const auto named = ParseNamedLayerTensor(tensor);
+				auto values = ReadContiguousTensor(tensor);
+				if (named.base == "inp_embd")
+				{
+					inputEmbedding_ = std::move(values);
+					return;
+				}
+				if (!named.layer)
+				{
+					throw std::runtime_error("llama.cpp sub-layer checkpoint tensor is missing a layer suffix");
+				}
+				if (named.base == "l_out")
+				{
+					layerOutputs_[*named.layer] = values;
+				}
+				if (const auto boundary = BoundaryFor(named.base); boundary && selectedBlocks_.contains(*named.layer))
+				{
+					values_[std::string(*boundary)][*named.layer] = std::move(values);
+				}
+			}
+
+			const std::vector<float>& Require(std::string_view boundary, std::size_t block) const
+			{
+				const auto boundaryIt = values_.find(std::string(boundary));
+				if (boundaryIt == values_.end() || !boundaryIt->second.contains(block))
+				{
+					throw std::runtime_error(std::format("llama.cpp did not capture {} for block {}", boundary, block));
+				}
+				return boundaryIt->second.at(block);
+			}
+
+			const std::vector<float>& RequireLayerOutput(std::size_t block) const
+			{
+				if (!layerOutputs_.contains(block))
+				{
+					throw std::runtime_error("llama.cpp did not capture the previous block output");
+				}
+				return layerOutputs_.at(block);
+			}
+
+			std::string ShapeFor(std::string_view boundary, std::size_t count) const
+			{
+				if (boundary == "query_rotated" || boundary == "attention_context")
+				{
+					if (count != attentionHeads_ * headWidth_)
+					{
+						throw std::runtime_error("invalid attention tensor width");
+					}
+					return std::format("{}x{}", attentionHeads_, headWidth_);
+				}
+				if (boundary == "key_rotated" || boundary == "value")
+				{
+					if (count != kvHeads_ * headWidth_)
+					{
+						throw std::runtime_error("invalid KV tensor width");
+					}
+					return std::format("{}x{}", kvHeads_, headWidth_);
+				}
+				if (boundary == "attention_norm" || boundary == "attention_output" ||
+				    boundary == "attention_residual" || boundary == "ffn_norm" || boundary == "ffn_down" ||
+				    boundary == "post_ffn")
+				{
+					if (count != hiddenWidth_)
+					{
+						throw std::runtime_error("invalid hidden-state tensor width");
+					}
+				}
+				return std::format("1x{}", count);
+			}
+
+			static std::string SixDigit(std::size_t value)
+			{
+				auto result = std::to_string(value);
+				if (result.size() < 6)
+				{
+					result.insert(result.begin(), 6 - result.size(), '0');
+				}
+				return result;
+			}
+
+			std::size_t layerCount_{};
+			std::size_t hiddenWidth_{};
+			std::size_t attentionHeads_{};
+			std::size_t kvHeads_{};
+			std::size_t headWidth_{};
+			std::set<std::size_t> selectedBlocks_;
+			std::map<std::string, Group> groups_;
+			std::optional<std::size_t> activeGeneratedIndex_;
+			std::map<std::string, std::map<std::size_t, std::vector<float>>> values_;
+			std::map<std::size_t, std::vector<float>> layerOutputs_;
+			std::vector<float> inputEmbedding_;
+			std::string error_;
+		};
 	} // namespace
 
 	struct Model::Impl
@@ -538,6 +921,88 @@ namespace LiteNN::LlamaCppAdapter
 				                         std::to_string(generatedIndex));
 			}
 			if (selected.contains(generatedIndex))
+			{
+				capture.End(promptTokenIds.size() + generatedIndex, promptTokenIds.size() + generatedIndex - 1,
+				            generatedTokenIds[generatedIndex - 1]);
+			}
+		}
+	}
+
+	void Model::CaptureDecodeSubLayerCheckpoints(std::span<const std::int32_t> promptTokenIds,
+	                                             std::span<const std::int32_t> generatedTokenIds,
+	                                             std::span<const std::size_t> generatedIndices,
+	                                             std::span<const std::size_t> blockIndices,
+	                                             const std::filesystem::path& outputDirectory) const
+	{
+		if (promptTokenIds.empty() || generatedIndices.empty() || blockIndices.empty())
+		{
+			throw std::runtime_error(
+			    "decode-sub-layer-checkpoints requires a non-empty prompt, generated indices, and block indices");
+		}
+		const std::set<std::size_t> selectedGenerated(generatedIndices.begin(), generatedIndices.end());
+		if (selectedGenerated.size() != generatedIndices.size())
+		{
+			throw std::runtime_error("decode-sub-layer-checkpoints generated indices must be unique");
+		}
+		const auto maximumIndex = *selectedGenerated.rbegin();
+		if (maximumIndex > generatedTokenIds.size())
+		{
+			throw std::runtime_error(
+			    "decode-sub-layer-checkpoints needs generated token ids through selected index minus one");
+		}
+
+		SubLayerCheckpointCapture capture(static_cast<std::size_t>(llama_model_n_layer(impl_->model)),
+		                                  static_cast<std::size_t>(llama_model_n_embd(impl_->model)),
+		                                  static_cast<std::size_t>(llama_model_n_head(impl_->model)),
+		                                  static_cast<std::size_t>(llama_model_n_head_kv(impl_->model)), blockIndices,
+		                                  outputDirectory);
+		auto contextParams = llama_context_default_params();
+		contextParams.n_ctx = static_cast<std::uint32_t>(promptTokenIds.size() + maximumIndex);
+		contextParams.n_batch = 1;
+		contextParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+		contextParams.no_perf = true;
+		contextParams.cb_eval = &SubLayerCheckpointCapture::Callback;
+		contextParams.cb_eval_user_data = &capture;
+		auto* rawContext = llama_init_from_model(impl_->model, contextParams);
+		if (rawContext == nullptr)
+		{
+			throw std::runtime_error("failed to create llama.cpp sub-layer checkpoint context");
+		}
+		const std::unique_ptr<llama_context, decltype(&llama_free)> context(rawContext, llama_free);
+		auto prompt = ToLlamaTokens(promptTokenIds);
+		for (std::size_t promptIndex = 0; promptIndex < prompt.size(); ++promptIndex)
+		{
+			const auto finalPromptToken = promptIndex + 1 == prompt.size();
+			if (finalPromptToken && selectedGenerated.contains(0))
+			{
+				capture.Begin(0);
+			}
+			auto token = prompt[promptIndex];
+			if (llama_decode(context.get(), llama_batch_get_one(&token, 1)) != 0)
+			{
+				throw std::runtime_error("llama.cpp prompt sub-layer checkpoint decode failed at prompt index " +
+				                         std::to_string(promptIndex));
+			}
+			if (finalPromptToken && selectedGenerated.contains(0))
+			{
+				capture.End(promptTokenIds.size(), promptTokenIds.size() - 1, promptTokenIds.back());
+			}
+		}
+
+		const auto generated = ToLlamaTokens(generatedTokenIds);
+		for (std::size_t generatedIndex = 1; generatedIndex <= maximumIndex; ++generatedIndex)
+		{
+			if (selectedGenerated.contains(generatedIndex))
+			{
+				capture.Begin(generatedIndex);
+			}
+			auto token = generated[generatedIndex - 1];
+			if (llama_decode(context.get(), llama_batch_get_one(&token, 1)) != 0)
+			{
+				throw std::runtime_error("llama.cpp sub-layer checkpoint decode failed at generated index " +
+				                         std::to_string(generatedIndex));
+			}
+			if (selectedGenerated.contains(generatedIndex))
 			{
 				capture.End(promptTokenIds.size() + generatedIndex, promptTokenIds.size() + generatedIndex - 1,
 				            generatedTokenIds[generatedIndex - 1]);
