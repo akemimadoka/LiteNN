@@ -36,6 +36,10 @@ namespace LiteNN::LlamaCppAdapter
 		void CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 		                         std::span<const std::int32_t> generatedTokenIds,
 		                         const std::filesystem::path& outputDirectory) const;
+		void CaptureDecodeLayerCheckpoints(std::span<const std::int32_t> promptTokenIds,
+		                                   std::span<const std::int32_t> generatedTokenIds,
+		                                   std::span<const std::size_t> generatedIndices,
+		                                   const std::filesystem::path& outputDirectory) const;
 
 	private:
 		struct Impl;

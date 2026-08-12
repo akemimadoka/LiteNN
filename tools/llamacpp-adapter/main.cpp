@@ -19,7 +19,10 @@ namespace
 		          << "  " << executable << " chat-template <model.gguf> <user-text> <prompt.bin>\n"
 		          << "  " << executable << " chat-template-file <model.gguf> <user-text.bin> <prompt.bin>\n"
 		          << "  " << executable
-		          << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n";
+		          << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
+		          << "  " << executable
+		          << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
+		             "<comma-generated-indices> <output-dir>\n";
 	}
 
 	std::string ReadBinary(const std::filesystem::path& path)
@@ -90,6 +93,23 @@ try
 		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
 		model.CaptureDecodeLogits(promptTokens, generatedTokens, argv[5]);
 		std::cout << "Captured " << generatedTokens.size() << " llama.cpp decode-logits steps in " << argv[5] << '\n';
+		return 0;
+	}
+	if (command == "decode-layer-checkpoints" && argc == 7)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
+		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
+		const auto parsedIndices = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[5], "generated indices");
+		std::vector<std::size_t> generatedIndices;
+		generatedIndices.reserve(parsedIndices.size());
+		for (const auto index : parsedIndices)
+		{
+			generatedIndices.push_back(static_cast<std::size_t>(index));
+		}
+		model.CaptureDecodeLayerCheckpoints(promptTokens, generatedTokens, generatedIndices, argv[6]);
+		std::cout << "Captured " << generatedIndices.size() << " llama.cpp layer-checkpoint steps in " << argv[6]
+		          << '\n';
 		return 0;
 	}
 	PrintUsage(argv[0]);
