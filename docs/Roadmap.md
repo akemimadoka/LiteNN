@@ -3355,8 +3355,20 @@ Priority classes:
                   - [x] Add a strict checkpoint comparison tool covering metadata/range validation, low-precision
                         decoding, per-layer absolute/relative/RMS/cosine metrics, tolerance failures, and the first
                         failing layer per generated position. A zero-tolerance real-bundle self-compare passed 48/48.
-                  - [ ] Capture matching llama.cpp hidden states on the fixed trajectory and identify the first failing
-                        layer at generated index 23 before selecting a numerical fix.
+                  - [x] Capture matching llama.cpp post-FFN residual states at fixed-trajectory indices 0, 22, and 23.
+                        Zero-tolerance mismatch begins at block 0 and is not a valid localization rule; the additional
+                        index-23 error is distributed and strongest in blocks 39-47. Block 47 RMS error increases
+                        `3.03993 -> 3.67006` (`+20.73%`) and NRMSE increases `5.10` percentage points. Evidence:
+                        `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
+                  - [ ] P0: capture indices 16-23 and rank index-23 block NRMSE/cosine deltas against neighborhood
+                        token-to-token variance.
+                  - [ ] P0: expose selectable sub-layer boundaries in blocks 9, 19-25, and 38-47, covering attention
+                        norm, biased/rotated QKV, attention output/residual, FFN norm, Gate/Up, SwiGLU, Down, and the
+                        existing post-FFN residual.
+                  - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
+                        a numerical fix only when one boundary explains the rank crossing.
+                  - [ ] P1: gate the eventual fix on 128-token natural parity, corpus perplexity delta, task quality,
+                        and unchanged cache-hit throughput.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3864,6 +3876,11 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Added controlled llama.cpp `l_out-N` capture without patching vendored sources and compared real 14B fixed-trajectory
+  indices 0, 22, and 23 against LiteNN. The result rejects a discrete first-failing-layer model: differences start at
+  block 0, while index-23 additional error is strongest in blocks 39-47. The next correctness P0 is neighborhood-based
+  sub-layer and logits-margin localization. Full evidence:
+  `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
 - Added opt-in per-layer hidden-state checkpoints to the stateful CPU AOT Qwen path without changing the normal
   logits-only ABI or cache identity. A real 14B Q4_K_M diagnostic run emitted 48 ordered `[1,5120]` Float32 layers in
   a 983,040-byte bundle with no non-finite values; the selected-position write cost was about `3.07 ms`.

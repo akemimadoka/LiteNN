@@ -129,8 +129,18 @@ P0 implementation order:
     - [x] Add a dependency-free checkpoint comparator with strict coordinate/dtype/shape/payload-range validation,
       Float64/32/16, BFloat16, and FP8 decoding, per-layer absolute/relative/RMS/cosine metrics, tolerance mismatch
       counts, and first-failing-layer reports. A zero-tolerance self-compare passed all 48 real 14B layers.
-    - [ ] Capture the same hidden-state boundary from the controlled llama.cpp path, compare forced trajectory index 23,
-      and report the first failing layer plus elementwise absolute/relative error before changing model math.
+    - [x] Capture the same post-FFN residual boundary from the controlled llama.cpp path at fixed-trajectory indices 0,
+      22, and 23. The comparison rejects a zero-tolerance "first failing layer": independent quantized execution differs
+      from block 0, while the extra index-23 error is distributed and is strongest in blocks 39-47. At block 47, RMS
+      error rises `3.03993 -> 3.67006` (`+20.73%`) and NRMSE rises `5.10` percentage points. Evidence:
+      `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
+    - [ ] P0: capture an index 16-23 neighborhood panel and rank block-level index-23 NRMSE/cosine deltas against normal
+      token-to-token variance. Do not treat two different input tokens as a causal A/B pair.
+    - [ ] P0: add selectable sub-layer checkpoints in blocks 9, 19-25, and 38-47 for attention norm, Q/K/V after bias
+      and RoPE, attention output, post-attention residual, FFN norm, Gate/Up, SwiGLU, Down, and post-FFN residual.
+    - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
+      math only after a specific boundary exceeds the neighborhood distribution and explains the logit-rank crossing.
+    - [ ] P1: add 128-token natural parity, corpus perplexity delta, and task-quality gates independently of throughput.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
