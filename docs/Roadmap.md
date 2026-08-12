@@ -3379,8 +3379,12 @@ Priority classes:
                   - [x] P0: feed identical captured `ffn_norm` activations through exact, ggml, LiteNN grouped field-v4
                         Q4_K Gate/Up and strict SwiGLU for blocks 43-47. Production Gate/Up/SwiGLU match captured
                         llama.cpp within `1.44e-7/2.21e-7/3.62e-7` NRMSE; complete FFN correctness is closed.
-                  - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run remained inside step 4 for
-                        over five minutes on one core after three normal steps; fixed T8 completed the same trajectory.
+                  - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. A wrapper run stalled at
+                        step 27 with `desiredWorkers=31`, `workersDone=30`, and every worker blocked on the binary
+                        semaphore. Generation-based atomic wait/notify closes the lost-wakeup window. Five 4096-call
+                        stress processes, focused test suites, a real 32-forward wrapper rerun, checkpoint identity,
+                        and grouped-attention performance gates pass. Evidence:
+                        `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
                   - [x] P0: align final RMSNorm and logits capture and record the expected-vs-selected margin.
                         Same-session reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp
                         using LiteNN's production final RMSNorm and Q6_K LM head. The disputed-token margin moves from
@@ -3905,6 +3909,11 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Reproduced and fixed the intermittent default-thread Qwen diagnostic deadlock. Live GDB evidence showed a thread-pool
+  barrier waiting for 31 workers after only 30 completed, with every worker blocked on the old binary semaphore.
+  Generation-based atomic wait/notify now passes 20,480 mixed-participant stress calls, focused CPU/quantized tests,
+  a real 32-forward wrapper rerun with the original checkpoint checksum, and grouped-attention performance controls.
+  Evidence: `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
 - Closed the Qwen index-23 final numerical boundary with same-session residual and logits capture. LiteNN exactly
   reconstructs its own logits; applying LiteNN's production final RMSNorm and Q6_K LM head to llama.cpp's residual
   reconstructs llama.cpp logits within `4.064e-7` NRMSE. The disputed-token margin shifts from `+0.479677` to

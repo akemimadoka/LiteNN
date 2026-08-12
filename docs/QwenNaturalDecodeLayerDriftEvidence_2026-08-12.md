@@ -157,10 +157,11 @@ quantized accumulation. The next experiment must feed the same captured SwiGLU a
 Down reference and the native LiteNN Q6_K path.
 
 The selected-block LiteNN run used T8 because one default-thread diagnostic build completed three steps normally and
-then remained in step 4 for more than five minutes, executing on one core; its working set transiently reached about
-`9.4 GB` before returning below `1 GB`. The T8 reruns completed all 32 forwards. This anomalous run produced no
-checkpoint data and is excluded from numerical results, but it establishes a separate deterministic-runtime gate for
-the default thread policy.
+then remained in step 4 for more than five minutes. A later exact-wrapper reproduction stalled at step 27. Live GDB
+evidence found the caller waiting for 31 workers with only 30 completions while every worker was blocked on the old
+binary semaphore. Waiting directly on the generation atomic fixes the lost wakeup; the real 32-forward wrapper rerun,
+20,480-call stress control, numerical checksum, and performance gates now pass. Full evidence:
+`docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
 
 ## Conclusions And Next Gates
 
@@ -173,8 +174,8 @@ the default thread policy.
    match captured llama.cpp outputs within `3.62e-7` NRMSE. Do not rewrite the FFN kernels; align final RMSNorm and
    logits, then measure the expected-versus-selected top-token margin. Full data:
    `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
-4. Reproduce and localize the default-thread diagnostic step-4 long loop. Diagnostic output selection must not alter
-   deterministic completion or state progression.
+4. The default-thread diagnostic deadlock is closed. It was a thread-pool lost wakeup, not diagnostic output selection
+   or state progression; generation-based atomic wait/notify completes the same trajectory and checksum.
 5. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the
    contribution of output projection error. An argmax mismatch can be benign when the reference margin is tiny.
 6. After localization, validate a candidate with the same forced trajectory, natural greedy parity beyond 128 tokens,

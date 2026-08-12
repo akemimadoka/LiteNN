@@ -155,8 +155,12 @@ P0 implementation order:
       The JSON diagnostic compares exact represented-weight, ggml vec-dot, source-Float32, grouped field-v4/Q8_K, and
       captured outputs. Production Gate/Up/SwiGLU match within `1.44e-7/2.21e-7/3.62e-7` NRMSE; applying only LiteNN
       strict SwiGLU to captured Gate/Up stays below `6.05e-8`. Complete FFN correctness is closed.
-    - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
-      minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
+    - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. A wrapper run reproduced the stall at
+      step 27; GDB found `desiredWorkers=31`, `workersDone=30`, and all 31 workers blocked on the binary semaphore.
+      Generation-based atomic wait/notify removes the lost-wakeup window. Five 4096-call mixed-participant stress
+      processes, 8 CPU parallel tests, 22 quantized/attention tests, and a real 32-forward wrapper rerun pass with the
+      original checkpoint checksum and no microbenchmark regression. Evidence:
+      `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
     - [x] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Same-session
       reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp using LiteNN's production final
       RMSNorm and Q6_K LM head. The disputed-token margin moves from `+0.479677` to `-0.798033`; the rank reversal is
