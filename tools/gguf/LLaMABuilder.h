@@ -42,6 +42,7 @@ namespace LiteNN::GGUF
 	{
 		NodeOutput hiddenState;
 		std::vector<Layer::KVCachePair> updatedCaches;
+		std::vector<NodeOutput> layerHiddenStates;
 	};
 
 	struct LLaMAParityTolerance
@@ -146,6 +147,8 @@ namespace LiteNN::GGUF
 		bool conditionalLogits{};
 		/// Build a logits-only decode schedule that reads paged KV state through the CPU reference attention node.
 		bool usePagedReferenceDecode{};
+		/// Append each decoder block's hidden state to the public diagnostic outputs.
+		bool exposeLayerCheckpoints{};
 		/// Optional physical paged-KV backing capacity. Logical capacity remains maxCacheLength.
 		std::optional<std::size_t> pagedResidentPageCount;
 	};
@@ -155,6 +158,8 @@ namespace LiteNN::GGUF
 		bool preserveQuantizedWeights{};
 		/// Add a Bool input that conditionally skips the final vocabulary projection.
 		bool conditionalLogits{};
+		/// Append each decoder block's hidden state after all runtime-state outputs.
+		bool exposeLayerCheckpoints{};
 		/// Optional physical paged-KV backing capacity for paged-reference decode lowering.
 		std::optional<std::size_t> pagedResidentPageCount;
 	};
@@ -183,8 +188,8 @@ namespace LiteNN::GGUF
 	                            std::size_t positionOffset = 0);
 	LLaMADecodeResult AddLLaMACausalLMDecode(Subgraph& subgraph, const LLaMACausalLM& model,
 	                                         const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
-	                                         std::span<const Layer::KVCachePair> pastCaches,
-	                                         std::size_t positionOffset);
+	                                         std::span<const Layer::KVCachePair> pastCaches, std::size_t positionOffset,
+	                                         bool exposeLayerCheckpoints = false);
 	SubgraphId BuildLLaMACausalLM(Graph& graph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
 	                              std::size_t sequenceLength, std::size_t positionOffset = 0);
 	Graph LowerLLaMACausalLM(const Graph& archive, std::size_t sequenceLength, std::size_t positionOffset = 0,

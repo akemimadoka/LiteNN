@@ -3347,6 +3347,13 @@ Priority classes:
             - [ ] Localize the first natural logit mismatch with per-layer checkpoints. It occurs at generated index
                   23; functional/stateful outputs are bit-identical and source/prepacked outputs are close, excluding
                   those two suspected ownership boundaries.
+                  - [x] Add an opt-in diagnostic stateful AOT ABI and GGUF/Qwen CLI export for every decoder-block hidden
+                        state. Selected generated positions are stored as a layer-contiguous raw bundle plus TSV dtype,
+                        shape, offset, statistics, non-finite count, and checksum metadata. The diagnostic cache key is
+                        isolated from normal logits-only artifacts. A real 14B Q4_K_M run validated 48 ordered
+                        Float32 `[1,5120]` layers, zero non-finite values, and about `3.07 ms` write overhead.
+                  - [ ] Capture matching llama.cpp hidden states on the fixed trajectory and identify the first failing
+                        layer at generated index 23 before selecting a numerical fix.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3854,6 +3861,9 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Added opt-in per-layer hidden-state checkpoints to the stateful CPU AOT Qwen path without changing the normal
+  logits-only ABI or cache identity. A real 14B Q4_K_M diagnostic run emitted 48 ordered `[1,5120]` Float32 layers in
+  a 983,040-byte bundle with no non-finite values; the selected-position write cost was about `3.07 ms`.
 - Removed model-sized gradient allocation from GGUF inference import and released source tensor owners immediately
   after CPU AOT module construction. Continuous 14B sampling now peaks at `18.566/18.679 GB` RSS/private instead of
   the earlier `27.37/27.49 GB` single observation; active decode uses approximately `9.4-9.9/9.5-10.0 GB`.

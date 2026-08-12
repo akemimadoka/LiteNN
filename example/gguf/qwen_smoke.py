@@ -385,6 +385,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Replay this exact generated-token trajectory while still recording natural sampler mismatches",
     )
     parser.add_argument(
+        "--layer-checkpoint-dir",
+        type=Path,
+        help="Write per-layer stateful AOT hidden checkpoints and a TSV manifest to this directory",
+    )
+    parser.add_argument(
+        "--layer-checkpoint-generated-indices",
+        type=comma_token_ids,
+        help="Zero-based generated-token indices to checkpoint; defaults to every generated step",
+    )
+    parser.add_argument(
         "--llvm-opt-level",
         type=int,
         default=0,
@@ -527,6 +537,14 @@ def main() -> int:
             raise SystemExit("--forced-generated-token-ids requires --ignore-eos")
         if len(args.forced_generated_token_ids) != args.steps:
             raise SystemExit("--forced-generated-token-ids must contain exactly --max-tokens token ids")
+    if args.layer_checkpoint_generated_indices is not None and args.layer_checkpoint_dir is None:
+        raise SystemExit("--layer-checkpoint-generated-indices requires --layer-checkpoint-dir")
+    if args.layer_checkpoint_dir is not None and not args.stateful:
+        raise SystemExit("--layer-checkpoint-dir requires --stateful")
+    if args.layer_checkpoint_generated_indices is not None and any(
+        index >= args.steps for index in args.layer_checkpoint_generated_indices
+    ):
+        raise SystemExit("layer checkpoint generated indices must be smaller than --max-tokens")
     if args.llamacpp_decode_golden_tool and args.steps < 2:
         raise SystemExit("--llamacpp-decode-golden-tool requires at least two generated steps")
     if args.capture_llamacpp and not args.prompt:
@@ -781,6 +799,16 @@ def main() -> int:
             decode_cmd.extend(
                 ["--forced-generated-token-ids", ",".join(str(value) for value in args.forced_generated_token_ids)]
             )
+        if args.layer_checkpoint_dir is not None:
+            args.layer_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            decode_cmd.extend(["--layer-checkpoint-dir", str(args.layer_checkpoint_dir)])
+        if args.layer_checkpoint_generated_indices is not None:
+            decode_cmd.extend(
+                [
+                    "--layer-checkpoint-generated-indices",
+                    ",".join(str(value) for value in args.layer_checkpoint_generated_indices),
+                ]
+            )
         if args.stream_tokens:
             decode_cmd.append("--stream-tokens")
         if args.stream_stats:
@@ -878,6 +906,16 @@ def main() -> int:
         "stream_stats": args.stream_stats,
         "compile_only": args.compile_only,
         "memory_sample_interval_ms": args.memory_sample_interval_ms,
+        "layer_checkpoints": {
+            "enabled": args.layer_checkpoint_dir is not None,
+            "directory": str(args.layer_checkpoint_dir) if args.layer_checkpoint_dir is not None else None,
+            "generated_indices": (
+                list(args.layer_checkpoint_generated_indices)
+                if args.layer_checkpoint_generated_indices is not None
+                else None
+            ),
+            "selection": "selected" if args.layer_checkpoint_generated_indices is not None else "all_generated",
+        },
         "max_cache_length": args.max_cache_length,
         "forced_replay": (
             {

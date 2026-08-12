@@ -650,6 +650,13 @@ namespace LiteNN::GGUF
 			decode.stateValueBindings.push_back({ stateName, 0, Runtime::RuntimeStateValueKind::FunctionOutput,
 			                                      valueOutput, cacheCapacityPerPlaneBytes });
 		}
+		if (options.exposeLayerCheckpoints)
+		{
+			for (std::size_t blockIndex = 0; blockIndex < hyperparameters.blockCount; ++blockIndex)
+			{
+				decode.outputNames.push_back(std::format("layer_hidden_{}", blockIndex));
+			}
+		}
 
 		Runtime::LLMDecodeStateABI decodeStateABI;
 		decodeStateABI.kvCaches.reserve(decode.kvCaches.size());
@@ -945,7 +952,18 @@ namespace LiteNN::GGUF
 			std::vector<NodeOutput> pageTables;
 			std::vector<NodeOutput> pageDescriptors;
 			std::vector<NodeOutput> activeLengths;
+			std::vector<NodeOutput> layerHiddenStates;
 		};
+
+		void AppendLayerCheckpointOutputs(std::vector<NodeOutput>& outputs, std::vector<std::string>& outputNames,
+		                                  std::span<const NodeOutput> layerHiddenStates)
+		{
+			for (std::size_t blockIndex = 0; blockIndex < layerHiddenStates.size(); ++blockIndex)
+			{
+				outputs.push_back(layerHiddenStates[blockIndex]);
+				outputNames.push_back(std::format("layer_hidden_{}", blockIndex));
+			}
+		}
 	} // namespace
 
 	BlockDecodeResult AddLLaMADecoderBlockDecode(Subgraph& subgraph, const LLaMADecoderBlock& block,
@@ -1454,7 +1472,8 @@ namespace LiteNN::GGUF
 
 	LLaMADecodeResult AddLLaMACausalLMDecode(Subgraph& subgraph, const LLaMACausalLM& model,
 	                                         const LLaMAHyperparameters& hyperparameters, NodeOutput tokenIds,
-	                                         std::span<const Layer::KVCachePair> pastCaches, std::size_t positionOffset)
+	                                         std::span<const Layer::KVCachePair> pastCaches, std::size_t positionOffset,
+	                                         bool exposeLayerCheckpoints)
 	{
 		if (pastCaches.size() != model.blocks.size())
 		{
@@ -1464,18 +1483,28 @@ namespace LiteNN::GGUF
 		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
 		std::vector<Layer::KVCachePair> updatedCaches;
 		updatedCaches.reserve(model.blocks.size());
+		std::vector<NodeOutput> layerHiddenStates;
+		if (exposeLayerCheckpoints)
+		{
+			layerHiddenStates.reserve(model.blocks.size());
+		}
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			auto blockResult = AddLLaMADecoderBlockDecode(subgraph, model.blocks[blockIndex], hyperparameters,
 			                                              hiddenState, pastCaches[blockIndex], positionOffset);
 			hiddenState = blockResult.hiddenState;
 			updatedCaches.push_back(blockResult.updatedCache);
+			if (exposeLayerCheckpoints)
+			{
+				layerHiddenStates.push_back(hiddenState);
+			}
 		}
 
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		return {
 			.hiddenState = Layer::AddLinear(subgraph, model.lmHead, normalized),
 			.updatedCaches = std::move(updatedCaches),
+			.layerHiddenStates = std::move(layerHiddenStates),
 		};
 	}
 
@@ -1484,7 +1513,8 @@ namespace LiteNN::GGUF
 	                                                 NodeOutput currentPosition,
 	                                                 std::span<const Layer::KVCachePair> caches,
 	                                                 std::size_t maxCacheLength,
-	                                                 std::optional<NodeOutput> emitLogits = std::nullopt)
+	                                                 std::optional<NodeOutput> emitLogits = std::nullopt,
+	                                                 bool exposeLayerCheckpoints = false)
 	{
 		if (caches.size() != model.blocks.size())
 		{
@@ -1493,6 +1523,11 @@ namespace LiteNN::GGUF
 		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
 		std::vector<Layer::KVCachePair> updatedCaches;
 		updatedCaches.reserve(model.blocks.size());
+		std::vector<NodeOutput> layerHiddenStates;
+		if (exposeLayerCheckpoints)
+		{
+			layerHiddenStates.reserve(model.blocks.size());
+		}
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			auto blockResult =
@@ -1500,11 +1535,16 @@ namespace LiteNN::GGUF
 			                                       caches[blockIndex], currentPosition, maxCacheLength);
 			hiddenState = blockResult.hiddenState;
 			updatedCaches.push_back(blockResult.updatedCache);
+			if (exposeLayerCheckpoints)
+			{
+				layerHiddenStates.push_back(hiddenState);
+			}
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		return {
 			.hiddenState = AddConditionalLLaMALogits(graph, subgraph, model, normalized, emitLogits),
 			.updatedCaches = std::move(updatedCaches),
+			.layerHiddenStates = std::move(layerHiddenStates),
 		};
 	}
 
@@ -1512,7 +1552,8 @@ namespace LiteNN::GGUF
 	    Graph& graph, Subgraph& subgraph, const LLaMACausalLM& model, const LLaMAHyperparameters& hyperparameters,
 	    NodeOutput tokenIds, NodeOutput currentPosition, std::span<const NodeOutput> pagedKVStates,
 	    std::span<const NodeOutput> pageTables, std::span<const NodeOutput> pageDescriptors,
-	    std::span<const NodeOutput> activeLengths, std::optional<NodeOutput> emitLogits = std::nullopt)
+	    std::span<const NodeOutput> activeLengths, std::optional<NodeOutput> emitLogits = std::nullopt,
+	    bool exposeLayerCheckpoints = false)
 	{
 		if (pagedKVStates.size() != model.blocks.size() || pageTables.size() != model.blocks.size() ||
 		    pageDescriptors.size() != model.blocks.size() || activeLengths.size() != model.blocks.size())
@@ -1528,12 +1569,21 @@ namespace LiteNN::GGUF
 		updatedPageTables.reserve(model.blocks.size());
 		updatedPageDescriptors.reserve(model.blocks.size());
 		updatedActiveLengths.reserve(model.blocks.size());
+		std::vector<NodeOutput> layerHiddenStates;
+		if (exposeLayerCheckpoints)
+		{
+			layerHiddenStates.reserve(model.blocks.size());
+		}
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			const auto blockResult = AddLLaMADecoderBlockDecodePagedReference(
 			    subgraph, model.blocks[blockIndex], hyperparameters, hiddenState, pagedKVStates[blockIndex],
 			    pageTables[blockIndex], pageDescriptors[blockIndex], activeLengths[blockIndex], currentPosition);
 			hiddenState = blockResult.hiddenState;
+			if (exposeLayerCheckpoints)
+			{
+				layerHiddenStates.push_back(hiddenState);
+			}
 			updatedKVStates.push_back(blockResult.kvState);
 			updatedPageTables.push_back(blockResult.pageTable);
 			updatedPageDescriptors.push_back(blockResult.pageDescriptors);
@@ -1546,6 +1596,7 @@ namespace LiteNN::GGUF
 			.pageTables = std::move(updatedPageTables),
 			.pageDescriptors = std::move(updatedPageDescriptors),
 			.activeLengths = std::move(updatedActiveLengths),
+			.layerHiddenStates = std::move(layerHiddenStates),
 		};
 	}
 
@@ -1625,8 +1676,8 @@ namespace LiteNN::GGUF
 			inputNames.push_back(std::format("past_value_{}", blockIndex));
 		}
 
-		const auto result =
-		    AddLLaMACausalLMDecode(subgraph, model, hyperparameters, { tokenIds, 0 }, pastCaches, positionOffset);
+		const auto result = AddLLaMACausalLMDecode(subgraph, model, hyperparameters, { tokenIds, 0 }, pastCaches,
+		                                           positionOffset, options.exposeLayerCheckpoints);
 		std::vector<NodeOutput> outputs{ result.hiddenState };
 		std::vector<std::string> outputNames{ "logits" };
 		for (std::size_t blockIndex = 0; blockIndex < result.updatedCaches.size(); ++blockIndex)
@@ -1636,6 +1687,7 @@ namespace LiteNN::GGUF
 			outputNames.push_back(std::format("updated_key_{}", blockIndex));
 			outputNames.push_back(std::format("updated_value_{}", blockIndex));
 		}
+		AppendLayerCheckpointOutputs(outputs, outputNames, result.layerHiddenStates);
 		subgraph.SetResults(std::move(outputs));
 		const auto forward = graph.AddSubgraph(std::move(subgraph));
 		graph.SetForward(forward);
@@ -1704,6 +1756,11 @@ namespace LiteNN::GGUF
 		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, { tokenIds, 0 });
 		std::vector<Layer::KVCachePair> updatedCaches;
 		updatedCaches.reserve(model.blocks.size());
+		std::vector<NodeOutput> layerHiddenStates;
+		if (options.exposeLayerCheckpoints)
+		{
+			layerHiddenStates.reserve(model.blocks.size());
+		}
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
 			std::vector<NodeOutput> args{
@@ -1718,11 +1775,16 @@ namespace LiteNN::GGUF
 			                       OutputInfo{ model.dtype, cacheShape }, OutputInfo{ model.dtype, cacheShape } });
 			hiddenState = NodeOutput{ call, 0 };
 			updatedCaches.push_back(Layer::KVCachePair{ { call, 1 }, { call, 2 } });
+			if (options.exposeLayerCheckpoints)
+			{
+				layerHiddenStates.push_back(hiddenState);
+			}
 		}
 		const auto normalized = Layer::AddRMSNorm(subgraph, model.outputNorm, hiddenState);
 		const LLaMADecodeResult result{
 			.hiddenState = AddConditionalLLaMALogits(graph, subgraph, model, normalized, emitLogits),
 			.updatedCaches = std::move(updatedCaches),
+			.layerHiddenStates = std::move(layerHiddenStates),
 		};
 		const std::array<double, 1> one{ 1.0 };
 		const auto oneValue =
@@ -1739,6 +1801,7 @@ namespace LiteNN::GGUF
 			outputNames.push_back(std::format("updated_key_{}", blockIndex));
 			outputNames.push_back(std::format("updated_value_{}", blockIndex));
 		}
+		AppendLayerCheckpointOutputs(outputs, outputNames, result.layerHiddenStates);
 		subgraph.SetResults(std::move(outputs));
 		const auto forward = graph.AddSubgraph(std::move(subgraph));
 		graph.SetForward(forward);
@@ -1812,7 +1875,7 @@ namespace LiteNN::GGUF
 		}
 		const auto result = AddLLaMACausalLMDecodePagedReference(
 		    graph, subgraph, model, hyperparameters, { tokenIds, 0 }, { currentPosition, 0 }, pagedKVStates, pageTables,
-		    pageDescriptors, activeLengths, emitLogits);
+		    pageDescriptors, activeLengths, emitLogits, options.exposeLayerCheckpoints);
 		const std::array<double, 1> one{ 1.0 };
 		const auto oneValue =
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
@@ -1832,6 +1895,7 @@ namespace LiteNN::GGUF
 			outputNames.push_back(std::format("updated_page_descriptor_{}", blockIndex));
 			outputNames.push_back(std::format("updated_active_length_{}", blockIndex));
 		}
+		AppendLayerCheckpointOutputs(outputs, outputNames, result.layerHiddenStates);
 		subgraph.SetResults(std::move(outputs));
 		const auto forward = graph.AddSubgraph(std::move(subgraph));
 		graph.SetForward(forward);
@@ -1861,13 +1925,16 @@ namespace LiteNN::GGUF
 		        ? LowerLLaMACausalLMDecodePagedReference(archive, artifacts.decodeStep.maxCacheLength,
 		                                                 { .preserveQuantizedWeights = options.preserveQuantizedWeights,
 		                                                   .conditionalLogits = options.conditionalLogits,
+		                                                   .exposeLayerCheckpoints = options.exposeLayerCheckpoints,
 		                                                   .pagedResidentPageCount = options.pagedResidentPageCount })
 		    : options.dynamicDecodePosition
 		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
 		                                           { .preserveQuantizedWeights = options.preserveQuantizedWeights,
-		                                             .conditionalLogits = options.conditionalLogits })
+		                                             .conditionalLogits = options.conditionalLogits,
+		                                             .exposeLayerCheckpoints = options.exposeLayerCheckpoints })
 		        : LowerLLaMACausalLMDecode(archive, 1, options.decodePastLength, options.decodePastLength,
-		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights });
+		                                   { .preserveQuantizedWeights = options.preserveQuantizedWeights,
+		                                     .exposeLayerCheckpoints = options.exposeLayerCheckpoints });
 		auto module = Detail::BuildExecutableModuleFromGraph(graph);
 		auto states = artifacts.decodeStateABI.kvCaches;
 		for (const auto& cache : artifacts.decodeStep.kvCaches)

@@ -4304,6 +4304,57 @@ TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithPublicLogitsOnl
 	ExpectTensorNear(inputs[3], expected[3], tolerance);
 }
 
+TEST(GGUFLLaMACausalLM, CompilesBuilderStatefulDecodeScheduleWithLayerCheckpoints)
+{
+	auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyLLaMAArchive(), { .prefillSequenceLength = 1,
+	                                                                                 .decodePastLength = 0,
+	                                                                                 .maxCacheLength = 4,
+	                                                                                 .dynamicDecodePosition = true,
+	                                                                                 .exposeLayerCheckpoints = true });
+	const auto plan = schedule.module.plan;
+	const auto projection = Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, plan.forward);
+	ASSERT_EQ(plan.outputs.size(), 5u);
+	EXPECT_EQ(plan.outputs[0].name, "logits");
+	EXPECT_EQ(plan.outputs[1].name, "next_position");
+	EXPECT_EQ(plan.outputs[2].name, "updated_key_0");
+	EXPECT_EQ(plan.outputs[3].name, "updated_value_0");
+	EXPECT_EQ(plan.outputs[4].name, "layer_hidden_0");
+	EXPECT_EQ(projection.publicOutputIndices, std::vector<std::size_t>({ 0, 4 }));
+	ASSERT_EQ(projection.stateAliases.size(), 3u);
+
+	const std::vector<float> zeroCache(8, 0.0f);
+	std::array<Tensor<CPU>, 4> interpreterInputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeInt64Tensor({ 0 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(plan, interpreterInputs);
+	ASSERT_EQ(expected.size(), 5u);
+
+	auto artifact = Compiler<CPU>::CompileArtifact(schedule);
+	ASSERT_EQ(artifact.OutputSpecs().size(), 2u);
+	EXPECT_EQ(artifact.OutputSpecs()[0].name, "logits");
+	EXPECT_EQ(artifact.OutputSpecs()[1].name, "layer_hidden_0");
+	EXPECT_EQ(artifact.OutputSpecs()[1].type.StaticShape(), std::vector<std::size_t>({ 1, 4 }));
+	auto compiled = artifact.Load();
+	std::array<Tensor<CPU>, 4> inputs = {
+		MakeInt32Tensor({ 1 }, { 1 }),
+		MakeInt64Tensor({ 0 }, { 1 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+		MakeFloatTensor(zeroCache, { 4, 1, 2 }),
+	};
+	const auto actual = compiled.RunTensors(inputs);
+	ASSERT_EQ(actual.size(), 2u);
+	const auto tolerance = GGUF::GetLLaMAParityTolerance(DataType::Float32);
+	ExpectTensorNear(actual[0], expected[0], tolerance);
+	ExpectTensorNear(actual[1], expected[4], tolerance);
+	EXPECT_EQ(static_cast<const std::int64_t*>(inputs[1].UnsafeRawData())[0], 1);
+	ExpectTensorNear(inputs[2], expected[2], tolerance);
+	ExpectTensorNear(inputs[3], expected[3], tolerance);
+}
+
 TEST(GGUFLLaMACausalLM, ConditionalLogitsSkipsProjectionWhileUpdatingState)
 {
 	auto schedule = GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyLLaMAArchive(), { .prefillSequenceLength = 1,

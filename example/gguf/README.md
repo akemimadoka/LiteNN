@@ -297,6 +297,27 @@ instruct-model user turn by default and applies the model's chat template before
 tokenization. Add `--raw-prompt` only when deliberate continuation-style text
 completion is desired.
 
+For numerical drift localization, build a separate diagnostic stateful artifact
+and dump selected zero-based generated-token positions:
+
+```powershell
+python311 example\gguf\qwen_smoke.py `
+  --model model.gguf --prompt "hello" `
+  --llamacpp-tokenizer-tool build-release\tools\llamacpp-adapter\litenn_llamacpp_adapter.exe `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --stateful --ignore-eos --max-tokens 24 `
+  --forced-generated-token-ids token0,token1,...,token23 `
+  --layer-checkpoint-dir build\qwen_checkpoints `
+  --layer-checkpoint-generated-indices 22,23
+```
+
+Each selected position produces one `generated-NNNNNN.bin` containing all layer
+hidden states in layer order. `manifest.tsv` records dtype, shape, byte offset,
+byte size, summary statistics, and a checksum for every layer. The checkpoint
+outputs use a separate AOT cache identity; the normal logits-only runtime ABI and
+cache remain unchanged. Omit `--layer-checkpoint-generated-indices` to capture
+every generated step.
+
 The smoke driver defaults LiteNN decode to `LITENN_COMPILE_DIAGNOSTICS=1` and
 `LITENN_CPU_AOT_LLVM_OPT_LEVEL=0`, because large GGUF first-run CPU AOT
 compilation is still measured in minutes. Increase `--steps` after the first

@@ -4,10 +4,27 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from example.gguf.qwen_smoke import run_step, write_profile_artifacts
+from example.gguf.qwen_smoke import build_parser, run_step, write_profile_artifacts
 
 
 class QwenSmokeMemoryTest(unittest.TestCase):
+    def test_parses_selected_layer_checkpoints(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--model",
+                "fixture.gguf",
+                "--token-ids",
+                "1,2",
+                "--stateful",
+                "--layer-checkpoint-dir",
+                "checkpoints",
+                "--layer-checkpoint-generated-indices",
+                "23,7",
+            ]
+        )
+        self.assertEqual(args.layer_checkpoint_dir, Path("checkpoints"))
+        self.assertEqual(args.layer_checkpoint_generated_indices, (23, 7))
+
     def test_records_stage_labeled_memory_and_trace_counters(self) -> None:
         script = (
             "import sys,time; "

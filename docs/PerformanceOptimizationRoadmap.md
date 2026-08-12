@@ -121,6 +121,13 @@ P0 implementation order:
   - [ ] Localize natural logit drift independently of performance. The first argmax mismatch is reproducible at
     generated index 23; functional/stateful logits are bit-identical and source/prepacked logits are very close, so add
     per-layer hidden-state checkpoints and model-quality gates rather than blaming state aliasing or weight packing.
+    - [x] Add an opt-in stateful CPU AOT diagnostic ABI that exposes every decoder block hidden state after all state
+      outputs. The GGUF CLI and Qwen smoke driver write selected generated positions as one layer-contiguous raw bundle
+      plus a TSV manifest with dtype, shape, offset, statistics, non-finite count, and checksum. Normal logits-only
+      artifacts retain their existing ABI/cache identity. A real 14B Q4_K_M run produced 48 ordered Float32
+      `[1,5120]` checkpoints with no non-finite values and about `3.07 ms` output overhead for one position.
+    - [ ] Capture the same hidden-state boundary from the controlled llama.cpp path, compare forced trajectory index 23,
+      and report the first failing layer plus elementwise absolute/relative error before changing model math.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
