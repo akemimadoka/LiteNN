@@ -3372,10 +3372,13 @@ Priority classes:
                   - [x] P0: separate the measured sub-layer dataset and conclusions from roadmap state. The report
                         preserves the controlled setup, 832-coordinate aggregate, spatial controls, runtime anomaly,
                         conclusion limits, and result-dependent next-step gates without private artifact paths.
-                  - [ ] P0: feed identical captured SwiGLU activations through exact-dequantized, LiteNN source-Q6_K,
-                        and llama.cpp Down projections for blocks 43-47. Change Q6_K only if LiteNN uniquely leaves the
-                        exact-reference envelope. Otherwise close Down correctness and apply the same-input gate to
-                        Gate/Up and SwiGLU instead of opening another speculative kernel rewrite.
+                  - [x] P0: feed identical captured SwiGLU activations through exact-dequantized, ggml vec-dot, LiteNN
+                        source-Q6_K, production field-v4/Q8_K, and captured llama.cpp Down projections for blocks 43-47.
+                        Production matches captured output within `3.67e-7` NRMSE and `1.15e-5` max absolute error;
+                        Q6_K Down is closed as the mismatch owner.
+                  - [ ] P0: feed identical captured `ffn_norm` activations through exact, ggml, LiteNN grouped field-v4
+                        Q4_K Gate/Up and strict SwiGLU for blocks 43-47. Change FFN math only if LiteNN uniquely leaves
+                        the captured/reference envelope.
                   - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run remained inside step 4 for
                         over five minutes on one core after three normal steps; fixed T8 completed the same trajectory.
                   - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
@@ -3892,7 +3895,8 @@ These improvements do not require a compatibility break and should not block vNe
 - Completed selectable Qwen sub-layer checkpointing in LiteNN and llama.cpp without patching vendored code. The
   index-16-23 panel covers 13 boundaries in blocks 31-33 and 43-47, and the suite comparator aggregates 832 matched
   coordinates. Attention output does not create the block-46 target anomaly; late FFN SwiGLU/Q6_K Down consistently
-  increases separation. Exact identical-activation Down verification is now the next correctness P0. Evidence:
+  increases separation. Identical-activation Down verification now proves production field-v4/Q8_K matches llama.cpp
+  within `3.67e-7` NRMSE, closing Down correctness and moving the next gate to Q4_K Gate/Up plus SwiGLU. Evidence:
   `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
 - Completed the generated-index 16-23 Qwen neighborhood panel and added native NRMSE/MAD target-outlier analysis to
   the checkpoint comparator. Index 23 exceeds both NRMSE and cosine-distance control maxima through blocks 38-46;

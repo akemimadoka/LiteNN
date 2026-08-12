@@ -18,7 +18,8 @@ The completed sub-layer campaign further rejects attention as the point that cre
 only `1.030x` its control median. The inherited residual is already exceptional, and the FFN path then separates
 again: SwiGLU is `1.374x` and Q6_K Down output is `1.496x` the control median. The post-FFN residual has the strongest
 joint modified-z (`13.27/12.91`) because its controls are unusually tight. Blocks 43-47 show the same sustained
-Down-stage pattern, making identical-activation Q6_K Down verification the next causal gate.
+Down-stage pattern. The subsequent identical-activation gate closes Q6_K Down: LiteNN field-v4/Q8_K matches captured
+llama.cpp Down within `3.67e-7` NRMSE across blocks 43-47. Same-input Q4_K Gate/Up and SwiGLU are now the next gate.
 
 No model path or private artifact location is part of this evidence record.
 
@@ -167,9 +168,10 @@ the default thread policy.
 2. The index 16-23 block and sub-layer neighborhood gates are complete. Selectable outputs cover all 13 boundaries in
    blocks 31-33 and 43-47 without expanding every block's diagnostic ABI. Attention does not create the late-window
    target separation; FFN SwiGLU/Down is now the first causal test window.
-3. Run identical-activation verification for blocks 43-47: compare exact-dequantized Down, native LiteNN source-Q6_K
-   Down, and the captured llama.cpp Down output. Change Q6_K or SwiGLU math only if this isolates an implementation
-   error from inherited activation drift.
+3. Identical-activation Q6_K Down verification is complete for blocks 43-47. LiteNN production field-v4/Q8_K matches
+   captured llama.cpp output within `3.67e-7` NRMSE, while both share the expected Q8_K distance from exact
+   dequantization. Do not rewrite Down; apply the same-input gate to Q4_K Gate/Up and strict SwiGLU next. Full data:
+   `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
 4. Reproduce and localize the default-thread diagnostic step-4 long loop. Diagnostic output selection must not alter
    deterministic completion or state progression.
 5. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the

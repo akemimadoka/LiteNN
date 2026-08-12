@@ -112,17 +112,48 @@ for more than five minutes on one CPU thread. Its working set transiently reache
 `1 GB`. Explicit T8 completed the same 32-forward trajectory. The stalled run produced no selected checkpoint and is
 excluded from the numerical tables, but it establishes an independent determinism and thread-policy defect.
 
+## Identical-Activation Q6_K Down Result
+
+The causal gate was executed after the initial sub-layer report. For each block 43-47, the llama.cpp-captured SwiGLU
+tensor at generated index 23 was fed unchanged to four projection paths using the same GGUF Down weight:
+
+1. Per-weight-row Q6_K dequantization with Float64 dot accumulation, used as the exact represented-weight reference.
+2. Vendored ggml Q6_K x Q8_K `vec_dot`.
+3. LiteNN's source-layout Q6_K x Float32 helper.
+4. LiteNN's production field-interleaved-v4 Q6_K x Q8_K helper.
+
+The captured llama.cpp Down output is the fifth comparison tensor. The exact implementation dequantizes only one
+weight row at a time, avoiding a roughly 283 MiB Float32 materialization for each `5120 x 13824` Down weight.
+
+| Block | Production vs captured NRMSE | Production vs captured max abs | Captured vs exact NRMSE | Source-F32 vs exact NRMSE |
+| ---: | ---: | ---: | ---: | ---: |
+| 43 | 3.667e-7 | 5.722e-6 | 2.4225% | 5.259e-7 |
+| 44 | 3.386e-7 | 1.144e-5 | 1.6732% | 4.531e-7 |
+| 45 | 3.325e-7 | 7.629e-6 | 1.9145% | 4.885e-7 |
+| 46 | 2.731e-7 | 5.722e-6 | 1.2129% | 6.674e-7 |
+| 47 | 3.184e-7 | 1.144e-5 | 1.4082% | 5.374e-7 |
+
+The ggml vec-dot path also matches the captured output within `2.80e-7` to `3.71e-7` NRMSE. The `1.21%-2.42%`
+distance from exact dequantization is therefore the shared Q8_K activation-quantization policy, not a LiteNN-only
+error. LiteNN's source-Float32 helper is closest to the exact represented-weight result, as expected, but it is not the
+production decode contract.
+
+This experiment closes Q6_K Down correctness for the observed mismatch. The earlier `1.396x-1.698x` Down-stage
+target/control ratios result from feeding different SwiGLU activations to equivalent production projection semantics.
+The next same-input experiment moves upstream: feed one captured `ffn_norm` tensor through Q4_K Gate/Up and strict
+SwiGLU in both implementations. If those outputs also match, the remaining owner is inherited residual-stream drift
+and final-logit margin rather than an FFN kernel defect.
+
 ## Conclusions
 
 1. Bitwise onset is not a valid localization method. Independent quantized execution differs from block 0 while the
    generated trajectory remains equal through index 22.
 2. Attention does not create the index-23 late-layer amplification. The strongest attention evidence is inherited in
    the residual stream, while block-46 attention output is only `1.030x` its control median.
-3. The first actionable causal window is FFN Gate/Up -> SwiGLU -> Q6_K Down in blocks 43-47. The data does not yet say
-   whether the owner is inherited activation drift, an implementation error, or an expected accumulation-order
-   difference.
-4. Q6_K math must not be changed from this cross-runtime comparison alone. The next experiment must feed one captured
-   SwiGLU activation to exact-dequantized, LiteNN source-Q6_K, and llama.cpp Down paths.
+3. The first actionable causal window is FFN Gate/Up -> SwiGLU in blocks 43-47. Identical-activation verification below
+   closes Q6_K Down as an implementation-error candidate.
+4. Q6_K math must not be changed from the cross-runtime sub-layer ratios. On the same captured SwiGLU activation,
+   LiteNN's production field-v4/Q8_K path matches the llama.cpp Down result within `3.67e-7` NRMSE across blocks 43-47.
 5. The final user-visible mismatch is still unproven until final RMSNorm/logits are aligned and the expected versus
    selected top-token margin is measured.
 6. The default-thread long loop is separate from numerical drift and must be reproduced and localized independently.
@@ -131,9 +162,9 @@ excluded from the numerical tables, but it establishes an independent determinis
 
 | Identical-activation result | Decision |
 | --- | --- |
-| LiteNN source-Q6_K departs from exact dequantization while llama.cpp remains near it | fix and regression-test the LiteNN Q6_K path |
-| Both native paths remain within the same exact-reference error envelope | close Down-kernel correctness and test same-input Gate/Up plus SwiGLU semantics |
-| Down explains only a small fraction of the post-FFN amplification | prioritize inherited residual/activation analysis and final-logit margin |
+| Observed: LiteNN production Q6_K matches captured llama.cpp Down | close Down-kernel correctness; do not rewrite it |
+| LiteNN Gate/Up or strict SwiGLU uniquely leaves the same-input reference envelope | fix the isolated FFN implementation and rerun the fixed trajectory |
+| Gate/Up and SwiGLU also match on the same `ffn_norm` input | close FFN kernel correctness and prioritize inherited residual/final-logit margin |
 | A numerical change improves the selected token but worsens the control distribution | reject it as overfitting |
 
 Any accepted correction must preserve the fixed trajectory, pass at least 128 tokens of natural decode, improve or

@@ -146,10 +146,14 @@ P0 implementation order:
     - [x] P0: publish the controlled sub-layer data and conclusions independently from implementation planning. The
       report records all 832 matched coordinates, late-block spatial controls, diagnostic-runtime observations, and
       explicit decision gates without retaining private artifact locations.
-    - [ ] P0: isolate blocks 43-47 Q6_K Down correctness with identical captured SwiGLU activations. Compare an exact
-      dequantized projection, LiteNN source-Q6_K execution, and llama.cpp output before changing quantized math. Fix
-      Q6_K only if LiteNN uniquely departs from the exact-reference envelope; otherwise close Down correctness and
-      move the same-input experiment upstream to Gate/Up and SwiGLU.
+    - [x] P0: isolate blocks 43-47 Q6_K Down correctness with identical captured SwiGLU activations. The low-memory
+      Float64 exact reference, ggml vec-dot, LiteNN source-Float32, production field-v4/Q8_K, and captured llama.cpp
+      outputs are now compared by a reusable JSON diagnostic. Production matches captured output within `3.67e-7`
+      NRMSE and `1.15e-5` max absolute error; both share the expected `1.21%-2.42%` Q8_K distance from exact. Down is
+      closed as the mismatch owner.
+    - [ ] P0: feed identical captured `ffn_norm` activations through Q4_K Gate/Up and strict SwiGLU for blocks 43-47.
+      Compare exact represented-weight projection, ggml vec-dot, LiteNN grouped field-v4 execution, and captured
+      Gate/Up/SwiGLU before changing FFN math.
     - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
       minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
     - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
