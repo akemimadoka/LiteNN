@@ -104,14 +104,14 @@ production throughput benchmark.
    discrepancy introduced after block 47.
 3. Late Q4_K Gate/Up, strict SwiGLU, Q6_K Down, final RMSNorm, and the LM head are all closed by identical-input
    evidence. Cross-runtime ratios measured with different inputs must not be used to rewrite these kernels.
-4. One rank mismatch after 23 matching generated tokens is insufficient evidence of a model-quality regression.
-   Independent quantized execution is not expected to be bitwise identical, especially around modest top-token
-   margins.
-5. No model-math change should be accepted solely to select token 498 at this coordinate. The next correctness gate is
-   distributional: natural-decode agreement, corpus perplexity, task quality, and throughput must be evaluated before
-   any deeper numerical intervention.
-6. The default-thread step-4 stall is independent of this numerical result and remains the immediate runtime
-   correctness investigation.
+4. This one rank mismatch alone was insufficient evidence of a model-quality regression. A later two-campaign,
+   three-prompt natural-generation gate establishes a separate repeatable regression; see
+   `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
+5. No model-math change should be accepted solely to select token 498 at this coordinate. The natural-decode gate now
+   fails repeatably on broader prompts, so deeper numerical intervention must be driven by the newly selected first-
+   divergence whole-block evidence rather than this isolated coordinate.
+6. The independent default-thread stall is closed by the superseding mutex/condition-variable protocol. Same-input
+   prefill/decode whole-block attribution at the natural campaign's first divergences is now the immediate P0.
 
 ## Decision Gates
 

@@ -3379,11 +3379,11 @@ Priority classes:
                   - [x] P0: feed identical captured `ffn_norm` activations through exact, ggml, LiteNN grouped field-v4
                         Q4_K Gate/Up and strict SwiGLU for blocks 43-47. Production Gate/Up/SwiGLU match captured
                         llama.cpp within `1.44e-7/2.21e-7/3.62e-7` NRMSE; complete FFN correctness is closed.
-                  - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. A wrapper run stalled at
-                        step 27 with `desiredWorkers=31`, `workersDone=30`, and every worker blocked on the binary
-                        semaphore. Generation-based atomic wait/notify closes the lost-wakeup window. Five 4096-call
-                        stress processes, focused test suites, a real 32-forward wrapper rerun, checkpoint identity,
-                        and grouped-attention performance gates pass. Evidence:
+                  - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. GDB captured real stalls at
+                        steps 27 and 45 with `desiredWorkers=31`, `workersDone=30`, and every worker blocked. The first
+                        generation-only atomic-wait repair was disproved and superseded by a per-worker mutex/condition-
+                        variable predicate. Concurrent stress, focused suites, the failed case's 103-forward retry, a
+                        complete repeat campaign, and grouped-attention performance gates now pass. Evidence:
                         `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
                   - [x] P0: align final RMSNorm and logits capture and record the expected-vs-selected margin.
                         Same-session reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp
@@ -3392,16 +3392,21 @@ Priority classes:
                         both final kernels as unique mismatch owners. Evidence:
                         `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
                   - [ ] P1: establish a distributional quality gate before changing model math.
-                        - [ ] Run at least 128 natural tokens over multiple prompts and report prefix agreement,
+                        - [x] Run at least 128 natural tokens over multiple prompts and report prefix agreement,
                               first-divergence positions, top-k overlap, disputed-token rank/margin, finite values, and
-                              fallback status.
+                              fallback status. Two deterministic 192-token/3-prompt campaigns are evidence-identical:
+                              prefix agreement is `6.7708%`, same-context top-10 is `83.125%` mean/`70%` minimum, and
+                              median first divergence is step 3 with no fallback/non-finite cases. The gate fails.
+                              Evidence: `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
+                        - [ ] P0: capture same-input prefill/decode whole-block state at all three first-divergence
+                              boundaries. Sweep representative early/middle/late blocks, then split the earliest owner
+                              across attention, KV state, FFN, residual composition, final norm, and LM head.
                         - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain
                               aggregate and per-sample regressions.
                         - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
                               accepted variance gate.
-                        - [ ] Only after a repeatable quality regression is established, add same-input whole-block
-                              attribution for representative early, middle, and late layers, including attention, KV
-                              state, FFN, and residual composition.
+                        - [ ] P1: replace full-vocabulary text logits with a compact indexed Float32 container. One
+                              paired campaign currently emits 384 files/1.07 GiB and takes about 39 seconds to parse.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3909,10 +3914,17 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
-- Reproduced and fixed the intermittent default-thread Qwen diagnostic deadlock. Live GDB evidence showed a thread-pool
-  barrier waiting for 31 workers after only 30 completed, with every worker blocked on the old binary semaphore.
-  Generation-based atomic wait/notify now passes 20,480 mixed-participant stress calls, focused CPU/quantized tests,
-  a real 32-forward wrapper rerun with the original checkpoint checksum, and grouped-attention performance controls.
+- Added a natural-generation quality contract, paired LiteNN/llama.cpp greedy-logits capture, a multi-prompt campaign,
+  JSON/Markdown quality reports, threshold exit status, and CTest-backed offline regression coverage. Two independent
+  192-token campaigns are evidence-identical but fail quality: weighted prefix agreement is `6.7708%`, same-context
+  top-10 overlap is `83.125%` mean/`70%` minimum, and median first divergence is step 3. All cases are fallback-free
+  and finite. Same-input prefill/decode whole-block attribution is promoted to the next P0. Evidence:
+  `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
+- Reproduced and fixed the intermittent default-thread Qwen diagnostic deadlock twice. The initial generation-only
+  atomic-wait repair passed its controls but was disproved by a second real stall at step 45, again at 31 requested and
+  30 completed workers. A per-worker mutex/condition-variable predicate now passes 20,480 concurrent stress calls,
+  focused CPU/quantized tests, the previously stalled 103-forward case, a full repeat campaign, and grouped-attention
+  performance controls.
   Evidence: `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
 - Closed the Qwen index-23 final numerical boundary with same-session residual and logits capture. LiteNN exactly
   reconstructs its own logits; applying LiteNN's production final RMSNorm and Q6_K LM head to llama.cpp's residual

@@ -35,14 +35,14 @@ GDB was attached to the live stalled process without terminating it first:
 The failure is therefore a lost worker wakeup at the shared thread-pool barrier. It is not a slow projection, model
 state error, Python pipe backpressure, or memory sampler pause.
 
-## Root Cause And Fix
+## Initial Root Cause And First Fix
 
 The worker generation and sleeping state were atomic, but blocking used a separate binary semaphore. The protocol
 attempted to transfer ownership of a semaphore permit through `sleeping.exchange(false)`. Under an unlucky transition
 between active polling and blocking, one selected worker could observe neither usable work nor a consumable permit.
 The caller then waited forever for exact equality between 31 requested and 30 completed workers.
 
-The fix removes the binary semaphore and waits directly on the worker's generation atomic:
+The first fix removed the binary semaphore and waited directly on the worker's generation atomic:
 
 1. the dispatcher increments `generation` with release ordering;
 2. it calls `generation.notify_one()` only when the worker reports sleeping;
@@ -50,8 +50,8 @@ The fix removes the binary semaphore and waits directly on the worker's generati
 4. a notification that races ahead of the actual wait is safe because `wait(oldValue)` immediately observes the new
    generation instead of requiring a separately retained permit.
 
-The adaptive polling and sleeping-worker notification policy remain intact, so the fix changes synchronization
-correctness without forcing every helper dispatch through a kernel wake.
+The adaptive polling and sleeping-worker notification policy remained intact. The initial validation below passed,
+but a longer independent campaign later disproved this repair as a complete production fix.
 
 ## Validation
 
@@ -69,9 +69,27 @@ correctness without forcing every helper dispatch through a kernel wake.
 The post-fix grouped-attention microbenchmark retained exact output and measured T8 medians of `0.040 ms` at context
 128 and `0.690 ms` at context 2048. These do not regress the previous `0.048/0.956 ms` control observations.
 
+## Follow-up Reproduction And Superseding Fix
+
+A later three-prompt natural-generation campaign reproduced the same barrier failure in its third process at forward
+step 45. Live GDB evidence again found `desiredWorkers=31`, `workersDone=30`, the caller spinning in `ParallelFor`, and
+all worker threads blocked through libwinpthread. This invalidates the claim that generation-only atomic wait/notify
+was sufficient on the deployed Windows/MinGW runtime.
+
+The superseding protocol retains adaptive user-space polling but uses a per-worker mutex and condition variable for
+the blocking transition. A worker publishes `sleeping`, acquires its wait mutex, and sleeps on the predicate
+`generation != observedGeneration || stopping`. A dispatcher that observes a sleeping worker acquires the same mutex
+before notification. Therefore every race has one of two outcomes: the worker observes the changed generation before
+sleeping, or the notifier is ordered after the worker's atomic unlock-and-wait transition.
+
+The superseding repair passed five concurrent 4096-call mixed-participant stress processes, all 8 CPU-parallel tests,
+and all 22 focused quantized/attention tests. The previously stalled real case completed 103 forwards, and a complete
+second 192-token natural-generation campaign finished under the default 32-thread policy. Grouped-attention T8
+medians remained `0.045 ms` at context 128 and `0.664 ms` at context 2048 with exact output.
+
 ## Conclusion
 
-The default-thread diagnostic long-loop P0 is closed. The failure had a captured runtime state, a synchronization-level
-root cause, a generation-based repair, a portable stress regression, a real-model rerun, exact checkpoint identity,
-and a focused performance gate. Explicit T8 remains a useful reproducibility control, but is no longer required to
-avoid deadlock.
+The first repair is explicitly superseded. The default-thread diagnostic P0 is closed against the mutex/condition-
+variable protocol, which now has two captured real failure sites, a targeted synchronization repair, concurrent stress,
+focused suites, a 103-forward retry, a complete multi-process campaign, and a performance gate. Explicit T8 remains a
+useful reproducibility control, but is no longer required to avoid the observed lost-participant barrier.

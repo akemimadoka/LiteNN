@@ -155,11 +155,11 @@ P0 implementation order:
       The JSON diagnostic compares exact represented-weight, ggml vec-dot, source-Float32, grouped field-v4/Q8_K, and
       captured outputs. Production Gate/Up/SwiGLU match within `1.44e-7/2.21e-7/3.62e-7` NRMSE; applying only LiteNN
       strict SwiGLU to captured Gate/Up stays below `6.05e-8`. Complete FFN correctness is closed.
-    - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. A wrapper run reproduced the stall at
-      step 27; GDB found `desiredWorkers=31`, `workersDone=30`, and all 31 workers blocked on the binary semaphore.
-      Generation-based atomic wait/notify removes the lost-wakeup window. Five 4096-call mixed-participant stress
-      processes, 8 CPU parallel tests, 22 quantized/attention tests, and a real 32-forward wrapper rerun pass with the
-      original checkpoint checksum and no microbenchmark regression. Evidence:
+    - [x] P0: reproduce and fix the default-thread diagnostic AOT long loop. GDB captured two real stalls at steps 27
+      and 45 with `desiredWorkers=31`, `workersDone=30`, and every worker blocked. The first generation-only atomic-wait
+      repair was disproved by the second campaign and is superseded by a per-worker mutex/condition-variable predicate.
+      Five concurrent 4096-call stress processes, 8 CPU-parallel tests, 22 quantized/attention tests, the previously
+      stalled 103-forward case, and a full repeat campaign now pass without grouped-attention regression. Evidence:
       `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
     - [x] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Same-session
       reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp using LiteNN's production final
@@ -167,13 +167,21 @@ P0 implementation order:
       already encoded in block-47 `post_ffn`, closing both final kernels as unique mismatch owners. Evidence:
       `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
     - [ ] P1: add a distributional quality gate before changing model math.
-      - [ ] Run at least 128 natural generated tokens over multiple prompts and report prefix agreement, first-divergence
-        positions, top-k overlap, disputed-token rank/margin, and finite/no-fallback status.
+      - [x] Run at least 128 natural generated tokens over multiple prompts and report prefix agreement, first-divergence
+        positions, top-k overlap, disputed-token rank/margin, and finite/no-fallback status. Two deterministic 3-prompt,
+        192-token campaigns produced an identical evidence digest. Weighted prefix agreement is `6.7708%`, same-context
+        top-10 overlap is `83.125%` mean/`70%` minimum, and median first divergence is step 3; all cases are finite and
+        fallback-free, so the quality gate fails repeatably. Evidence:
+        `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
+      - [ ] P0: add same-input prefill and decode whole-block attribution at each prompt's first-divergence boundary.
+        Capture representative early/middle/late blocks first, then narrow to the earliest block and split attention,
+        KV state, FFN, residual, final norm, and LM-head composition.
       - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain both aggregate
         and per-sample regressions.
       - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the accepted variance gate.
-      - [ ] Only if these gates establish a repeatable quality regression, add same-input whole-block attribution for
-        representative early, middle, and late layers, including attention, KV state, FFN, and residual composition.
+      - [ ] P1: replace per-step full-vocabulary text logits with a compact indexed Float32 container. One 192-token
+        paired campaign currently creates 384 files/1.07 GiB and takes about 39 seconds to parse, which is too heavy for
+        routine CI.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.

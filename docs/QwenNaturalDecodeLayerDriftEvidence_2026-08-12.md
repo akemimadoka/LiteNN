@@ -159,8 +159,9 @@ Down reference and the native LiteNN Q6_K path.
 The selected-block LiteNN run used T8 because one default-thread diagnostic build completed three steps normally and
 then remained in step 4 for more than five minutes. A later exact-wrapper reproduction stalled at step 27. Live GDB
 evidence found the caller waiting for 31 workers with only 30 completions while every worker was blocked on the old
-binary semaphore. Waiting directly on the generation atomic fixes the lost wakeup; the real 32-forward wrapper rerun,
-20,480-call stress control, numerical checksum, and performance gates now pass. Full evidence:
+binary semaphore. A generation-only atomic-wait repair passed the initial controls but was later disproved by another
+real step-45 stall. The superseding mutex/condition-variable predicate passes the 103-forward retry, a complete repeat
+campaign, 20,480-call concurrent stress control, focused suites, and performance gates. Full evidence:
 `docs/QwenDefaultThreadDeadlockAnalysis_2026-08-12.md`.
 
 ## Conclusions And Next Gates
@@ -175,8 +176,8 @@ binary semaphore. Waiting directly on the generation atomic fixes the lost wakeu
    logits, then measure the expected-versus-selected top-token margin. Full data:
    `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
 4. The default-thread diagnostic deadlock is closed. It was a thread-pool lost wakeup, not diagnostic output selection
-   or state progression; generation-based atomic wait/notify completes the same trajectory and checksum.
+   or state progression; the superseding mutex/condition-variable protocol completes the extended real campaign.
 5. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the
    contribution of output projection error. An argmax mismatch can be benign when the reference margin is tiny.
-6. After localization, validate a candidate with the same forced trajectory, natural greedy parity beyond 128 tokens,
-   corpus perplexity delta, and unchanged cache-hit performance before promoting it.
+6. Natural greedy quality is now measured over two repeatable 192-token campaigns and fails strongly. Prioritize
+   same-input prefill/decode whole-block attribution before corpus perplexity, task quality, and candidate promotion.
