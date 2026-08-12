@@ -157,10 +157,19 @@ P0 implementation order:
       strict SwiGLU to captured Gate/Up stays below `6.05e-8`. Complete FFN correctness is closed.
     - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
       minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
-    - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. With attention
-      output and the complete FFN implementation closed by same-input evidence, this is now the primary correctness
-      gate. Change model math only if the aligned decomposition identifies a unique implementation error.
-    - [ ] P1: add 128-token natural parity, corpus perplexity delta, and task-quality gates independently of throughput.
+    - [x] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Same-session
+      reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp using LiteNN's production final
+      RMSNorm and Q6_K LM head. The disputed-token margin moves from `+0.479677` to `-0.798033`; the rank reversal is
+      already encoded in block-47 `post_ffn`, closing both final kernels as unique mismatch owners. Evidence:
+      `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
+    - [ ] P1: add a distributional quality gate before changing model math.
+      - [ ] Run at least 128 natural generated tokens over multiple prompts and report prefix agreement, first-divergence
+        positions, top-k overlap, disputed-token rank/margin, and finite/no-fallback status.
+      - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain both aggregate
+        and per-sample regressions.
+      - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the accepted variance gate.
+      - [ ] Only if these gates establish a repeatable quality regression, add same-input whole-block attribution for
+        representative early, middle, and late layers, including attention, KV state, FFN, and residual composition.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.

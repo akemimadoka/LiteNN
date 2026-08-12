@@ -3381,11 +3381,23 @@ Priority classes:
                         llama.cpp within `1.44e-7/2.21e-7/3.62e-7` NRMSE; complete FFN correctness is closed.
                   - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run remained inside step 4 for
                         over five minutes on one core after three normal steps; fixed T8 completed the same trajectory.
-                  - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
-                        a numerical fix only when one boundary explains the rank crossing. Attention output and the
-                        complete FFN are now closed, making this the primary remaining correctness gate.
-                  - [ ] P1: gate the eventual fix on 128-token natural parity, corpus perplexity delta, task quality,
-                        and unchanged cache-hit throughput.
+                  - [x] P0: align final RMSNorm and logits capture and record the expected-vs-selected margin.
+                        Same-session reconstruction is exact for LiteNN and reaches `4.064e-7` NRMSE for llama.cpp
+                        using LiteNN's production final RMSNorm and Q6_K LM head. The disputed-token margin moves from
+                        `+0.479677` to `-0.798033`; the rank reversal is already encoded in block-47 `post_ffn`, closing
+                        both final kernels as unique mismatch owners. Evidence:
+                        `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
+                  - [ ] P1: establish a distributional quality gate before changing model math.
+                        - [ ] Run at least 128 natural tokens over multiple prompts and report prefix agreement,
+                              first-divergence positions, top-k overlap, disputed-token rank/margin, finite values, and
+                              fallback status.
+                        - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain
+                              aggregate and per-sample regressions.
+                        - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
+                              accepted variance gate.
+                        - [ ] Only after a repeatable quality regression is established, add same-input whole-block
+                              attribution for representative early, middle, and late layers, including attention, KV
+                              state, FFN, and residual composition.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were
@@ -3893,6 +3905,12 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Closed the Qwen index-23 final numerical boundary with same-session residual and logits capture. LiteNN exactly
+  reconstructs its own logits; applying LiteNN's production final RMSNorm and Q6_K LM head to llama.cpp's residual
+  reconstructs llama.cpp logits within `4.064e-7` NRMSE. The disputed-token margin shifts from `+0.479677` to
+  `-0.798033`, proving the rank reversal is already present in the accumulated block-47 residual. Final kernel rewrites
+  are rejected unless distributional quality gates first demonstrate a regression. Evidence:
+  `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
 - Completed selectable Qwen sub-layer checkpointing in LiteNN and llama.cpp without patching vendored code. The
   index-16-23 panel covers 13 boundaries in blocks 31-33 and 43-47, and the suite comparator aggregates 832 matched
   coordinates. Attention output does not create the block-46 target anomaly; late FFN SwiGLU/Q6_K Down consistently

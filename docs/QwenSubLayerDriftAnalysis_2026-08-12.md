@@ -160,14 +160,13 @@ isolates activation math from projection math.
 
 The maximum production Gate, Up, and complete SwiGLU NRMSE values are `1.44e-7`, `2.21e-7`, and `3.62e-7`.
 Recomputing only strict SwiGLU from captured Gate/Up stays below `6.05e-8`. These are floating-point ordering and
-elementary-function noise, not a model-semantic discrepancy. Together with the Down result, this closes the complete
+elementary-function noise, not a model-semantic discrepancy. Together with the Down result, this excludes the complete
 FFN implementation in blocks 43-47 as the owner of the index-23 token mismatch.
 
 The cross-runtime SwiGLU and Down outlier ratios are caused by different `ffn_norm` inputs entering equivalent FFN
-semantics. Since attention output also failed the target-outlier gate, the remaining useful question is no longer
-which late-layer kernel is wrong. It is whether accumulated residual-stream differences cross a small final-logit
-margin. Final RMSNorm, output projection, top-k candidates, and the expected-versus-selected margin are now the next
-causal gate.
+semantics. The subsequent same-session final-boundary experiment proves that LiteNN's final RMSNorm and Q6_K LM head
+reconstruct llama.cpp's actual logits from its residual within `4.064e-7` NRMSE. The rank reversal is therefore already
+encoded in the accumulated residual stream. Full data: `docs/QwenFinalLogitBoundaryAnalysis_2026-08-12.md`.
 
 ## Conclusions
 
@@ -179,8 +178,9 @@ causal gate.
    implementation-error candidates.
 4. Q6_K math must not be changed from the cross-runtime sub-layer ratios. On the same captured SwiGLU activation,
    LiteNN's production field-v4/Q8_K path matches the llama.cpp Down result within `3.67e-7` NRMSE across blocks 43-47.
-5. The final user-visible mismatch is now best explained as accumulated residual-stream drift, but this remains
-   unproven until final RMSNorm/logits are aligned and the expected versus selected top-token margin is measured.
+5. The final user-visible mismatch is explained by accumulated residual-stream drift. Final RMSNorm and the LM head
+   reproduce llama.cpp's own logits from its residual within `4.064e-7` NRMSE, while the disputed-token paired margin
+   moves from `+0.479677` in llama.cpp to `-0.798033` in LiteNN.
 6. The default-thread long loop is separate from numerical drift and must be reproduced and localized independently.
 
 ## Decision Gates
@@ -189,7 +189,8 @@ causal gate.
 | --- | --- |
 | Observed: LiteNN production Q6_K matches captured llama.cpp Down | close Down-kernel correctness; do not rewrite it |
 | Observed: Gate/Up and strict SwiGLU match on the same `ffn_norm` input | close complete FFN kernel correctness |
-| Final logits show a narrow expected-versus-selected margin consistent with measured residual drift | validate quality statistically; do not force bitwise kernel parity |
+| Observed: final logits reconstruct from each runtime's own residual | close final RMSNorm and LM-head correctness |
+| Observed: residual drift reverses the disputed-token margin by `1.277710` | validate quality statistically; do not force bitwise kernel parity |
 | A numerical change improves the selected token but worsens the control distribution | reject it as overfitting |
 
 Any accepted correction must preserve the fixed trajectory, pass at least 128 tokens of natural decode, improve or
