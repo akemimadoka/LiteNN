@@ -838,6 +838,9 @@ TEST(GGUFImporter, ImportsMetadataTensorNamesAndQuantizedPayloads)
 
 	EXPECT_EQ(imported.summary.tensorCount, 2u);
 	EXPECT_EQ(imported.summary.metadataCount, 5u);
+	ASSERT_EQ(imported.model.UnsafeGraphView().VariableCount(), 2u);
+	EXPECT_FALSE(imported.model.UnsafeGraphView().GetVariable(0)->HasGradStorage());
+	EXPECT_FALSE(imported.model.UnsafeGraphView().GetVariable(1)->HasGradStorage());
 
 	ASSERT_EQ(imported.model.UnsafeGraphView().VariableCount(), 2);
 	ASSERT_EQ(imported.model.UnsafeGraphView().VariableNames().size(), 2);

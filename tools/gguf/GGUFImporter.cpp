@@ -489,7 +489,7 @@ namespace LiteNN::GGUF
 
 				auto storage = ReadPayloadTensor(input, dataOffset, storedBytes, tensorName);
 				auto quantization = BlockQuantization(*format, shape, DataType::Float32);
-				graph.AddVariable(Variable::CreateQuantized(std::move(storage), std::move(quantization)));
+				graph.AddVariable(Variable::CreateFrozenQuantized(std::move(storage), std::move(quantization)));
 				return;
 			}
 
@@ -501,7 +501,7 @@ namespace LiteNN::GGUF
 			}
 
 			auto plainTensor = ReadPlainTensor(input, dataOffset, shape, *dtype, tensorName);
-			graph.AddVariable(Variable::Create(std::move(plainTensor)));
+			graph.AddVariable(Variable::CreateFrozen(std::move(plainTensor)));
 		}
 	} // namespace
 
