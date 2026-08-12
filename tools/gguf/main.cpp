@@ -75,6 +75,9 @@ namespace
 		    << "  " << executable
 		    << " --verify-llama-down-checkpoints <input.gguf> <checkpoint-dir> <generated-index> <blocks> "
 		       "<output.json> [threads]\n"
+		    << "  " << executable
+		    << " --verify-llama-ffn-checkpoints <input.gguf> <checkpoint-dir> <generated-index> <blocks> "
+		       "<output.json> [threads]\n"
 		    << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
 		    << "[max-cache-length]\n"
 		    << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
@@ -3166,6 +3169,34 @@ int main(int argc, char** argv)
 			return 0;
 #else
 			throw std::runtime_error("Down projection checkpoint verification requires an AOT-enabled build");
+#endif
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--verify-llama-ffn-checkpoints")
+		{
+			if (argc != 7 && argc != 8)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			const auto summary = LiteNN::GGUF::Tooling::VerifyLLaMAFFNActivationCheckpoints({
+			    .modelPath = argv[2],
+			    .checkpointDirectory = argv[3],
+			    .outputPath = argv[6],
+			    .generatedIndex = ParseSize(argv[4], "generated-index", true),
+			    .blockIndices = ParseNonNegativeSizes(argv[5], "blocks"),
+			    .threadCount = argc == 8 ? ParseSize(argv[7], "threads") : 8,
+			});
+			std::cout << "Verified identical-input Q4_K Gate/Up and SwiGLU blocks=" << summary.blockCount
+			          << " maximum_gate_nrmse=" << summary.maximumProductionGateVersusCapturedNRMSE
+			          << " maximum_up_nrmse=" << summary.maximumProductionUpVersusCapturedNRMSE
+			          << " maximum_pipeline_swiglu_nrmse=" << summary.maximumProductionSwiGLUVersusCapturedNRMSE
+			          << " maximum_same_gate_up_swiglu_nrmse=" << summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE
+			          << " output=" << argv[6] << '\n';
+			return 0;
+#else
+			throw std::runtime_error("FFN activation checkpoint verification requires an AOT-enabled build");
 #endif
 		}
 

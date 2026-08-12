@@ -28,6 +28,18 @@ namespace LiteNN::GGUF::Tooling
 
 	DownProjectionVerificationSummary
 	VerifyLLaMADownProjectionCheckpoints(const DownProjectionVerificationOptions& options);
+
+	struct FFNActivationVerificationSummary
+	{
+		std::size_t blockCount{};
+		double maximumProductionGateVersusCapturedNRMSE{};
+		double maximumProductionUpVersusCapturedNRMSE{};
+		double maximumProductionSwiGLUVersusCapturedNRMSE{};
+		double maximumCapturedInputSwiGLUVersusCapturedNRMSE{};
+	};
+
+	FFNActivationVerificationSummary
+	VerifyLLaMAFFNActivationCheckpoints(const DownProjectionVerificationOptions& options);
 } // namespace LiteNN::GGUF::Tooling
 
 #endif

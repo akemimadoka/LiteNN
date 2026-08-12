@@ -6,6 +6,7 @@
 #include <LiteNN/Compiler/CompiledModule.h>
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <charconv>
 #include <cmath>
@@ -39,6 +40,16 @@ extern "C" void litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
     const float*, const float*, std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t,
     const std::uint8_t*, const std::uint8_t*, std::int64_t, std::int64_t, std::int64_t, float*, float*, std::int64_t,
     std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::uint64_t, std::uint64_t, std::uint64_t);
+extern "C" void litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
+    const float*, const float*, std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t,
+    const std::uint8_t*, const std::uint8_t*, std::int64_t, std::int64_t, std::int64_t, const std::uint8_t*,
+    const std::uint8_t*, std::int64_t, std::int64_t, std::int64_t, float*, float*, std::int64_t, std::int64_t,
+    std::int64_t, std::int64_t, std::int64_t, std::uint64_t, std::uint64_t, std::uint64_t, std::uint64_t,
+    std::uint64_t);
+extern "C" void litenn_cpu_swiglu_f32(const float*, const float*, std::int64_t, std::int64_t, std::int64_t,
+                                      std::int64_t, std::int64_t, const float*, const float*, std::int64_t,
+                                      std::int64_t, std::int64_t, std::int64_t, std::int64_t, float*, float*,
+                                      std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t);
 #endif
 
 namespace LiteNN::GGUF::Tooling
@@ -72,6 +83,25 @@ namespace LiteNN::GGUF::Tooling
 			std::size_t packedBytes{};
 			std::string closestToExact;
 			std::vector<CandidateMetrics> candidates;
+		};
+
+		struct FFNCandidateMetrics
+		{
+			std::string name;
+			ErrorMetrics gateVersusExact;
+			ErrorMetrics gateVersusCaptured;
+			ErrorMetrics upVersusExact;
+			ErrorMetrics upVersusCaptured;
+			ErrorMetrics swigluVersusExact;
+			ErrorMetrics swigluVersusCaptured;
+		};
+
+		struct FFNBlockResult
+		{
+			std::size_t blockIndex{};
+			std::size_t inputFeatures{};
+			std::size_t hiddenFeatures{};
+			std::vector<FFNCandidateMetrics> candidates;
 		};
 
 		std::vector<std::string_view> Split(std::string_view text, char delimiter)
@@ -320,6 +350,102 @@ namespace LiteNN::GGUF::Tooling
 #endif
 		}
 
+		std::pair<Tensor<CPU>, Tensor<CPU>> RunGroupedFFNProductionHelper(const Tensor<CPU>& input,
+		                                                                  const Variable& gateWeight,
+		                                                                  const Variable& upWeight, std::size_t threads)
+		{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			const auto& gateParams = *gateWeight.Quantization();
+			const auto& upParams = *upWeight.Quantization();
+			if (gateParams.blockFormat != QuantizedBlockFormat::GGML_Q4_K ||
+			    upParams.blockFormat != QuantizedBlockFormat::GGML_Q4_K ||
+			    gateParams.expressedShape != upParams.expressedShape || gateParams.expressedShape.size() != 2)
+			{
+				throw std::runtime_error("grouped FFN verification requires shape-matched Q4_K Gate/Up weights");
+			}
+			const auto rows = input.Shape()[0];
+			const auto inputFeatures = input.Shape()[1];
+			const auto hiddenFeatures = gateParams.expressedShape[0];
+			const auto format = static_cast<std::uint64_t>(QuantizedBlockFormat::GGML_Q4_K);
+			const auto pack = [&](const Variable& weight) {
+				const auto storage = weight.Data().CopyToDevice(CPU{});
+				const auto packedBytes = litenn_cpu_ggml_field_interleaved_v4_bytes(
+				    format, static_cast<std::int64_t>(hiddenFeatures), static_cast<std::int64_t>(inputFeatures));
+				if (packedBytes == 0 ||
+				    packedBytes > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()))
+				{
+					throw std::runtime_error("grouped FFN field-v4 prepack size is invalid");
+				}
+				std::vector<std::uint8_t> packed(static_cast<std::size_t>(packedBytes));
+				litenn_cpu_ggml_prepack_field_interleaved_v4(
+				    nullptr, static_cast<const std::uint8_t*>(storage.UnsafeRawData()), 0,
+				    static_cast<std::int64_t>(storage.NumElements()), 1, static_cast<std::int64_t>(hiddenFeatures),
+				    static_cast<std::int64_t>(inputFeatures), format, nullptr, packed.data(), 0,
+				    static_cast<std::int64_t>(packed.size()), 1);
+				return packed;
+			};
+			auto packedGate = pack(gateWeight);
+			auto packedUp = pack(upWeight);
+			Tensor<CPU> grouped(Uninitialized, { rows, hiddenFeatures * 2 }, DataType::Float32);
+			std::fill_n(static_cast<float*>(grouped.UnsafeRawData()), grouped.NumElements(),
+			            std::numeric_limits<float>::quiet_NaN());
+			litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32(
+			    nullptr, static_cast<const float*>(input.UnsafeRawData()), 0, static_cast<std::int64_t>(rows),
+			    static_cast<std::int64_t>(inputFeatures), static_cast<std::int64_t>(inputFeatures), 1, nullptr,
+			    packedGate.data(), 0, static_cast<std::int64_t>(packedGate.size()), 1, nullptr, packedUp.data(), 0,
+			    static_cast<std::int64_t>(packedUp.size()), 1, nullptr, static_cast<float*>(grouped.UnsafeRawData()), 0,
+			    static_cast<std::int64_t>(rows), static_cast<std::int64_t>(hiddenFeatures * 2),
+			    static_cast<std::int64_t>(hiddenFeatures * 2), 1, format, hiddenFeatures, hiddenFeatures, threads,
+			    static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+
+			Tensor<CPU> gate(Uninitialized, { rows, hiddenFeatures }, DataType::Float32);
+			Tensor<CPU> up(Uninitialized, { rows, hiddenFeatures }, DataType::Float32);
+			const auto* groupedValues = static_cast<const float*>(grouped.UnsafeRawData());
+			auto* gateValues = static_cast<float*>(gate.UnsafeRawData());
+			auto* upValues = static_cast<float*>(up.UnsafeRawData());
+			for (std::size_t row = 0; row < rows; ++row)
+			{
+				std::copy_n(groupedValues + row * hiddenFeatures * 2, hiddenFeatures,
+				            gateValues + row * hiddenFeatures);
+				std::copy_n(groupedValues + row * hiddenFeatures * 2 + hiddenFeatures, hiddenFeatures,
+				            upValues + row * hiddenFeatures);
+			}
+			return { std::move(gate), std::move(up) };
+#else
+			(void) input;
+			(void) gateWeight;
+			(void) upWeight;
+			(void) threads;
+			throw std::runtime_error("FFN activation verification requires an AOT-enabled build");
+#endif
+		}
+
+		Tensor<CPU> RunStrictSwiGLU(const Tensor<CPU>& gate, const Tensor<CPU>& up)
+		{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			if (gate.DType() != DataType::Float32 || up.DType() != DataType::Float32 || gate.Shape() != up.Shape() ||
+			    gate.Shape().NumDim() != 2)
+			{
+				throw std::runtime_error("strict SwiGLU verification requires shape-matched 2D Float32 tensors");
+			}
+			const auto rows = gate.Shape()[0];
+			const auto columns = gate.Shape()[1];
+			Tensor<CPU> result(Uninitialized, { rows, columns }, DataType::Float32);
+			litenn_cpu_swiglu_f32(nullptr, static_cast<const float*>(gate.UnsafeRawData()), 0,
+			                      static_cast<std::int64_t>(rows), static_cast<std::int64_t>(columns),
+			                      static_cast<std::int64_t>(columns), 1, nullptr,
+			                      static_cast<const float*>(up.UnsafeRawData()), 0, static_cast<std::int64_t>(rows),
+			                      static_cast<std::int64_t>(columns), static_cast<std::int64_t>(columns), 1, nullptr,
+			                      static_cast<float*>(result.UnsafeRawData()), 0, static_cast<std::int64_t>(rows),
+			                      static_cast<std::int64_t>(columns), static_cast<std::int64_t>(columns), 1);
+			return result;
+#else
+			(void) gate;
+			(void) up;
+			throw std::runtime_error("FFN activation verification requires an AOT-enabled build");
+#endif
+		}
+
 		void WriteMetrics(std::ostream& output, const ErrorMetrics& metrics, std::string_view indent)
 		{
 			output << indent << "{\n"
@@ -386,6 +512,70 @@ namespace LiteNN::GGUF::Tooling
 			if (!output)
 			{
 				throw std::runtime_error("failed to write Down projection verification report");
+			}
+		}
+
+		void WriteFFNReport(const DownProjectionVerificationOptions& options, std::span<const FFNBlockResult> blocks,
+		                    const FFNActivationVerificationSummary& summary)
+		{
+			if (!options.outputPath.parent_path().empty())
+			{
+				std::filesystem::create_directories(options.outputPath.parent_path());
+			}
+			std::ofstream output(options.outputPath, std::ios::binary | std::ios::trunc);
+			if (!output)
+			{
+				throw std::runtime_error("failed to open FFN activation verification report");
+			}
+			output << std::setprecision(17) << "{\n"
+			       << "  \"schema\": \"litenn.qwen_ffn_activation_verification.v1\",\n"
+			       << "  \"generated_index\": " << options.generatedIndex << ",\n"
+			       << "  \"thread_count\": " << options.threadCount << ",\n"
+			       << "  \"activation_source\": \"captured_ffn_norm\",\n"
+			       << "  \"summary\": {\n"
+			       << "    \"maximum_field_v4_gate_vs_captured_nrmse\": "
+			       << summary.maximumProductionGateVersusCapturedNRMSE << ",\n"
+			       << "    \"maximum_field_v4_up_vs_captured_nrmse\": "
+			       << summary.maximumProductionUpVersusCapturedNRMSE << ",\n"
+			       << "    \"maximum_field_v4_swiglu_vs_captured_nrmse\": "
+			       << summary.maximumProductionSwiGLUVersusCapturedNRMSE << ",\n"
+			       << "    \"maximum_captured_input_swiglu_vs_captured_nrmse\": "
+			       << summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE << "\n"
+			       << "  },\n"
+			       << "  \"blocks\": [\n";
+			for (std::size_t blockIndex = 0; blockIndex < blocks.size(); ++blockIndex)
+			{
+				const auto& block = blocks[blockIndex];
+				output << "    {\n"
+				       << "      \"block\": " << block.blockIndex << ",\n"
+				       << "      \"format\": \"GGML_Q4_K\",\n"
+				       << "      \"input_features\": " << block.inputFeatures << ",\n"
+				       << "      \"hidden_features\": " << block.hiddenFeatures << ",\n"
+				       << "      \"candidates\": {\n";
+				for (std::size_t candidateIndex = 0; candidateIndex < block.candidates.size(); ++candidateIndex)
+				{
+					const auto& candidate = block.candidates[candidateIndex];
+					output << "        \"" << candidate.name << "\": {\n";
+					const auto writeStage = [&](std::string_view name, const ErrorMetrics& versusExact,
+					                            const ErrorMetrics& versusCaptured, bool last) {
+						output << "          \"" << name << "\": {\n"
+						       << "            \"versus_exact\": ";
+						WriteMetrics(output, versusExact, "            ");
+						output << ",\n            \"versus_captured\": ";
+						WriteMetrics(output, versusCaptured, "            ");
+						output << "\n          }" << (last ? "\n" : ",\n");
+					};
+					writeStage("gate", candidate.gateVersusExact, candidate.gateVersusCaptured, false);
+					writeStage("up", candidate.upVersusExact, candidate.upVersusCaptured, false);
+					writeStage("swiglu", candidate.swigluVersusExact, candidate.swigluVersusCaptured, true);
+					output << "        }" << (candidateIndex + 1 == block.candidates.size() ? "\n" : ",\n");
+				}
+				output << "      }\n    }" << (blockIndex + 1 == blocks.size() ? "\n" : ",\n");
+			}
+			output << "  ]\n}\n";
+			if (!output)
+			{
+				throw std::runtime_error("failed to write FFN activation verification report");
 			}
 		}
 	} // namespace
@@ -498,5 +688,135 @@ namespace LiteNN::GGUF::Tooling
 			.maximumProductionVersusCapturedNRMSE = maximumProductionVersusCapturedNRMSE,
 			.maximumProductionVersusCapturedAbsoluteError = maximumProductionVersusCapturedAbsoluteError,
 		};
+	}
+
+	FFNActivationVerificationSummary
+	VerifyLLaMAFFNActivationCheckpoints(const DownProjectionVerificationOptions& options)
+	{
+		if (options.blockIndices.empty() || options.threadCount == 0)
+		{
+			throw std::runtime_error("FFN activation verification requires blocks and a positive thread count");
+		}
+		if (!std::ranges::is_sorted(options.blockIndices) ||
+		    std::ranges::adjacent_find(options.blockIndices) != options.blockIndices.end())
+		{
+			throw std::runtime_error("FFN activation verification block indices must be sorted and unique");
+		}
+
+		const auto imported = ImportGGUFArchive(options.modelPath);
+		const auto& graph = imported.model.UnsafeGraphView();
+		const auto hyperparameters = ParseLLaMAHyperparameters(graph);
+		std::vector<FFNBlockResult> results;
+		results.reserve(options.blockIndices.size());
+		FFNActivationVerificationSummary summary{ .blockCount = options.blockIndices.size() };
+		for (const auto blockIndex : options.blockIndices)
+		{
+			if (blockIndex >= hyperparameters.blockCount)
+			{
+				throw std::runtime_error("FFN activation verification block index exceeds model block count");
+			}
+			const auto gateName = std::format("blk.{}.ffn_gate.weight", blockIndex);
+			const auto upName = std::format("blk.{}.ffn_up.weight", blockIndex);
+			const auto gateIndex = graph.FindVariable(gateName);
+			const auto upIndex = graph.FindVariable(upName);
+			if (!gateIndex || !upIndex)
+			{
+				throw std::runtime_error(std::format("model does not contain {} and {}", gateName, upName));
+			}
+			const auto& gateWeight = *graph.GetVariable(*gateIndex);
+			const auto& upWeight = *graph.GetVariable(*upIndex);
+			const auto validateWeight = [](const Variable& weight, std::string_view name) {
+				if (!weight.IsQuantized() || weight.Quantization()->blockFormat != QuantizedBlockFormat::GGML_Q4_K ||
+				    weight.Quantization()->expressedType != DataType::Float32 ||
+				    weight.Quantization()->expressedShape.size() != 2)
+				{
+					throw std::runtime_error(std::format("{} must be a 2D Float32-expressed GGML_Q4_K tensor", name));
+				}
+			};
+			validateWeight(gateWeight, gateName);
+			validateWeight(upWeight, upName);
+			if (gateWeight.Quantization()->expressedShape != upWeight.Quantization()->expressedShape)
+			{
+				throw std::runtime_error("FFN Gate/Up expressed shapes differ");
+			}
+			const auto hiddenFeatures = gateWeight.Quantization()->expressedShape[0];
+			const auto inputFeatures = gateWeight.Quantization()->expressedShape[1];
+			auto activation = LoadCheckpointTensor(options.checkpointDirectory, "ffn_norm", options.generatedIndex,
+			                                       blockIndex, inputFeatures);
+			auto capturedGate = LoadCheckpointTensor(options.checkpointDirectory, "ffn_gate", options.generatedIndex,
+			                                         blockIndex, hiddenFeatures);
+			auto capturedUp = LoadCheckpointTensor(options.checkpointDirectory, "ffn_up", options.generatedIndex,
+			                                       blockIndex, hiddenFeatures);
+			auto capturedSwiGLU = LoadCheckpointTensor(options.checkpointDirectory, "ffn_swiglu",
+			                                           options.generatedIndex, blockIndex, hiddenFeatures);
+
+			auto exactGate = EvalGGMLExactDequantizedMatMul(activation, gateWeight, true);
+			auto exactUp = EvalGGMLExactDequantizedMatMul(activation, upWeight, true);
+			auto exactSwiGLU = RunStrictSwiGLU(exactGate, exactUp);
+			auto ggmlGate = EvalGGMLQuantizedMatMul(activation, gateWeight, true);
+			auto ggmlUp = EvalGGMLQuantizedMatMul(activation, upWeight, true);
+			auto ggmlSwiGLU = RunStrictSwiGLU(ggmlGate, ggmlUp);
+			auto sourceGate = RunSourceHelper(activation, gateWeight, options.threadCount);
+			auto sourceUp = RunSourceHelper(activation, upWeight, options.threadCount);
+			auto sourceSwiGLU = RunStrictSwiGLU(sourceGate, sourceUp);
+			auto [productionGate, productionUp] =
+			    RunGroupedFFNProductionHelper(activation, gateWeight, upWeight, options.threadCount);
+			auto productionSwiGLU = RunStrictSwiGLU(productionGate, productionUp);
+			auto capturedInputSwiGLU = RunStrictSwiGLU(capturedGate, capturedUp);
+
+			struct Candidate
+			{
+				std::string name;
+				const Tensor<CPU>* gate;
+				const Tensor<CPU>* up;
+				const Tensor<CPU>* swiglu;
+			};
+			const std::array candidates{
+				Candidate{ "llama_cpp_captured", &capturedGate, &capturedUp, &capturedSwiGLU },
+				Candidate{ "ggml_vec_dot", &ggmlGate, &ggmlUp, &ggmlSwiGLU },
+				Candidate{ "litenn_source_f32", &sourceGate, &sourceUp, &sourceSwiGLU },
+				Candidate{ "litenn_grouped_field_v4_q8k", &productionGate, &productionUp, &productionSwiGLU },
+				Candidate{ "captured_gate_up_litenn_strict_swiglu", &capturedGate, &capturedUp, &capturedInputSwiGLU },
+			};
+			FFNBlockResult result{
+				.blockIndex = blockIndex,
+				.inputFeatures = inputFeatures,
+				.hiddenFeatures = hiddenFeatures,
+			};
+			for (const auto& candidate : candidates)
+			{
+				FFNCandidateMetrics metrics{
+					.name = candidate.name,
+					.gateVersusExact = Compare(Values(*candidate.gate), Values(exactGate)),
+					.gateVersusCaptured = Compare(Values(*candidate.gate), Values(capturedGate)),
+					.upVersusExact = Compare(Values(*candidate.up), Values(exactUp)),
+					.upVersusCaptured = Compare(Values(*candidate.up), Values(capturedUp)),
+					.swigluVersusExact = Compare(Values(*candidate.swiglu), Values(exactSwiGLU)),
+					.swigluVersusCaptured = Compare(Values(*candidate.swiglu), Values(capturedSwiGLU)),
+				};
+				if (candidate.name == "litenn_grouped_field_v4_q8k")
+				{
+					summary.maximumProductionGateVersusCapturedNRMSE =
+					    std::max(summary.maximumProductionGateVersusCapturedNRMSE,
+					             metrics.gateVersusCaptured.normalizedRmsError);
+					summary.maximumProductionUpVersusCapturedNRMSE = std::max(
+					    summary.maximumProductionUpVersusCapturedNRMSE, metrics.upVersusCaptured.normalizedRmsError);
+					summary.maximumProductionSwiGLUVersusCapturedNRMSE =
+					    std::max(summary.maximumProductionSwiGLUVersusCapturedNRMSE,
+					             metrics.swigluVersusCaptured.normalizedRmsError);
+				}
+				if (candidate.name == "captured_gate_up_litenn_strict_swiglu")
+				{
+					summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE =
+					    std::max(summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE,
+					             metrics.swigluVersusCaptured.normalizedRmsError);
+				}
+				result.candidates.push_back(std::move(metrics));
+			}
+			results.push_back(std::move(result));
+		}
+
+		WriteFFNReport(options, results, summary);
+		return summary;
 	}
 } // namespace LiteNN::GGUF::Tooling
