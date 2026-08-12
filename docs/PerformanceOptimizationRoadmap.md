@@ -142,9 +142,14 @@ P0 implementation order:
       The 832-coordinate index-16-23 panel covers attention norm, rotated Q/K, V, context/output/residual, FFN norm,
       Gate/Up, SwiGLU, Down, and post-FFN. Block-46 attention output is not a target outlier (`1.030x` control median),
       while SwiGLU/Down reach `1.374x/1.496x`; post-FFN joint modified-z is `13.27/12.91`. Evidence:
-      `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
+      `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
+    - [x] P0: publish the controlled sub-layer data and conclusions independently from implementation planning. The
+      report records all 832 matched coordinates, late-block spatial controls, diagnostic-runtime observations, and
+      explicit decision gates without retaining private artifact locations.
     - [ ] P0: isolate blocks 43-47 Q6_K Down correctness with identical captured SwiGLU activations. Compare an exact
-      dequantized projection, LiteNN source-Q6_K execution, and llama.cpp output before changing quantized math.
+      dequantized projection, LiteNN source-Q6_K execution, and llama.cpp output before changing quantized math. Fix
+      Q6_K only if LiteNN uniquely departs from the exact-reference envelope; otherwise close Down correctness and
+      move the same-input experiment upstream to Gate/Up and SwiGLU.
     - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
       minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
     - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
