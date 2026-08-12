@@ -2921,7 +2921,7 @@ TEST(CompiledModuleTest, CPUParallelThreadPoolSurvivesRapidParticipantCountChang
 	constexpr std::array waitPolicies{ CPUAOTWorkerWaitPolicy::Adaptive, CPUAOTWorkerWaitPolicy::LowPower,
 		                               CPUAOTWorkerWaitPolicy::Latency };
 
-	for (std::size_t iteration = 0; iteration < 384; ++iteration)
+	for (std::size_t iteration = 0; iteration < 4096; ++iteration)
 	{
 		std::ranges::fill(output, std::numeric_limits<float>::quiet_NaN());
 		const auto schedulingPolicy = static_cast<std::uint64_t>(waitPolicies[iteration % waitPolicies.size()]) << 8;

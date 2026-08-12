@@ -107,7 +107,6 @@
 #include <mutex>
 #include <numeric>
 #include <optional>
-#include <semaphore>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -859,7 +858,7 @@ namespace
 				worker->generation.fetch_add(1, std::memory_order_release);
 				if (worker->sleeping.exchange(false, std::memory_order_acq_rel))
 				{
-					worker->start.release();
+					worker->generation.notify_one();
 				}
 			}
 			for (auto& worker : workers_)
@@ -931,7 +930,7 @@ namespace
 				workers_[i]->generation.fetch_add(1, std::memory_order_release);
 				if (workers_[i]->sleeping.exchange(false, std::memory_order_acq_rel))
 				{
-					workers_[i]->start.release();
+					workers_[i]->generation.notify_one();
 					if (profile)
 					{
 						++profile->signaledWorkerCount;
@@ -968,7 +967,6 @@ namespace
 	private:
 		struct Worker
 		{
-			std::binary_semaphore start{ 0 };
 			std::atomic<std::uint64_t> generation{};
 			std::atomic<bool> sleeping{};
 			std::thread thread;
@@ -1036,15 +1034,12 @@ namespace
 				if (!observedWorkWhilePolling)
 				{
 					worker.sleeping.store(true, std::memory_order_release);
-					if (worker.generation.load(std::memory_order_acquire) == observedGeneration)
+					while (worker.generation.load(std::memory_order_acquire) == observedGeneration &&
+					       !stopping_.load(std::memory_order_acquire))
 					{
-						worker.start.acquire();
+						worker.generation.wait(observedGeneration, std::memory_order_acquire);
 					}
-					else if (!worker.sleeping.exchange(false, std::memory_order_acq_rel))
-					{
-						// The dispatcher claimed the sleeping state and will publish a semaphore permit.
-						worker.start.acquire();
-					}
+					worker.sleeping.store(false, std::memory_order_release);
 				}
 				if (waitPolicy == CPUAOTWorkerWaitPolicy::Adaptive)
 				{
