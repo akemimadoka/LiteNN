@@ -104,9 +104,15 @@ P0 implementation order:
     - [ ] P0: rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under one stable power
       policy. Require exact trajectory, no fallback, cache hit, whole/bin variance and overhead gates; retain and report
       outliers instead of deleting them. This is the acceptance gate for the observed directional `7.02%` module gain.
-    - [ ] P0: capture continuous peak working set, private bytes, mapped model/artifact bytes, and prepared-weight bytes
-      during first cache publication. Remove avoidable full-model heap copies; the current single sample reaches about
-      `27.4 GB` while publishing `9.160 GB` of prepared weights from an approximately 9 GB archive.
+    - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
+      model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
+      `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
+      `9.160 GB` prepared region. Source owners are released after module construction, and active decode settles near
+      `9.4-9.9/9.5-10.0 GB` RSS/private. Cross-platform sampling is integrated into Qwen smoke traces. Evidence:
+      `docs/QwenFirstCacheMemoryEvidence_2026-08-12.md`.
+    - [ ] P1: mmap or stream source GGUF payloads and incrementally publish prepared external weights so first-build
+      peak private bytes fall below `1.5x` the combined required payload. Preserve cache-key identity, atomic failure
+      behavior, exact decode parity, and bounded temporary object/metadata memory.
     - [ ] P1: use matched cross-runtime stages and cache-cold projection streams to attribute the post-attention
       projection budget. QKV, attention output, Gate/Up, Down, and logits currently aggregate to `163.473 ms/token`
       (`80.71%` of LiteNN module time), but local share alone must not select a kernel rewrite.
@@ -121,8 +127,9 @@ P0 implementation order:
     - [x] Add fixed-reference token replay and complete three accepted 128-token pairs with exact forced trajectory,
       no fallback, cache hit, alternating order, and per-runtime CV below 3%.
     - [x] Reject in-process power-policy changes in both paired full-decode and reference-stage controls.
-    - [ ] Add peak process memory/residency, mapped artifact/weight residency, and KV-cache byte gates, then run the
-      512-token tier only after LiteNN position attribution passes.
+    - [ ] Add mapped artifact/weight residency and KV-cache byte gates, then run the 512-token tier only after LiteNN
+      position attribution passes. Cross-platform peak RSS/private sampling is complete for the short first-cache and
+      decode controls; long-context KV ownership remains open.
 
 - [x] Build a cache-cold GGML projection-stream benchmark.
   - `GGMLFieldInterleavedV4ColdProjectionStream` covers isolated Q4_K/Q6_K `13824 -> 5120` Down streams, the observed

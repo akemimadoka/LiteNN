@@ -3334,9 +3334,16 @@ Priority classes:
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
-                  - [ ] Continuously measure first-cache peak residency and remove avoidable full-model copies. One
-                        observed write-weights sample reached about `27.4 GB` while publishing `9.160 GB` from an
-                        approximately 9 GB archive, making cache construction memory a production P0.
+                  - [x] Continuously measure first-cache peak residency and remove the avoidable gradient copy. Frozen
+                        GGUF inference variables reduce the real 14B fresh-build peak from the earlier
+                        `27.37/27.49 GB` working set/private observation to `18.566/18.679 GB` continuous RSS/private
+                        while publishing the same `9.160 GB` prepared region. Source owners are released after module
+                        construction; active decode uses about `9.4-9.9/9.5-10.0 GB` RSS/private. Windows/Linux/macOS
+                        sampling is integrated into Qwen smoke memory JSON, trace, and waterfall outputs. Evidence:
+                        `docs/QwenFirstCacheMemoryEvidence_2026-08-12.md`.
+                  - [ ] Stream or mmap source GGUF payloads and incrementally publish prepared weights to reduce the
+                        remaining source/prepared overlap below `1.5x` required payload, while preserving atomic cache
+                        publication, exact cache identity, and decode parity.
             - [ ] Localize the first natural logit mismatch with per-layer checkpoints. It occurs at generated index
                   23; functional/stateful outputs are bit-identical and source/prepacked outputs are close, excluding
                   those two suspected ownership boundaries.
@@ -3847,6 +3854,12 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Removed model-sized gradient allocation from GGUF inference import and released source tensor owners immediately
+  after CPU AOT module construction. Continuous 14B sampling now peaks at `18.566/18.679 GB` RSS/private instead of
+  the earlier `27.37/27.49 GB` single observation; active decode uses approximately `9.4-9.9/9.5-10.0 GB`.
+- Added cross-platform Qwen subprocess memory sampling and persisted memory JSON, Chrome trace counters, and waterfall
+  peaks. The remaining first-build memory target is source mapping plus incremental prepared-weight publication.
+  Full evidence: `docs/QwenFirstCacheMemoryEvidence_2026-08-12.md`.
 - Completed LiteNN position-binned CPU AOT stage attribution. Across six profile processes, `attention.core` was the
   only stable first-to-last-bin growth owner, increasing by `15.8-18.7 ms/token` over the fixed 128-token trajectory.
 - Parallelized grouped active-prefix attention by KV head and repaired the CPU pool's polling-to-sleep handshake.

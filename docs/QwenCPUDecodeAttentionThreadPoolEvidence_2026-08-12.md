@@ -133,18 +133,13 @@ CV `5.716%` 和位置分箱 clean/profile overhead 拒绝；第三个 clean 进�
 
 ## 首次缓存发布的资源证据
 
-同轮为新 cache root 构建 AOT 产物时，记录到：
+资源问题已经独立归档到 `docs/QwenFirstCacheMemoryEvidence_2026-08-12.md`。连续采样和所有权审计确认，
+GGUF importer 曾为约 9 GB 推理权重额外分配同尺寸 gradient；改为 frozen variable 后，首次构建峰值从
+先前约 `27.37/27.49 GB` 的 working set/private 单点观测降到 `18.566/18.679 GB` 的连续峰值。模块构造后
+源权重 owner 会立即释放，九步 decode 的活动 RSS/private 约为 `9.4-9.9/9.5-10.0 GB`。
 
-- CPU AOT artifact compile：`27.667 s`。
-- Object emission：`9.929 s`。
-- Metadata build：`7.793 s`。
-- 完整 load/compile：`55.922 s`；compile-only 流程总计 `61.979 s`。
-- 首次写入共享 prepared weights：`9.160 GB`，耗时 `20.452 s`。
-- 写权重阶段一次进程采样的 working set/private bytes 约为 `27.37/27.49 GB`。
-
-内存值只是单点采样，不是正式峰值；但它已经超过约 9 GB 模型体积的 3 倍，足以把首次 cache 发布的
-峰值驻留列为产品可用性 P0。下一步应记录连续峰值，并消除 archive payload、prepared region 和输出缓存
-之间不必要的整模型堆拷贝。首次构建的内存问题不能被 cache-hit 解码速度掩盖。
+剩余首次构建峰值来自 source payload 与 `9.160 GB` prepared region 在 externalization/object emission 期间
+重叠，后续应作为流式读取和原子发布问题处理，而不是继续归因到训练梯度或运行态泄漏。
 
 ## 决策和后续门禁
 
@@ -155,8 +150,7 @@ CV `5.716%` 和位置分箱 clean/profile overhead 拒绝；第三个 clean 进�
    上下文最高优先级实现项。
 4. 对 projection 聚合预算做匹配阶段剖析，区分 Q4_K/Q6_K compute、cache-cold 权重带宽、dispatch、
    barrier 和 residual；只有被接受的跨 runtime 差值才能选择下一个 kernel。
-5. 将首次 cache 发布内存纳入 P0：连续采集 working set/private/mapped bytes，消除额外整模型副本，并
-   在真实 14B 模型上建立明确上限。
+5. 首次 cache 发布的梯度副本和运行态 source-owner 泄漏已经关闭；下一阶段以连续峰值低于必要 payload
+   的 `1.5x` 为门禁，评估 source mmap 和 prepared-region 流式原子发布。
 6. 长上下文按 2K、8K、32K、128K、1M 分层验证。Attention 在 128 token 只占约 `3.91%`，但其复杂度
    随 active context 增长；在线 softmax、score-buffer 消除和 paged attention 应由这些层级的数据触发。
-
