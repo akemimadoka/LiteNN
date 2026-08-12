@@ -35,9 +35,16 @@ import threading
 import time
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from benchmark.process_memory import ProcessMemorySampler
+
 
 TRACE_PID = 1
 TIMED_LINE_RE = re.compile(r"^\[LiteNN (?P<category>compile|gguf)\] (?P<label>.+): ok (?P<ms>[0-9]+(?:\.[0-9]+)?) ms$")
+TIMED_START_RE = re.compile(r"^\[LiteNN (?P<category>compile|gguf)\] (?P<label>.+)\.\.\.$")
 
 PREPACKED_LAYOUT_TOKENS = {
     "expanded-v1": "expanded_f32_scales_v1",
@@ -85,13 +92,33 @@ def now_ns() -> int:
     return time.perf_counter_ns()
 
 
-def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] | None = None) -> dict[str, object]:
+def run_step(
+    name: str,
+    command: list[str],
+    workdir: Path,
+    env: dict[str, str] | None = None,
+    memory_sample_interval_ms: int = 0,
+) -> dict[str, object]:
     stdout = workdir / f"{name}.stdout.txt"
     stderr = workdir / f"{name}.stderr.txt"
+    memory_path = workdir / f"{name}.memory.json"
+    current_stage = "process_start"
+    stage_lock = threading.Lock()
+
+    def stage() -> str:
+        with stage_lock:
+            return current_stage
 
     def pump(stream, output_file, mirror) -> None:
+        nonlocal current_stage
         try:
             for line in stream:
+                if match := TIMED_START_RE.match(line.rstrip("\r\n")):
+                    with stage_lock:
+                        current_stage = match.group("label")
+                elif match := TIMED_LINE_RE.match(line.rstrip("\r\n")):
+                    with stage_lock:
+                        current_stage = f"after {match.group('label')}"
                 output_file.write(line)
                 output_file.flush()
                 encoding = mirror.encoding or "utf-8"
@@ -120,6 +147,13 @@ def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] |
         stderr_thread = threading.Thread(target=pump, args=(process.stderr, stderr_file, sys.stderr), daemon=True)
         stdout_thread.start()
         stderr_thread.start()
+        memory_sampler = (
+            ProcessMemorySampler(process.pid, memory_sample_interval_ms, stage)
+            if memory_sample_interval_ms > 0
+            else None
+        )
+        if memory_sampler is not None:
+            memory_sampler.start()
         try:
             returncode = process.wait()
         except BaseException:
@@ -132,8 +166,11 @@ def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] |
                     process.wait()
             raise
         finally:
+            memory_document = memory_sampler.stop() if memory_sampler is not None else None
             stdout_thread.join(timeout=5)
             stderr_thread.join(timeout=5)
+    if memory_document is not None:
+        memory_path.write_text(json.dumps(memory_document, indent=2) + "\n", encoding="utf-8")
     end_ns = now_ns()
     return {
         "name": name,
@@ -144,6 +181,12 @@ def run_step(name: str, command: list[str], workdir: Path, env: dict[str, str] |
         "duration_ms": (end_ns - start_ns) / 1_000_000.0,
         "stdout": str(stdout),
         "stderr": str(stderr),
+        "memory": str(memory_path) if memory_document is not None else None,
+        "memory_summary": (
+            {key: value for key, value in memory_document.items() if key != "samples"}
+            if memory_document is not None
+            else None
+        ),
     }
 
 
@@ -227,6 +270,34 @@ def write_profile_artifacts(workdir: Path, steps: list[dict[str, object]]) -> tu
             waterfall_lines.append(
                 f"| `{event['step']}` | `{event['name']}` | {float(event['duration_ms']):.3f} | {event['source']} |"
             )
+        memory_value = step.get("memory")
+        if memory_value:
+            memory_document = json.loads(Path(str(memory_value)).read_text(encoding="utf-8"))
+            for sample in memory_document.get("samples", []):
+                counters = {
+                    key: value
+                    for key, value in sample.items()
+                    if key not in ("elapsed_ms", "stage") and isinstance(value, int)
+                }
+                trace_events.append(
+                    {
+                        "name": "process_memory",
+                        "cat": "litenn.process.memory",
+                        "ph": "C",
+                        "pid": TRACE_PID,
+                        "tid": step_index + 1,
+                        "ts": (start_ns - origin) / 1000.0 + float(sample["elapsed_ms"]) * 1000.0,
+                        "args": {"stage": sample["stage"], **counters},
+                    }
+                )
+            peaks = memory_document.get("peaks", {})
+            for metric in ("private_bytes", "anonymous_resident_bytes", "rss_bytes"):
+                peak = peaks.get(metric)
+                if peak:
+                    waterfall_lines.append(
+                        f"| `{step['name']}` | `peak {metric} ({peak['stage']})` | "
+                        f"{float(peak['bytes']) / (1024.0 * 1024.0):.3f} | MiB |"
+                    )
 
     trace_path = workdir / "qwen_smoke_trace.json"
     trace_path.write_text(json.dumps({ "traceEvents": trace_events }, indent=2) + "\n", encoding="utf-8")
@@ -374,6 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Suppress LiteNN decode compile/run progress diagnostics",
     )
     parser.add_argument(
+        "--memory-sample-interval-ms",
+        type=int,
+        default=100,
+        help="Sample decode-process memory at this interval; 0 disables sampling",
+    )
+    parser.add_argument(
         "--aot-cache-dir",
         type=Path,
         help="Optional LiteNN GGUF decode AOT artifact cache directory; disabled by default until large-object cache cost is reduced",
@@ -481,6 +558,8 @@ def main() -> int:
         raise SystemExit("--paged-resident-pages requires --paged-reference-decode")
     if args.paged_resident_pages is not None and args.paged_resident_pages <= 0:
         raise SystemExit("--paged-resident-pages must be positive")
+    if args.memory_sample_interval_ms < 0 or (0 < args.memory_sample_interval_ms < 10):
+        raise SystemExit("--memory-sample-interval-ms must be 0 or at least 10")
     if args.apply_chat_template and args.raw_prompt:
         raise SystemExit("--apply-chat-template and --raw-prompt cannot be used together")
 
@@ -748,6 +827,7 @@ def main() -> int:
             decode_cmd,
             workdir,
             env=litenn_decode_env,
+            memory_sample_interval_ms=args.memory_sample_interval_ms,
         )
         steps.append(decode)
         require_step_ok(decode)
@@ -797,6 +877,7 @@ def main() -> int:
         "stream_tokens": args.stream_tokens,
         "stream_stats": args.stream_stats,
         "compile_only": args.compile_only,
+        "memory_sample_interval_ms": args.memory_sample_interval_ms,
         "max_cache_length": args.max_cache_length,
         "forced_replay": (
             {
