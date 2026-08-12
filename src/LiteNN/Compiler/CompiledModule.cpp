@@ -857,7 +857,10 @@ namespace
 			for (auto& worker : workers_)
 			{
 				worker->generation.fetch_add(1, std::memory_order_release);
-				worker->start.release();
+				if (worker->sleeping.exchange(false, std::memory_order_acq_rel))
+				{
+					worker->start.release();
+				}
 			}
 			for (auto& worker : workers_)
 			{
@@ -926,10 +929,13 @@ namespace
 			for (std::size_t i = 0; i < desiredWorkers; ++i)
 			{
 				workers_[i]->generation.fetch_add(1, std::memory_order_release);
-				workers_[i]->start.release();
-				if (profile)
+				if (workers_[i]->sleeping.exchange(false, std::memory_order_acq_rel))
 				{
-					++profile->signaledWorkerCount;
+					workers_[i]->start.release();
+					if (profile)
+					{
+						++profile->signaledWorkerCount;
+					}
 				}
 			}
 			if (profile)
@@ -964,6 +970,7 @@ namespace
 		{
 			std::binary_semaphore start{ 0 };
 			std::atomic<std::uint64_t> generation{};
+			std::atomic<bool> sleeping{};
 			std::thread thread;
 		};
 
@@ -1008,7 +1015,7 @@ namespace
 			constexpr std::size_t kAdaptiveMaxPollRounds = LITENN_HAS_X86_AVX2_TARGET ? 1u << 20 : 1024;
 			LiteNNCPUThreadAffinityState affinity;
 			std::size_t adaptivePollRounds = kAdaptiveInitialPollRounds;
-			auto observedGeneration = worker.generation.load(std::memory_order_relaxed);
+			std::uint64_t observedGeneration = 0;
 			while (true)
 			{
 				const auto waitPolicy = waitPolicy_.load(std::memory_order_acquire);
@@ -1026,7 +1033,19 @@ namespace
 					}
 					LiteNNCPUThreadRelax();
 				}
-				worker.start.acquire();
+				if (!observedWorkWhilePolling)
+				{
+					worker.sleeping.store(true, std::memory_order_release);
+					if (worker.generation.load(std::memory_order_acquire) == observedGeneration)
+					{
+						worker.start.acquire();
+					}
+					else if (!worker.sleeping.exchange(false, std::memory_order_acq_rel))
+					{
+						// The dispatcher claimed the sleeping state and will publish a semaphore permit.
+						worker.start.acquire();
+					}
+				}
 				if (waitPolicy == CPUAOTWorkerWaitPolicy::Adaptive)
 				{
 					adaptivePollRounds = observedWorkWhilePolling

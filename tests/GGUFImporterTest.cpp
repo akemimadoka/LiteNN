@@ -2860,7 +2860,7 @@ TEST(GGUFLLaMAQuantizedExecution, FieldInterleavedV4DecodeThreadPolicyCapsSquare
 		EXPECT_EQ(parallel.workUnits, features / 8);
 		EXPECT_GT(parallel.weightBytes, 0u);
 		EXPECT_EQ(parallel.participantCount, 4u);
-		EXPECT_EQ(parallel.signaledWorkerCount, parallel.participantCount - 1);
+		EXPECT_LE(parallel.signaledWorkerCount, parallel.participantCount - 1);
 		EXPECT_GT(parallel.taskClaims, 0u);
 		EXPECT_LE(parallel.minParticipantTaskClaims, parallel.maxParticipantTaskClaims);
 		EXPECT_LE(parallel.minParticipantWorkUnits, parallel.maxParticipantWorkUnits);
@@ -4142,7 +4142,7 @@ TEST(GGUFLLaMACausalLM, GroupedActivePrefixAttentionParallelHeadsMatchSerial)
 	ASSERT_EQ(parallelEvents.size(), 2u);
 	EXPECT_EQ(parallelEvents[0].participantCount, 1u);
 	EXPECT_EQ(parallelEvents[1].participantCount, 8u);
-	EXPECT_EQ(parallelEvents[1].signaledWorkerCount, 7u);
+	EXPECT_LE(parallelEvents[1].signaledWorkerCount, 7u);
 	EXPECT_EQ(parallelEvents[1].taskClaims, 8u);
 	EXPECT_EQ(parallelEvents[1].workUnits, 8u);
 	EXPECT_GT(parallelEvents[1].parallelWallMilliseconds, 0.0);
