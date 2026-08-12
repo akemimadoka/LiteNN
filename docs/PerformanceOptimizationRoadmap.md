@@ -138,9 +138,15 @@ P0 implementation order:
       control tokens. Block 46 is the strongest joint outlier (`33.42/15.44` modified-z), block 44 is secondary, and
       block 47 returns inside the NRMSE control maximum. The comparator now emits reference/candidate RMS, NRMSE,
       median/MAD, above-maximum checks, and ranked layers.
-    - [ ] P0: add selectable sub-layer checkpoints in primary block 46, secondary blocks 44/32, and their adjacent
-      controls. Cover attention norm, Q/K/V after bias and RoPE, attention output, post-attention residual, FFN norm,
-      Gate/Up, SwiGLU, Down, and post-FFN residual without expanding every block's public diagnostic ABI.
+    - [x] P0: add selectable sub-layer checkpoints and a cross-boundary suite comparator for blocks 31-33 and 43-47.
+      The 832-coordinate index-16-23 panel covers attention norm, rotated Q/K, V, context/output/residual, FFN norm,
+      Gate/Up, SwiGLU, Down, and post-FFN. Block-46 attention output is not a target outlier (`1.030x` control median),
+      while SwiGLU/Down reach `1.374x/1.496x`; post-FFN joint modified-z is `13.27/12.91`. Evidence:
+      `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
+    - [ ] P0: isolate blocks 43-47 Q6_K Down correctness with identical captured SwiGLU activations. Compare an exact
+      dequantized projection, LiteNN source-Q6_K execution, and llama.cpp output before changing quantized math.
+    - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
+      minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
     - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
       math only after a specific boundary exceeds the neighborhood distribution and explains the logit-rank crossing.
     - [ ] P1: add 128-token natural parity, corpus perplexity delta, and task-quality gates independently of throughput.

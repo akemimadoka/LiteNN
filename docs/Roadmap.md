@@ -3364,9 +3364,15 @@ Priority classes:
                         tokens. Block 46 is the strongest joint outlier (`33.42/15.44` modified-z), block 44 is
                         secondary, and block 47 returns within the NRMSE control maximum. The comparator now persists
                         RMS/NRMSE, median/MAD, above-maximum checks, and ranked layers.
-                  - [ ] P0: expose selectable sub-layer boundaries in primary block 46, secondary blocks 44/32, and
-                        their adjacent controls. Cover attention norm, biased/rotated QKV, attention output/residual,
-                        FFN norm, Gate/Up, SwiGLU, Down, and the existing post-FFN residual without expanding all blocks.
+                  - [x] P0: expose and compare selectable sub-layer boundaries in blocks 31-33 and 43-47. The 13-boundary
+                        index-16-23 panel contains 832 matched coordinates. Block-46 attention output is not a target
+                        outlier (`1.030x` control median), while SwiGLU/Down reach `1.374x/1.496x`; post-FFN joint
+                        modified-z is `13.27/12.91`. Normal artifacts retain their logits-only ABI/cache identity.
+                  - [ ] P0: feed identical captured SwiGLU activations through exact-dequantized, LiteNN source-Q6_K,
+                        and llama.cpp Down projections for blocks 43-47. Do not change quantized math until this
+                        separates inherited activation drift from an implementation error.
+                  - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run remained inside step 4 for
+                        over five minutes on one core after three normal steps; fixed T8 completed the same trajectory.
                   - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
                         a numerical fix only when one boundary explains the rank crossing.
                   - [ ] P1: gate the eventual fix on 128-token natural parity, corpus perplexity delta, task quality,
@@ -3878,6 +3884,11 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Completed selectable Qwen sub-layer checkpointing in LiteNN and llama.cpp without patching vendored code. The
+  index-16-23 panel covers 13 boundaries in blocks 31-33 and 43-47, and the suite comparator aggregates 832 matched
+  coordinates. Attention output does not create the block-46 target anomaly; late FFN SwiGLU/Q6_K Down consistently
+  increases separation. Exact identical-activation Down verification is now the next correctness P0. Evidence:
+  `docs/QwenNaturalDecodeLayerDriftEvidence_2026-08-12.md`.
 - Completed the generated-index 16-23 Qwen neighborhood panel and added native NRMSE/MAD target-outlier analysis to
   the checkpoint comparator. Index 23 exceeds both NRMSE and cosine-distance control maxima through blocks 38-46;
   block 46 is the strongest joint outlier, while block 47 is not an NRMSE outlier. Sub-layer localization is narrowed

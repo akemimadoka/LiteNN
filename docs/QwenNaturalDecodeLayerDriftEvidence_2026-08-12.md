@@ -11,8 +11,14 @@ The useful signal is relative amplification against a neighborhood, not one adja
 16-22 as controls, index 23 exceeds the control maximum for both NRMSE and cosine distance throughout blocks 38-46.
 Block 46 is the strongest robust outlier: NRMSE is `0.185127` versus a `0.140524` control median and `0.155339`
 maximum, producing modified-z `33.42`; cosine-distance modified-z is `15.44`. Blocks 44 and 32 are secondary windows.
-Block 47 is not an NRMSE outlier against this neighborhood, invalidating the earlier broad 39-47 interpretation. The
-next diagnostic should split block 46 internally, with neighboring blocks and blocks 44/32 as controls.
+Block 47 is not an NRMSE outlier against this neighborhood, invalidating the earlier broad 39-47 interpretation.
+
+The completed sub-layer campaign further rejects attention as the point that creates the index-23 anomaly. In block
+46, rotated Q/K, attention context, and attention output are not positive joint outliers; attention-output NRMSE is
+only `1.030x` its control median. The inherited residual is already exceptional, and the FFN path then separates
+again: SwiGLU is `1.374x` and Q6_K Down output is `1.496x` the control median. The post-FFN residual has the strongest
+joint modified-z (`13.27/12.91`) because its controls are unusually tight. Blocks 43-47 show the same sustained
+Down-stage pattern, making identical-activation Q6_K Down verification the next causal gate.
 
 No model path or private artifact location is part of this evidence record.
 
@@ -115,17 +121,58 @@ The LiteNN diagnostic run reproduced exactly one forced-token argmax mismatch, a
 These timings validate that checkpoint output is a small selected-step cost. They are not accepted throughput numbers:
 the diagnostic ABI changes output liveness and the llama.cpp callback synchronizes selected graph nodes.
 
+## Sub-Layer Index 16-23 Neighborhood
+
+The third campaign exposed 13 internal boundaries only for blocks `31,32,33,43,44,45,46,47`. Both runtimes emitted
+the same v1 manifests and Float32 shapes: `[40,128]` for rotated queries/attention context, `[8,128]` for rotated keys
+and values, `[1,5120]` for hidden/residual/Down boundaries, and `[1,13824]` for Gate/Up/SwiGLU. This produced 832
+matched coordinates (`13 boundaries * 8 blocks * 8 generated indices`) without changing the normal decode ABI.
+
+The table reports the most useful block-46 sequence. `Ratio` is target-index NRMSE divided by the indices-16-22
+control median. `Joint max` requires both NRMSE and cosine distance to exceed all seven controls.
+
+| Boundary | NRMSE ratio | NRMSE z | Cosine-distance z | Joint max | Interpretation |
+| --- | ---: | ---: | ---: | --- | --- |
+| Attention norm | 1.250 | 1.74 | 2.30 | yes | anomaly already present at block input |
+| Rotated Q | 0.943 | -4.99 | -2.25 | no | large baseline kernel delta, not index-23 amplification |
+| Rotated K | 0.922 | -2.91 | -2.68 | no | large baseline kernel delta, not index-23 amplification |
+| Value | 1.185 | 1.36 | 1.51 | no | within neighborhood maximum |
+| Attention context | 0.941 | -2.83 | -2.97 | no | attention reduces relative separation |
+| Attention output | 1.030 | 0.77 | -0.02 | no | Wo does not create a target outlier |
+| Attention residual | 1.288 | 5.25 | 7.43 | yes | inherited block-input error remains after residual add |
+| FFN norm | 1.287 | 2.12 | 2.38 | yes | no material ratio change across normalization |
+| FFN Gate | 1.200 | 4.13 | 9.11 | yes | activation-dependent projection separation |
+| FFN Up | 1.265 | 2.80 | 3.63 | yes | activation-dependent projection separation |
+| SwiGLU | 1.374 | 4.07 | 4.91 | yes | nonlinear combination amplifies separation |
+| FFN Down | 1.496 | 2.70 | 3.76 | yes | largest block-46 ratio; Q6_K projection is the causal test target |
+| Post-FFN | 1.325 | 13.27 | 12.91 | yes | strongest robust score due to tight control MAD |
+
+Spatial controls support the same reading. Attention-output NRMSE ratios for blocks `43,44,45,46,47` are
+`0.997,1.104,1.016,1.030,0.914`, while Down ratios are `1.396,1.698,1.496,1.496,1.463`. The late-window separation
+therefore persists across FFN Down but not across attention output. This evidence does not yet distinguish three
+possibilities: inherited SwiGLU input error, a source-Q6_K execution error, or normal but quality-relevant independent
+quantized accumulation. The next experiment must feed the same captured SwiGLU activation into an exact-dequantized
+Down reference and the native LiteNN Q6_K path.
+
+The selected-block LiteNN run used T8 because one default-thread diagnostic build completed three steps normally and
+then remained in step 4 for more than five minutes, executing on one core; its working set transiently reached about
+`9.4 GB` before returning below `1 GB`. The T8 reruns completed all 32 forwards. This anomalous run produced no
+checkpoint data and is excluded from numerical results, but it establishes a separate deterministic-runtime gate for
+the default thread policy.
+
 ## Conclusions And Next Gates
 
 1. Do not change model math based on zero-tolerance hidden-state mismatch. Independent Q4_K/Q6_K kernels differ from
    block 0, while the generated sequence remains equal through index 22.
-2. The index 16-23 neighborhood gate is complete. Block 46 is the primary sub-layer target; blocks 44 and 32 are
-   secondary targets. Include adjacent blocks 45/47, 43/45, and 31/33 as local controls rather than exporting every
-   intermediate from all 48 blocks.
-3. Add selectable sub-layer checkpoints for attention norm, Q/K/V after bias and RoPE, attention output,
-   post-attention residual, FFN norm, Gate/Up, SwiGLU, Down, and post-FFN residual. Determine the first internal
-   boundary at which block 46 becomes exceptional relative to the same index-16-22 neighborhood.
-4. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the
+2. The index 16-23 block and sub-layer neighborhood gates are complete. Selectable outputs cover all 13 boundaries in
+   blocks 31-33 and 43-47 without expanding every block's diagnostic ABI. Attention does not create the late-window
+   target separation; FFN SwiGLU/Down is now the first causal test window.
+3. Run identical-activation verification for blocks 43-47: compare exact-dequantized Down, native LiteNN source-Q6_K
+   Down, and the captured llama.cpp Down output. Change Q6_K or SwiGLU math only if this isolates an implementation
+   error from inherited activation drift.
+4. Reproduce and localize the default-thread diagnostic step-4 long loop. Diagnostic output selection must not alter
+   deterministic completion or state progression.
+5. Capture final RMSNorm and aligned logits, including top candidates, the expected-vs-selected token margin, and the
    contribution of output projection error. An argmax mismatch can be benign when the reference margin is tiny.
-5. After localization, validate a candidate with the same forced trajectory, natural greedy parity beyond 128 tokens,
+6. After localization, validate a candidate with the same forced trajectory, natural greedy parity beyond 128 tokens,
    corpus perplexity delta, and unchanged cache-hit performance before promoting it.
