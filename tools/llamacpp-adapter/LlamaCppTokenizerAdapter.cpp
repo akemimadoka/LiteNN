@@ -812,6 +812,87 @@ namespace LiteNN::LlamaCppAdapter
 		return prompt;
 	}
 
+	NaturalGenerationResult Model::CaptureGreedyGeneration(std::span<const std::int32_t> promptTokenIds,
+	                                                       std::size_t maximumGeneratedTokens,
+	                                                       const std::filesystem::path& logitsOutputDirectory) const
+	{
+		if (promptTokenIds.empty() || maximumGeneratedTokens == 0)
+		{
+			throw std::runtime_error("natural generation requires a non-empty prompt and positive token count");
+		}
+		if (promptTokenIds.size() + maximumGeneratedTokens > std::numeric_limits<std::uint32_t>::max())
+		{
+			throw std::runtime_error("natural generation context exceeds llama.cpp's uint32 capacity");
+		}
+		std::filesystem::create_directories(logitsOutputDirectory);
+		for (const auto& entry : std::filesystem::directory_iterator(logitsOutputDirectory))
+		{
+			if (entry.is_regular_file() && entry.path().filename().string().starts_with("decision-step-") &&
+			    entry.path().extension() == ".txt")
+			{
+				std::filesystem::remove(entry.path());
+			}
+		}
+
+		auto contextParams = llama_context_default_params();
+		contextParams.n_ctx = static_cast<std::uint32_t>(promptTokenIds.size() + maximumGeneratedTokens);
+		contextParams.n_batch = static_cast<std::uint32_t>(promptTokenIds.size());
+		contextParams.no_perf = true;
+		auto* rawContext = llama_init_from_model(impl_->model, contextParams);
+		if (rawContext == nullptr)
+		{
+			throw std::runtime_error("failed to create llama.cpp natural-generation context");
+		}
+		const std::unique_ptr<llama_context, decltype(&llama_free)> context(rawContext, llama_free);
+		auto prompt = ToLlamaTokens(promptTokenIds);
+		if (llama_decode(context.get(), llama_batch_get_one(prompt.data(), static_cast<std::int32_t>(prompt.size()))) !=
+		    0)
+		{
+			throw std::runtime_error("llama.cpp natural-generation prompt decode failed");
+		}
+
+		const auto* vocabulary = llama_model_get_vocab(impl_->model);
+		const auto vocabularySize = llama_vocab_n_tokens(vocabulary);
+		NaturalGenerationResult result{ .requestedTokenCount = maximumGeneratedTokens };
+		result.generatedTokenIds.reserve(maximumGeneratedTokens);
+		for (std::size_t decisionStep = 0; decisionStep < maximumGeneratedTokens; ++decisionStep)
+		{
+			const auto* logits = llama_get_logits_ith(context.get(), -1);
+			WriteLogits(logits, vocabularySize,
+			            logitsOutputDirectory / std::format("decision-step-{:06}.txt", decisionStep));
+			std::int32_t selectedToken = 0;
+			float selectedLogit = -std::numeric_limits<float>::infinity();
+			for (std::int32_t token = 0; token < vocabularySize; ++token)
+			{
+				if (!std::isfinite(logits[token]))
+				{
+					throw std::runtime_error("llama.cpp natural generation produced a non-finite logit");
+				}
+				if (logits[token] > selectedLogit)
+				{
+					selectedToken = token;
+					selectedLogit = logits[token];
+				}
+			}
+			result.generatedTokenIds.push_back(selectedToken);
+			if (llama_vocab_is_eog(vocabulary, selectedToken))
+			{
+				result.stoppedOnEos = true;
+				break;
+			}
+			if (decisionStep + 1 < maximumGeneratedTokens)
+			{
+				auto token = static_cast<llama_token>(selectedToken);
+				if (llama_decode(context.get(), llama_batch_get_one(&token, 1)) != 0)
+				{
+					throw std::runtime_error("llama.cpp natural generation failed at decision step " +
+					                         std::to_string(decisionStep + 1));
+				}
+			}
+		}
+		return result;
+	}
+
 	void Model::CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 	                                std::span<const std::int32_t> generatedTokenIds,
 	                                const std::filesystem::path& outputDirectory) const
@@ -1045,6 +1126,49 @@ namespace LiteNN::LlamaCppAdapter
 			output << result.tokenIds[i];
 		}
 		output << "]\n}\n";
+	}
+
+	void WriteNaturalGenerationManifest(std::span<const std::int32_t> promptTokenIds,
+	                                    const NaturalGenerationResult& result,
+	                                    const std::filesystem::path& outputDirectory)
+	{
+		std::filesystem::create_directories(outputDirectory);
+		std::ofstream output(outputDirectory / "manifest.json");
+		if (!output)
+		{
+			throw std::runtime_error("failed to open natural-generation manifest");
+		}
+		const auto writeTokens = [&output](std::span<const std::int32_t> tokens) {
+			output << '[';
+			for (std::size_t index = 0; index < tokens.size(); ++index)
+			{
+				if (index != 0)
+				{
+					output << ", ";
+				}
+				output << tokens[index];
+			}
+			output << ']';
+		};
+		output << "{\n  \"schema\": \"litenn.natural_generation.v1\",\n"
+		       << "  \"producer\": \"llama.cpp\",\n  \"promptTokenIds\": ";
+		writeTokens(promptTokenIds);
+		output << ",\n  \"generatedTokenIds\": ";
+		writeTokens(result.generatedTokenIds);
+		output << ",\n  \"requestedTokenCount\": " << result.requestedTokenCount
+		       << ",\n  \"stoppedOnEos\": " << (result.stoppedOnEos ? "true" : "false")
+		       << ",\n  \"fallbackUsed\": false,\n  \"logitsArtifacts\": [\n";
+		for (std::size_t step = 0; step < result.generatedTokenIds.size(); ++step)
+		{
+			output << "    {\"decisionStep\": " << step << ", \"position\": " << promptTokenIds.size() + step
+			       << ", \"path\": \"logits/decision-step-" << std::setw(6) << std::setfill('0') << step << ".txt\"}";
+			if (step + 1 != result.generatedTokenIds.size())
+			{
+				output << ',';
+			}
+			output << '\n';
+		}
+		output << "  ]\n}\n";
 	}
 
 	std::vector<std::int32_t> ParseCommaTokenIds(std::string_view text, std::string_view label)

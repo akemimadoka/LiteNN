@@ -1,5 +1,6 @@
 #include "LlamaCppTokenizerAdapter.h"
 
+#include <charconv>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -10,23 +11,37 @@
 
 namespace
 {
+	std::size_t ParsePositiveSize(std::string_view text, std::string_view label)
+	{
+		std::size_t value{};
+		const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+		if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || value == 0)
+		{
+			throw std::runtime_error(std::string(label) + " must be a positive integer");
+		}
+		return value;
+	}
+
 	void PrintUsage(std::string_view executable)
 	{
-		std::cerr << "Usage:\n"
-		          << "  " << executable << " tokenize <model.gguf> <text> <tokens.json>\n"
-		          << "  " << executable << " tokenize-file <model.gguf> <text.bin> <tokens.json>\n"
-		          << "  " << executable << " detokenize <model.gguf> <comma-token-ids> <text.bin>\n"
-		          << "  " << executable << " chat-template <model.gguf> <user-text> <prompt.bin>\n"
-		          << "  " << executable << " chat-template-file <model.gguf> <user-text.bin> <prompt.bin>\n"
-		          << "  " << executable
-		          << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
-		          << "  " << executable
-		          << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
-		             "<comma-generated-indices> <output-dir>\n"
-		          << "  " << executable
-		          << " decode-sub-layer-checkpoints <model.gguf> <comma-prompt-token-ids> "
-		             "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir> "
-		             "[logits-output-dir]\n";
+		std::cerr
+		    << "Usage:\n"
+		    << "  " << executable << " tokenize <model.gguf> <text> <tokens.json>\n"
+		    << "  " << executable << " tokenize-file <model.gguf> <text.bin> <tokens.json>\n"
+		    << "  " << executable << " detokenize <model.gguf> <comma-token-ids> <text.bin>\n"
+		    << "  " << executable << " chat-template <model.gguf> <user-text> <prompt.bin>\n"
+		    << "  " << executable << " chat-template-file <model.gguf> <user-text.bin> <prompt.bin>\n"
+		    << "  " << executable
+		    << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
+		    << "  " << executable
+		    << " generate-greedy-logits <model.gguf> <comma-prompt-token-ids> <max-generated-tokens> <output-dir>\n"
+		    << "  " << executable
+		    << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
+		       "<comma-generated-indices> <output-dir>\n"
+		    << "  " << executable
+		    << " decode-sub-layer-checkpoints <model.gguf> <comma-prompt-token-ids> "
+		       "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir> "
+		       "[logits-output-dir]\n";
 	}
 
 	std::string ReadBinary(const std::filesystem::path& path)
@@ -97,6 +112,18 @@ try
 		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
 		model.CaptureDecodeLogits(promptTokens, generatedTokens, argv[5]);
 		std::cout << "Captured " << generatedTokens.size() << " llama.cpp decode-logits steps in " << argv[5] << '\n';
+		return 0;
+	}
+	if (command == "generate-greedy-logits" && argc == 6)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
+		const auto maximumTokens = ParsePositiveSize(argv[4], "max-generated-tokens");
+		const std::filesystem::path outputDirectory = argv[5];
+		const auto result = model.CaptureGreedyGeneration(promptTokens, maximumTokens, outputDirectory / "logits");
+		LiteNN::LlamaCppAdapter::WriteNaturalGenerationManifest(promptTokens, result, outputDirectory);
+		std::cout << "Generated " << result.generatedTokenIds.size() << " greedy llama.cpp tokens with logits in "
+		          << outputDirectory << '\n';
 		return 0;
 	}
 	if (command == "decode-layer-checkpoints" && argc == 7)

@@ -53,6 +53,78 @@ PREPACKED_LAYOUT_TOKENS = {
 }
 
 
+def relative_or_absolute(path: Path, base: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(base.resolve()))
+    except ValueError:
+        return str(path.resolve())
+
+
+def parse_direct_token_output(path: Path) -> list[int]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    token_ids = json.loads(lines[0]) if lines else None
+    if not isinstance(token_ids, list) or any(not isinstance(token_id, int) or token_id < 0 for token_id in token_ids):
+        raise SystemExit("LiteNN direct decode output contains an invalid token-id line")
+    return token_ids
+
+
+def stopped_on_eos(step: dict[str, object]) -> bool:
+    stdout_path = Path(str(step["stdout"]))
+    text = stdout_path.read_text(encoding="utf-8", errors="replace")
+    matches = re.findall(r"\bstopped_on_eos=(true|false)\b", text)
+    if not matches:
+        raise SystemExit("LiteNN direct decode summary is missing stopped_on_eos")
+    return matches[-1] == "true"
+
+
+def write_natural_generation_manifest(
+    output_directory: Path,
+    logits_directory: Path,
+    prompt_token_ids: list[int],
+    generated_token_ids: list[int],
+    requested_token_count: int,
+    decode_step: dict[str, object],
+) -> Path:
+    output_directory.mkdir(parents=True, exist_ok=True)
+    artifacts: list[dict[str, object]] = []
+    for path in sorted(logits_directory.glob("position-*.txt")):
+        try:
+            position = int(path.stem.removeprefix("position-"))
+        except ValueError:
+            continue
+        decision_step = position - len(prompt_token_ids)
+        if 0 <= decision_step < len(generated_token_ids):
+            artifacts.append(
+                {
+                    "decisionStep": decision_step,
+                    "position": position,
+                    "selectedTokenId": generated_token_ids[decision_step],
+                    "path": relative_or_absolute(path, output_directory),
+                }
+            )
+    expected_steps = list(range(len(generated_token_ids)))
+    actual_steps = [int(artifact["decisionStep"]) for artifact in artifacts]
+    if actual_steps != expected_steps:
+        raise SystemExit(
+            "LiteNN natural-generation logits are incomplete: "
+            f"expected decision steps {expected_steps}, found {actual_steps}"
+        )
+    manifest = {
+        "schema": "litenn.natural_generation.v1",
+        "producer": "LiteNN",
+        "runtime": "cpu_aot",
+        "promptTokenIds": prompt_token_ids,
+        "generatedTokenIds": generated_token_ids,
+        "requestedTokenCount": requested_token_count,
+        "stoppedOnEos": stopped_on_eos(decode_step),
+        "fallbackUsed": False,
+        "logitsArtifacts": artifacts,
+    }
+    manifest_path = output_directory / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return manifest_path
+
+
 def comma_token_ids(raw: str) -> tuple[int, ...]:
     try:
         values = tuple(int(part) for part in raw.split(","))
@@ -525,6 +597,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="API-level helper used to capture and compare exact-token llama.cpp decode logits",
     )
     parser.add_argument("--compare-text", action="store_true")
+    parser.add_argument(
+        "--capture-natural-generation",
+        action="store_true",
+        help="Capture every natural greedy decision distribution and write a quality-gate manifest",
+    )
+    parser.add_argument(
+        "--natural-generation-dir",
+        type=Path,
+        help="Natural-generation artifact directory; defaults to WORKDIR/natural_generation/litenn",
+    )
     parser.add_argument("--llama-debug", type=Path)
     parser.add_argument("--llama-cli", type=Path)
     parser.add_argument("--allow-analysis-failure", action="store_true")
@@ -589,6 +671,12 @@ def main() -> int:
         raise SystemExit("--memory-sample-interval-ms must be 0 or at least 10")
     if args.apply_chat_template and args.raw_prompt:
         raise SystemExit("--apply-chat-template and --raw-prompt cannot be used together")
+    if args.natural_generation_dir is not None and not args.capture_natural_generation:
+        raise SystemExit("--natural-generation-dir requires --capture-natural-generation")
+    if args.capture_natural_generation and args.sample != "greedy":
+        raise SystemExit("--capture-natural-generation currently requires --sample greedy")
+    if args.capture_natural_generation and args.compile_only:
+        raise SystemExit("--capture-natural-generation cannot be combined with --compile-only")
 
     root = repo_root()
     workdir: Path = args.workdir
@@ -613,6 +701,7 @@ def main() -> int:
     token_ids = args.token_ids
     resolved_token_output: Path | None = None
     resolved_text_output: Path | None = None
+    resolved_natural_generation_manifest: Path | None = None
     tokenizer_prompt_ids: list[int] | None = None
     if args.llamacpp_tokenizer_tool is not None:
         tokenizer_dir = workdir / "llamacpp_tokenizer"
@@ -798,6 +887,17 @@ def main() -> int:
             "--seed",
             str(args.seed),
         ]
+        natural_generation_dir = (
+            args.natural_generation_dir
+            if args.natural_generation_dir is not None
+            else workdir / "natural_generation" / "litenn"
+        )
+        natural_generation_logits_dir = natural_generation_dir / "logits"
+        if args.capture_natural_generation:
+            natural_generation_logits_dir.mkdir(parents=True, exist_ok=True)
+            for stale in natural_generation_logits_dir.glob("position-*.txt"):
+                stale.unlink()
+            decode_cmd.extend(["--logits-output-dir", str(natural_generation_logits_dir)])
         if args.stateful:
             decode_cmd.append("--stateful")
         else:
@@ -875,12 +975,26 @@ def main() -> int:
         )
         steps.append(decode)
         require_step_ok(decode)
+        if not args.compile_only:
+            replay_ids = parse_direct_token_output(decode_output)
+            direct_prompt_ids = (
+                list(tokenizer_prompt_ids)
+                if tokenizer_prompt_ids is not None
+                else [int(part.strip()) for part in token_ids.split(",") if part.strip()]
+            )
+            if replay_ids[: len(direct_prompt_ids)] != direct_prompt_ids:
+                raise SystemExit("LiteNN direct decode output does not preserve the supplied prompt token prefix")
+            generated_ids = replay_ids[len(direct_prompt_ids) :]
+            if args.capture_natural_generation:
+                resolved_natural_generation_manifest = write_natural_generation_manifest(
+                    natural_generation_dir,
+                    natural_generation_logits_dir,
+                    direct_prompt_ids,
+                    generated_ids,
+                    args.steps,
+                    decode,
+                )
         if args.llamacpp_tokenizer_tool is not None and not args.compile_only:
-            replay_lines = decode_output.read_text(encoding="utf-8").splitlines()
-            replay_ids = json.loads(replay_lines[0]) if replay_lines else []
-            if not isinstance(replay_ids, list) or any(not isinstance(token_id, int) for token_id in replay_ids):
-                raise SystemExit("LiteNN direct decode output contains an invalid token-id line")
-            generated_ids = replay_ids[len(tokenizer_prompt_ids or []) :]
             text_output = args.text_output if args.text_output is not None else workdir / "generated_text.bin"
             resolved_text_output = text_output
             if generated_ids:
@@ -970,6 +1084,11 @@ def main() -> int:
         "workdir": str(workdir),
         "token_output": str(resolved_token_output) if resolved_token_output is not None else None,
         "text_output": str(resolved_text_output) if resolved_text_output is not None else None,
+        "natural_generation_manifest": (
+            str(resolved_natural_generation_manifest)
+            if resolved_natural_generation_manifest is not None
+            else None
+        ),
         "trace": str(trace_path),
         "waterfall": str(waterfall_path),
         "steps": steps,

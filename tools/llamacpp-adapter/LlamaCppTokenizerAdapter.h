@@ -18,6 +18,13 @@ namespace LiteNN::LlamaCppAdapter
 		bool parseSpecial{ true };
 	};
 
+	struct NaturalGenerationResult
+	{
+		std::vector<std::int32_t> generatedTokenIds;
+		std::size_t requestedTokenCount{};
+		bool stoppedOnEos{};
+	};
+
 	class Model
 	{
 	public:
@@ -33,6 +40,9 @@ namespace LiteNN::LlamaCppAdapter
 		TokenizationResult Tokenize(std::string_view text) const;
 		std::string Detokenize(std::span<const std::int32_t> tokenIds) const;
 		std::string ApplyChatTemplate(std::string_view userText) const;
+		NaturalGenerationResult CaptureGreedyGeneration(std::span<const std::int32_t> promptTokenIds,
+		                                                std::size_t maximumGeneratedTokens,
+		                                                const std::filesystem::path& logitsOutputDirectory) const;
 		void CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 		                         std::span<const std::int32_t> generatedTokenIds,
 		                         const std::filesystem::path& outputDirectory) const;
@@ -53,6 +63,9 @@ namespace LiteNN::LlamaCppAdapter
 	};
 
 	void WriteTokensJson(const TokenizationResult& result, const std::filesystem::path& path);
+	void WriteNaturalGenerationManifest(std::span<const std::int32_t> promptTokenIds,
+	                                    const NaturalGenerationResult& result,
+	                                    const std::filesystem::path& outputDirectory);
 	std::vector<std::int32_t> ParseCommaTokenIds(std::string_view text, std::string_view label);
 } // namespace LiteNN::LlamaCppAdapter
 
