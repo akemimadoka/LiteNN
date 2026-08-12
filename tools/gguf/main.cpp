@@ -2064,6 +2064,14 @@ namespace
 		    decodePlan.variables.empty() ? importSummary.tensorCount : decodePlan.variables.size();
 		LogGGUFDiagnostic(diagnostics, std::format("decode-runtime inputs={} outputs={} variables={}", planInputCount,
 		                                           planOutputCount, planVariableCount));
+		decodePlan.variables.clear();
+		decodePlan.variableNames.clear();
+		if (imported)
+		{
+			imported.reset();
+			LogGGUFDiagnostic(diagnostics,
+			                  "decode-loop released imported GGUF tensor payloads after module construction");
+		}
 		const auto buildEnd = std::chrono::steady_clock::now();
 		if (options.compileOnly)
 		{
@@ -2078,12 +2086,6 @@ namespace
 			          << " variables=" << planVariableCount << '\n';
 			return;
 		}
-		if (imported)
-		{
-			imported.reset();
-			LogGGUFDiagnostic(diagnostics, "decode-loop released imported GGUF tensor payloads before token execution");
-		}
-
 		LiteNN::GGUF::LLMSamplerState sampler{ .config = options.sampling };
 		std::vector<std::int32_t> history = initialTokenIds;
 		std::vector<LiteNN::Tensor<LiteNN::CPU>> caches;
