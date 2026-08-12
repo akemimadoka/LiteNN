@@ -932,7 +932,8 @@ namespace LiteNN::LlamaCppAdapter
 	                                             std::span<const std::int32_t> generatedTokenIds,
 	                                             std::span<const std::size_t> generatedIndices,
 	                                             std::span<const std::size_t> blockIndices,
-	                                             const std::filesystem::path& outputDirectory) const
+	                                             const std::filesystem::path& outputDirectory,
+	                                             const std::filesystem::path& logitsOutputDirectory) const
 	{
 		if (promptTokenIds.empty() || generatedIndices.empty() || blockIndices.empty())
 		{
@@ -956,6 +957,11 @@ namespace LiteNN::LlamaCppAdapter
 		                                  static_cast<std::size_t>(llama_model_n_head(impl_->model)),
 		                                  static_cast<std::size_t>(llama_model_n_head_kv(impl_->model)), blockIndices,
 		                                  outputDirectory);
+		if (!logitsOutputDirectory.empty())
+		{
+			std::filesystem::create_directories(logitsOutputDirectory);
+		}
+		const auto vocabularySize = llama_vocab_n_tokens(llama_model_get_vocab(impl_->model));
 		auto contextParams = llama_context_default_params();
 		contextParams.n_ctx = static_cast<std::uint32_t>(promptTokenIds.size() + maximumIndex);
 		contextParams.n_batch = 1;
@@ -986,6 +992,11 @@ namespace LiteNN::LlamaCppAdapter
 			if (finalPromptToken && selectedGenerated.contains(0))
 			{
 				capture.End(promptTokenIds.size(), promptTokenIds.size() - 1, promptTokenIds.back());
+				if (!logitsOutputDirectory.empty())
+				{
+					WriteLogits(llama_get_logits_ith(context.get(), -1), vocabularySize,
+					            logitsOutputDirectory / "generated-000000.txt");
+				}
 			}
 		}
 
@@ -1006,6 +1017,11 @@ namespace LiteNN::LlamaCppAdapter
 			{
 				capture.End(promptTokenIds.size() + generatedIndex, promptTokenIds.size() + generatedIndex - 1,
 				            generatedTokenIds[generatedIndex - 1]);
+				if (!logitsOutputDirectory.empty())
+				{
+					WriteLogits(llama_get_logits_ith(context.get(), -1), vocabularySize,
+					            logitsOutputDirectory / std::format("generated-{:06}.txt", generatedIndex));
+				}
 			}
 		}
 	}

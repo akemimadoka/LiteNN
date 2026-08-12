@@ -25,7 +25,8 @@ namespace
 		             "<comma-generated-indices> <output-dir>\n"
 		          << "  " << executable
 		          << " decode-sub-layer-checkpoints <model.gguf> <comma-prompt-token-ids> "
-		             "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir>\n";
+		             "<comma-generated-token-ids> <comma-generated-indices> <comma-block-indices> <output-dir> "
+		             "[logits-output-dir]\n";
 	}
 
 	std::string ReadBinary(const std::filesystem::path& path)
@@ -115,7 +116,7 @@ try
 		          << '\n';
 		return 0;
 	}
-	if (command == "decode-sub-layer-checkpoints" && argc == 8)
+	if (command == "decode-sub-layer-checkpoints" && (argc == 8 || argc == 9))
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
 		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
@@ -134,7 +135,8 @@ try
 		{
 			blockIndices.push_back(static_cast<std::size_t>(block));
 		}
-		model.CaptureDecodeSubLayerCheckpoints(promptTokens, generatedTokens, generatedIndices, blockIndices, argv[7]);
+		model.CaptureDecodeSubLayerCheckpoints(promptTokens, generatedTokens, generatedIndices, blockIndices, argv[7],
+		                                       argc == 9 ? std::filesystem::path(argv[8]) : std::filesystem::path{});
 		std::cout << "Captured " << generatedIndices.size() << " llama.cpp sub-layer checkpoint steps for "
 		          << blockIndices.size() << " blocks in " << argv[7] << '\n';
 		return 0;

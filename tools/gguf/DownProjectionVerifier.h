@@ -40,6 +40,34 @@ namespace LiteNN::GGUF::Tooling
 
 	FFNActivationVerificationSummary
 	VerifyLLaMAFFNActivationCheckpoints(const DownProjectionVerificationOptions& options);
+
+	struct FinalLogitVerificationOptions
+	{
+		std::filesystem::path modelPath;
+		std::filesystem::path candidateCheckpointDirectory;
+		std::filesystem::path referenceCheckpointDirectory;
+		std::filesystem::path candidateLogitsPath;
+		std::filesystem::path referenceLogitsPath;
+		std::filesystem::path outputPath;
+		std::size_t generatedIndex{};
+		std::size_t threadCount{ 8 };
+		std::size_t topK{ 10 };
+	};
+
+	struct FinalLogitVerificationSummary
+	{
+		std::size_t candidateTop1{};
+		std::size_t referenceTop1{};
+		double candidateMargin{};
+		double referenceMargin{};
+		double candidateReferenceMinusCandidateMargin{};
+		double referenceReferenceMinusCandidateMargin{};
+		double pairMarginShift{};
+		double candidateReconstructionNRMSE{};
+		double referenceReconstructionNRMSE{};
+	};
+
+	FinalLogitVerificationSummary VerifyLLaMAFinalLogits(const FinalLogitVerificationOptions& options);
 } // namespace LiteNN::GGUF::Tooling
 
 #endif

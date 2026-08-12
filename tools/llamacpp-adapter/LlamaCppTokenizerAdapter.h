@@ -44,7 +44,8 @@ namespace LiteNN::LlamaCppAdapter
 		                                      std::span<const std::int32_t> generatedTokenIds,
 		                                      std::span<const std::size_t> generatedIndices,
 		                                      std::span<const std::size_t> blockIndices,
-		                                      const std::filesystem::path& outputDirectory) const;
+		                                      const std::filesystem::path& outputDirectory,
+		                                      const std::filesystem::path& logitsOutputDirectory = {}) const;
 
 	private:
 		struct Impl;

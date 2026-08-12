@@ -78,6 +78,9 @@ namespace
 		    << "  " << executable
 		    << " --verify-llama-ffn-checkpoints <input.gguf> <checkpoint-dir> <generated-index> <blocks> "
 		       "<output.json> [threads]\n"
+		    << "  " << executable
+		    << " --verify-llama-final-logits <input.gguf> <candidate-checkpoints> <reference-checkpoints> "
+		       "<generated-index> <candidate-logits> <reference-logits> <output.json> [threads] [top-k]\n"
 		    << "  " << executable << " --plan-llm <input.gguf> <prefill-sequence-length> <decode-past-length> "
 		    << "[max-cache-length]\n"
 		    << "  " << executable << " --lower-llama <input.gguf> <output.ltnn> <sequence-length> [position-offset]\n"
@@ -3197,6 +3200,40 @@ int main(int argc, char** argv)
 			return 0;
 #else
 			throw std::runtime_error("FFN activation checkpoint verification requires an AOT-enabled build");
+#endif
+		}
+
+		if (argc >= 2 && std::string_view(argv[1]) == "--verify-llama-final-logits")
+		{
+			if (argc < 9 || argc > 11)
+			{
+				PrintUsage(argv[0]);
+				return 1;
+			}
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			const auto summary = LiteNN::GGUF::Tooling::VerifyLLaMAFinalLogits({
+			    .modelPath = argv[2],
+			    .candidateCheckpointDirectory = argv[3],
+			    .referenceCheckpointDirectory = argv[4],
+			    .candidateLogitsPath = argv[6],
+			    .referenceLogitsPath = argv[7],
+			    .outputPath = argv[8],
+			    .generatedIndex = ParseSize(argv[5], "generated-index", true),
+			    .threadCount = argc >= 10 ? ParseSize(argv[9], "threads") : 8,
+			    .topK = argc == 11 ? ParseSize(argv[10], "top-k") : 10,
+			});
+			std::cout << "Verified final RMSNorm/logits candidate_top1=" << summary.candidateTop1
+			          << " reference_top1=" << summary.referenceTop1 << " candidate_margin=" << summary.candidateMargin
+			          << " reference_margin=" << summary.referenceMargin
+			          << " candidate_pair_margin=" << summary.candidateReferenceMinusCandidateMargin
+			          << " reference_pair_margin=" << summary.referenceReferenceMinusCandidateMargin
+			          << " pair_margin_shift=" << summary.pairMarginShift
+			          << " candidate_reconstruction_nrmse=" << summary.candidateReconstructionNRMSE
+			          << " reference_reconstruction_nrmse=" << summary.referenceReconstructionNRMSE
+			          << " output=" << argv[8] << '\n';
+			return 0;
+#else
+			throw std::runtime_error("final-logit verification requires an AOT-enabled build");
 #endif
 		}
 

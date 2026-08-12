@@ -19,6 +19,7 @@
 #include <map>
 #include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <sstream>
 #include <stdexcept>
@@ -50,6 +51,10 @@ extern "C" void litenn_cpu_swiglu_f32(const float*, const float*, std::int64_t, 
                                       std::int64_t, std::int64_t, const float*, const float*, std::int64_t,
                                       std::int64_t, std::int64_t, std::int64_t, std::int64_t, float*, float*,
                                       std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t);
+extern "C" void litenn_cpu_rms_norm_f32(const float*, const float*, std::int64_t, std::int64_t, std::int64_t,
+                                        std::int64_t, std::int64_t, const float*, const float*, std::int64_t,
+                                        std::int64_t, std::int64_t, std::int64_t, std::int64_t, float*, float*,
+                                        std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t, double);
 #endif
 
 namespace LiteNN::GGUF::Tooling
@@ -102,6 +107,26 @@ namespace LiteNN::GGUF::Tooling
 			std::size_t inputFeatures{};
 			std::size_t hiddenFeatures{};
 			std::vector<FFNCandidateMetrics> candidates;
+		};
+
+		struct RankedLogit
+		{
+			std::size_t token{};
+			float value{};
+		};
+
+		struct FinalLogitResult
+		{
+			std::size_t finalBlock{};
+			ErrorMetrics hiddenCandidateVersusReference;
+			ErrorMetrics normalizedCandidateVersusReference;
+			ErrorMetrics candidateReconstructionVersusActual;
+			ErrorMetrics referenceReconstructionVersusActual;
+			ErrorMetrics actualCandidateVersusReference;
+			std::vector<RankedLogit> candidateTop;
+			std::vector<RankedLogit> referenceTop;
+			std::vector<RankedLogit> reconstructedCandidateTop;
+			std::vector<RankedLogit> reconstructedReferenceTop;
 		};
 
 		std::vector<std::string_view> Split(std::string_view text, char delimiter)
@@ -446,6 +471,106 @@ namespace LiteNN::GGUF::Tooling
 #endif
 		}
 
+		Tensor<CPU> RunFinalRMSNorm(const Tensor<CPU>& input, const Variable& scale, double epsilon)
+		{
+#ifdef LITENN_GGUF_CONVERT_ENABLE_AOT
+			const auto scaleTensor = scale.Data().CopyToDevice(CPU{});
+			if (input.DType() != DataType::Float32 || input.Shape().NumDim() != 2 ||
+			    scaleTensor.DType() != DataType::Float32 || scaleTensor.NumElements() != input.Shape()[1])
+			{
+				throw std::runtime_error(
+				    "final RMSNorm verification requires matching Float32 input and scale tensors");
+			}
+			const auto rows = input.Shape()[0];
+			const auto columns = input.Shape()[1];
+			Tensor<CPU> result(Uninitialized, { rows, columns }, DataType::Float32);
+			litenn_cpu_rms_norm_f32(nullptr, static_cast<const float*>(input.UnsafeRawData()), 0,
+			                        static_cast<std::int64_t>(rows), static_cast<std::int64_t>(columns),
+			                        static_cast<std::int64_t>(columns), 1, nullptr,
+			                        static_cast<const float*>(scaleTensor.UnsafeRawData()), 0, 1,
+			                        static_cast<std::int64_t>(columns), static_cast<std::int64_t>(columns), 1, nullptr,
+			                        static_cast<float*>(result.UnsafeRawData()), 0, static_cast<std::int64_t>(rows),
+			                        static_cast<std::int64_t>(columns), static_cast<std::int64_t>(columns), 1, epsilon);
+			return result;
+#else
+			(void) input;
+			(void) scale;
+			(void) epsilon;
+			throw std::runtime_error("final-logit verification requires an AOT-enabled build");
+#endif
+		}
+
+		Tensor<CPU> LoadLogitsText(const std::filesystem::path& path, std::size_t vocabularySize)
+		{
+			std::ifstream input(path, std::ios::binary);
+			if (!input)
+			{
+				throw std::runtime_error("failed to open logits text file: " + path.string());
+			}
+			Tensor<CPU> logits(Uninitialized, { 1, vocabularySize }, DataType::Float32);
+			auto* values = static_cast<float*>(logits.UnsafeRawData());
+			std::fill_n(values, vocabularySize, std::numeric_limits<float>::quiet_NaN());
+			std::string line;
+			std::size_t count = 0;
+			while (std::getline(input, line))
+			{
+				if (!line.empty() && line.back() == '\r')
+				{
+					line.pop_back();
+				}
+				const auto delimiter = line.find(':');
+				if (delimiter == std::string::npos)
+				{
+					throw std::runtime_error("logits text row is missing ':' delimiter");
+				}
+				const auto index =
+				    ParseInteger<std::size_t>(std::string_view(line).substr(0, delimiter), "logit index");
+				if (index >= vocabularySize || std::isfinite(values[index]))
+				{
+					throw std::runtime_error("logits text contains an out-of-range or duplicate index");
+				}
+				auto valueText = std::string_view(line).substr(delimiter + 1);
+				while (!valueText.empty() && valueText.front() == ' ')
+				{
+					valueText.remove_prefix(1);
+				}
+				float value{};
+				const auto parsed = std::from_chars(valueText.data(), valueText.data() + valueText.size(), value);
+				if (parsed.ec != std::errc{} || parsed.ptr != valueText.data() + valueText.size() ||
+				    !std::isfinite(value))
+				{
+					throw std::runtime_error("logits text contains an invalid Float32 value");
+				}
+				values[index] = value;
+				++count;
+			}
+			if (count != vocabularySize)
+			{
+				throw std::runtime_error(
+				    std::format("logits text contains {} values, expected {}", count, vocabularySize));
+			}
+			return logits;
+		}
+
+		std::vector<RankedLogit> RankLogits(const Tensor<CPU>& logits, std::size_t topK)
+		{
+			const auto values = Values(logits);
+			std::vector<std::size_t> indices(values.size());
+			std::iota(indices.begin(), indices.end(), 0);
+			const auto count = std::min(topK, indices.size());
+			std::partial_sort(indices.begin(), indices.begin() + static_cast<std::ptrdiff_t>(count), indices.end(),
+			                  [&](std::size_t lhs, std::size_t rhs) {
+				                  return values[lhs] == values[rhs] ? lhs < rhs : values[lhs] > values[rhs];
+			                  });
+			std::vector<RankedLogit> result;
+			result.reserve(count);
+			for (const auto index : indices | std::views::take(count))
+			{
+				result.push_back({ .token = index, .value = values[index] });
+			}
+			return result;
+		}
+
 		void WriteMetrics(std::ostream& output, const ErrorMetrics& metrics, std::string_view indent)
 		{
 			output << indent << "{\n"
@@ -576,6 +701,63 @@ namespace LiteNN::GGUF::Tooling
 			if (!output)
 			{
 				throw std::runtime_error("failed to write FFN activation verification report");
+			}
+		}
+
+		void WriteFinalLogitReport(const FinalLogitVerificationOptions& options, const FinalLogitResult& result,
+		                           const FinalLogitVerificationSummary& summary)
+		{
+			if (!options.outputPath.parent_path().empty())
+			{
+				std::filesystem::create_directories(options.outputPath.parent_path());
+			}
+			std::ofstream output(options.outputPath, std::ios::binary | std::ios::trunc);
+			if (!output)
+			{
+				throw std::runtime_error("failed to open final-logit verification report");
+			}
+			const auto writeRanks = [&](std::string_view name, std::span<const RankedLogit> ranks, bool last) {
+				output << "    \"" << name << "\": [\n";
+				for (std::size_t i = 0; i < ranks.size(); ++i)
+				{
+					output << "      { \"rank\": " << i + 1 << ", \"token\": " << ranks[i].token
+					       << ", \"value\": " << ranks[i].value << " }" << (i + 1 == ranks.size() ? "\n" : ",\n");
+				}
+				output << "    ]" << (last ? "\n" : ",\n");
+			};
+			output << std::setprecision(17) << "{\n"
+			       << "  \"schema\": \"litenn.qwen_final_logit_verification.v1\",\n"
+			       << "  \"generated_index\": " << options.generatedIndex << ",\n"
+			       << "  \"final_block\": " << result.finalBlock << ",\n"
+			       << "  \"candidate_top1\": " << summary.candidateTop1 << ",\n"
+			       << "  \"reference_top1\": " << summary.referenceTop1 << ",\n"
+			       << "  \"candidate_margin\": " << summary.candidateMargin << ",\n"
+			       << "  \"reference_margin\": " << summary.referenceMargin << ",\n"
+			       << "  \"candidate_reference_minus_candidate_margin\": "
+			       << summary.candidateReferenceMinusCandidateMargin << ",\n"
+			       << "  \"reference_reference_minus_candidate_margin\": "
+			       << summary.referenceReferenceMinusCandidateMargin << ",\n"
+			       << "  \"top1_pair_margin_shift\": " << summary.pairMarginShift << ",\n"
+			       << "  \"metrics\": {\n"
+			       << "    \"post_ffn_candidate_vs_reference\": ";
+			WriteMetrics(output, result.hiddenCandidateVersusReference, "    ");
+			output << ",\n    \"final_norm_candidate_vs_reference\": ";
+			WriteMetrics(output, result.normalizedCandidateVersusReference, "    ");
+			output << ",\n    \"candidate_reconstructed_vs_actual_logits\": ";
+			WriteMetrics(output, result.candidateReconstructionVersusActual, "    ");
+			output << ",\n    \"reference_reconstructed_vs_actual_logits\": ";
+			WriteMetrics(output, result.referenceReconstructionVersusActual, "    ");
+			output << ",\n    \"actual_candidate_vs_reference_logits\": ";
+			WriteMetrics(output, result.actualCandidateVersusReference, "    ");
+			output << "\n  },\n  \"top_k\": {\n";
+			writeRanks("candidate_actual", result.candidateTop, false);
+			writeRanks("reference_actual", result.referenceTop, false);
+			writeRanks("candidate_reconstructed", result.reconstructedCandidateTop, false);
+			writeRanks("reference_reconstructed", result.reconstructedReferenceTop, true);
+			output << "  }\n}\n";
+			if (!output)
+			{
+				throw std::runtime_error("failed to write final-logit verification report");
 			}
 		}
 	} // namespace
@@ -817,6 +999,90 @@ namespace LiteNN::GGUF::Tooling
 		}
 
 		WriteFFNReport(options, results, summary);
+		return summary;
+	}
+
+	FinalLogitVerificationSummary VerifyLLaMAFinalLogits(const FinalLogitVerificationOptions& options)
+	{
+		if (options.threadCount == 0 || options.topK < 2)
+		{
+			throw std::runtime_error("final-logit verification requires a positive thread count and top-k >= 2");
+		}
+		const auto imported = ImportGGUFArchive(options.modelPath);
+		const auto& graph = imported.model.UnsafeGraphView();
+		const auto hyperparameters = ParseLLaMAHyperparameters(graph);
+		const auto finalBlock = hyperparameters.blockCount - 1;
+		auto candidateHidden =
+		    LoadCheckpointTensor(options.candidateCheckpointDirectory, "post_ffn", options.generatedIndex, finalBlock,
+		                         hyperparameters.embeddingLength);
+		auto referenceHidden =
+		    LoadCheckpointTensor(options.referenceCheckpointDirectory, "post_ffn", options.generatedIndex, finalBlock,
+		                         hyperparameters.embeddingLength);
+		const auto normIndex = graph.FindVariable("output_norm.weight");
+		if (!normIndex)
+		{
+			throw std::runtime_error("model does not contain output_norm.weight");
+		}
+		auto candidateNorm =
+		    RunFinalRMSNorm(candidateHidden, *graph.GetVariable(*normIndex), hyperparameters.rmsNormEpsilon);
+		auto referenceNorm =
+		    RunFinalRMSNorm(referenceHidden, *graph.GetVariable(*normIndex), hyperparameters.rmsNormEpsilon);
+
+		const auto outputIndex =
+		    graph.FindVariable("output.weight").or_else([&] { return graph.FindVariable("token_embd.weight"); });
+		if (!outputIndex)
+		{
+			throw std::runtime_error("model does not contain output.weight or tied token_embd.weight");
+		}
+		const auto& outputWeight = *graph.GetVariable(*outputIndex);
+		if (!outputWeight.IsQuantized() ||
+		    outputWeight.Quantization()->blockFormat != QuantizedBlockFormat::GGML_Q6_K ||
+		    outputWeight.Quantization()->expressedType != DataType::Float32 ||
+		    outputWeight.Quantization()->expressedShape.size() != 2 ||
+		    outputWeight.Quantization()->expressedShape[1] != hyperparameters.embeddingLength)
+		{
+			throw std::runtime_error(
+			    "final-logit verification requires an output-major Float32-expressed Q6_K lm-head");
+		}
+		const auto vocabularySize = outputWeight.Quantization()->expressedShape[0];
+		auto [candidateReconstructed, candidatePackedBytes] =
+		    RunProductionHelper(candidateNorm, outputWeight, options.threadCount);
+		auto [referenceReconstructed, referencePackedBytes] =
+		    RunProductionHelper(referenceNorm, outputWeight, options.threadCount);
+		(void) candidatePackedBytes;
+		(void) referencePackedBytes;
+		auto candidateActual = LoadLogitsText(options.candidateLogitsPath, vocabularySize);
+		auto referenceActual = LoadLogitsText(options.referenceLogitsPath, vocabularySize);
+
+		FinalLogitResult result{
+			.finalBlock = finalBlock,
+			.hiddenCandidateVersusReference = Compare(Values(candidateHidden), Values(referenceHidden)),
+			.normalizedCandidateVersusReference = Compare(Values(candidateNorm), Values(referenceNorm)),
+			.candidateReconstructionVersusActual = Compare(Values(candidateReconstructed), Values(candidateActual)),
+			.referenceReconstructionVersusActual = Compare(Values(referenceReconstructed), Values(referenceActual)),
+			.actualCandidateVersusReference = Compare(Values(candidateActual), Values(referenceActual)),
+			.candidateTop = RankLogits(candidateActual, options.topK),
+			.referenceTop = RankLogits(referenceActual, options.topK),
+			.reconstructedCandidateTop = RankLogits(candidateReconstructed, options.topK),
+			.reconstructedReferenceTop = RankLogits(referenceReconstructed, options.topK),
+		};
+		const auto candidateValues = Values(candidateActual);
+		const auto referenceValues = Values(referenceActual);
+		FinalLogitVerificationSummary summary{
+			.candidateTop1 = result.candidateTop[0].token,
+			.referenceTop1 = result.referenceTop[0].token,
+			.candidateMargin = static_cast<double>(result.candidateTop[0].value) - result.candidateTop[1].value,
+			.referenceMargin = static_cast<double>(result.referenceTop[0].value) - result.referenceTop[1].value,
+			.candidateReconstructionNRMSE = result.candidateReconstructionVersusActual.normalizedRmsError,
+			.referenceReconstructionNRMSE = result.referenceReconstructionVersusActual.normalizedRmsError,
+		};
+		summary.candidateReferenceMinusCandidateMargin =
+		    static_cast<double>(candidateValues[summary.referenceTop1]) - candidateValues[summary.candidateTop1];
+		summary.referenceReferenceMinusCandidateMargin =
+		    static_cast<double>(referenceValues[summary.referenceTop1]) - referenceValues[summary.candidateTop1];
+		summary.pairMarginShift =
+		    summary.candidateReferenceMinusCandidateMargin - summary.referenceReferenceMinusCandidateMargin;
+		WriteFinalLogitReport(options, result, summary);
 		return summary;
 	}
 } // namespace LiteNN::GGUF::Tooling
