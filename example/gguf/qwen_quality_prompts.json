@@ -1,0 +1,17 @@
+{
+  "schema": "litenn.qwen_quality_prompts.v1",
+  "prompts": [
+    {
+      "name": "explanation",
+      "prompt": "Explain why deterministic tests are useful in a production inference library."
+    },
+    {
+      "name": "cpp",
+      "prompt": "Write a C++ function that checks whether a vector of integers is sorted in ascending order."
+    },
+    {
+      "name": "reasoning",
+      "prompt": "A service handles 120 requests per second and each request takes 25 milliseconds of CPU time. Estimate the CPU cores required before adding headroom."
+    }
+  ]
+}
