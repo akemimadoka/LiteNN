@@ -492,6 +492,11 @@ foreach(TEST_SOURCE ${TEST_SOURCES})
     endif()
 endforeach()
 
+add_test(
+    NAME GGUFGenerationQualityGate.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/GGUFGenerationQualityGateTest.py"
+)
+
 if(LITENN_ENABLE_MLIR)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler
