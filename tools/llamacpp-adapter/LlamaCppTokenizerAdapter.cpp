@@ -462,7 +462,9 @@ namespace LiteNN::LlamaCppAdapter
 					const auto& blockInput = block == 0 ? inputEmbedding_ : RequireLayerOutput(block - 1);
 					if (residual.size() != blockInput.size())
 					{
-						throw std::runtime_error("llama.cpp attention residual and block input shapes differ");
+						throw std::runtime_error(
+						    std::format("llama.cpp attention residual and block input shapes differ: {} vs {}",
+						                residual.size(), blockInput.size()));
 					}
 					auto attentionOutput = residual;
 					for (std::size_t i = 0; i < attentionOutput.size(); ++i)
@@ -597,7 +599,7 @@ namespace LiteNN::LlamaCppAdapter
 			bool Wants(const ggml_tensor* tensor) const
 			{
 				const auto named = ParseNamedLayerTensor(tensor);
-				if (named.base == "inp_embd")
+				if (named.base == "embd")
 				{
 					return selectedBlocks_.contains(0);
 				}
@@ -616,7 +618,7 @@ namespace LiteNN::LlamaCppAdapter
 			{
 				const auto named = ParseNamedLayerTensor(tensor);
 				auto values = ReadContiguousTensor(tensor);
-				if (named.base == "inp_embd")
+				if (named.base == "embd")
 				{
 					inputEmbedding_ = std::move(values);
 					return;
