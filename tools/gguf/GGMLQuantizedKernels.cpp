@@ -148,6 +148,60 @@ namespace LiteNN::GGUF
 		return converted;
 	}
 
+	Tensor<CPU> EvalGGMLExactDequantizedMatMul(const Tensor<CPU>& input, const Variable& weight, bool transposeWeight)
+	{
+		const auto& params = *weight.Quantization();
+		const auto storage = weight.Data().CopyToDevice(CPU{});
+		return EvalGGMLExactDequantizedMatMul(input, storage, params, transposeWeight);
+	}
+
+	Tensor<CPU> EvalGGMLExactDequantizedMatMul(const Tensor<CPU>& input, const Tensor<CPU>& weightStorage,
+	                                           const QuantizationParams& params, bool transposeWeight)
+	{
+		const auto layout = ValidateGGMLBlockStorage(weightStorage, params, "exact-dequantized MatMul weight");
+		if (input.DType() != DataType::Float32 || input.Shape().NumDim() != 2 ||
+		    params.expressedType != DataType::Float32 || params.expressedShape.size() != 2)
+		{
+			throw std::runtime_error(
+			    "GGML exact-dequantized MatMul currently requires 2D Float32 input and weight expressed types");
+		}
+		if (!transposeWeight)
+		{
+			throw std::runtime_error(
+			    "GGML exact-dequantized MatMul requires output-major [outFeatures, inFeatures] weight storage");
+		}
+
+		const auto batch = input.Shape()[0];
+		const auto inFeatures = input.Shape()[1];
+		const auto outFeatures = params.expressedShape[0];
+		if (params.expressedShape[1] != inFeatures || layout.rowCount != outFeatures || layout.rowSize != inFeatures)
+		{
+			throw std::runtime_error("GGML exact-dequantized MatMul input and weight shapes are incompatible");
+		}
+
+		const auto* weightBytes = static_cast<const std::uint8_t*>(weightStorage.UnsafeRawData());
+		const auto* inputValues = static_cast<const float*>(input.UnsafeRawData());
+		Tensor<CPU> result(Uninitialized, { batch, outFeatures }, DataType::Float32);
+		auto* output = static_cast<float*>(result.UnsafeRawData());
+		std::vector<float> dequantizedRow(inFeatures);
+		for (std::size_t column = 0; column < outFeatures; ++column)
+		{
+			layout.traits->to_float(weightBytes + column * layout.rowBytes, dequantizedRow.data(),
+			                        static_cast<std::int64_t>(inFeatures));
+			for (std::size_t row = 0; row < batch; ++row)
+			{
+				double sum = 0.0;
+				for (std::size_t feature = 0; feature < inFeatures; ++feature)
+				{
+					sum += static_cast<double>(inputValues[row * inFeatures + feature]) *
+					       static_cast<double>(dequantizedRow[feature]);
+				}
+				output[row * outFeatures + column] = static_cast<float>(sum);
+			}
+		}
+		return result;
+	}
+
 	Tensor<CPU> EvalGGMLQuantizedMatMul(const Tensor<CPU>& input, const Variable& weight, bool transposeWeight)
 	{
 		const auto& params = *weight.Quantization();

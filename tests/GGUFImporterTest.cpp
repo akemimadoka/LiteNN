@@ -1618,6 +1618,46 @@ TEST(GGUFLLaMAQuantizedExecution, RunsOutputMajorQ4KMatMulWithoutMaterializingWe
 }
 
 #ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMAQuantizedExecution, ExactQ6KProjectionMatchesRowDequantizedFloat64Reference)
+{
+	constexpr std::size_t inFeatures = 256;
+	constexpr std::size_t outFeatures = 5;
+	constexpr std::size_t rows = 2;
+	std::vector<float> weightValues(outFeatures * inFeatures);
+	for (std::size_t i = 0; i < weightValues.size(); ++i)
+	{
+		weightValues[i] = static_cast<float>(static_cast<int>(i % 37) - 18) * 0.0625F;
+	}
+	const auto plainWeight = Variable::Create(MakeFloatTensor(weightValues, { outFeatures, inFeatures }));
+	const auto quantizedWeight = QuantizeGGMLVariable(*plainWeight, GGML_TYPE_Q6_K, QuantizedBlockFormat::GGML_Q6_K);
+
+	std::vector<float> inputValues(rows * inFeatures);
+	for (std::size_t i = 0; i < inputValues.size(); ++i)
+	{
+		inputValues[i] = static_cast<float>(static_cast<int>(i % 29) - 14) * 0.03125F;
+	}
+	const auto input = MakeFloatTensor(inputValues, { rows, inFeatures });
+	const auto exact = GGUF::EvalGGMLExactDequantizedMatMul(input, *quantizedWeight, true);
+	const auto dequantized = GGUF::DequantizeGGMLBlockVariable(*quantizedWeight, "q6_k.weight");
+	const auto* weightData = static_cast<const float*>(dequantized.UnsafeRawData());
+
+	ASSERT_EQ(exact.Shape(), (ShapeView{ rows, outFeatures }));
+	for (std::size_t row = 0; row < rows; ++row)
+	{
+		for (std::size_t column = 0; column < outFeatures; ++column)
+		{
+			double expected = 0.0;
+			for (std::size_t feature = 0; feature < inFeatures; ++feature)
+			{
+				expected += static_cast<double>(inputValues[row * inFeatures + feature]) *
+				            static_cast<double>(weightData[column * inFeatures + feature]);
+			}
+			EXPECT_FLOAT_EQ(ReadFloat(exact, row * outFeatures + column), static_cast<float>(expected));
+		}
+	}
+	EXPECT_THROW((void) GGUF::EvalGGMLExactDequantizedMatMul(input, *quantizedWeight, false), std::runtime_error);
+}
+
 TEST(GGUFLLaMAQuantizedExecution, CompilesQ4KTokenEmbeddingGatherWithoutInterpreter)
 {
 	constexpr std::size_t rowCount = 3;
