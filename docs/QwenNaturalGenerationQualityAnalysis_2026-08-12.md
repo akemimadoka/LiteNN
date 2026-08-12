@@ -72,9 +72,10 @@ before this gate is practical in routine CI.
    trajectory differences are not the only signal.
 3. Previous single-prompt forced-token and late-layer diagnostics were too narrow to establish model-level quality.
    Their kernel-local conclusions remain useful, but they do not close the end-to-end correctness objective.
-4. The next correctness P0 is same-input whole-block attribution at the three first-divergence boundaries, including
-   prefill capture and representative early, middle, and late blocks. Throughput-oriented model-math changes remain
-   secondary until the earliest drift owner is measured.
+4. Follow-up same-input whole-block and block-0 internal attribution localized the earliest drift to rotated Q/K and
+   proved a Qwen2 NeoX-versus-adjacent-pair RoPE contract mismatch. See
+   `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`. Throughput-oriented model-math changes remain secondary until
+   that contract is repaired and this quality gate is rerun.
 
 ## Reproduction Shape
 

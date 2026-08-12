@@ -173,9 +173,22 @@ P0 implementation order:
         top-10 overlap is `83.125%` mean/`70%` minimum, and median first divergence is step 3; all cases are finite and
         fallback-free, so the quality gate fails repeatably. Evidence:
         `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
-      - [ ] P0: add same-input prefill and decode whole-block attribution at each prompt's first-divergence boundary.
-        Capture representative early/middle/late blocks first, then narrow to the earliest block and split attention,
-        KV state, FFN, residual, final norm, and LM-head composition.
+      - [x] P0: add same-input prefill/decode whole-block attribution at all three first-divergence boundaries and
+        split block 0 across 13 internal boundaries. Attention norm matches within `9.14e-7` NRMSE, while rotated Q/K
+        jump to `0.854-1.001`/`0.277-0.357` NRMSE. Source audit proves Qwen2 requires NeoX half-split RoPE while LiteNN
+        only represents adjacent-pair normal RoPE. Evidence:
+        `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`.
+      - [ ] P0: add an explicit `Normal`/`NeoX` RoPE layout enum to graph and executable-plan contracts, validation,
+        hashing, vNext serialization, diagnostics, cloning, and transforms. Do not add a legacy implicit-layout path.
+      - [ ] P0: propagate GGUF architecture metadata into RoPE layout, import Qwen2 as NeoX, and reject unknown or
+        unsupported layouts explicitly.
+      - [ ] P0: implement NeoX head-local half-split pairing in the Interpreter, CPU AOT helper, and generic MLIR path.
+        Enabled CUDA/Vulkan paths must implement the same semantics or reject the layout before dispatch.
+      - [ ] P0: add independent normal/NeoX formula fixtures for static/dynamic positions and multiple heads, expose
+        pre-RoPE Q/K checkpoints, and quantify the remaining projection-only residual.
+      - [ ] P0: rerun the exact three-prompt attribution and 192-token quality campaign after the fix. Require removal
+        of the rotated-Q/K semantic jump, finite/no-fallback execution, material quality recovery, and cache-hit
+        throughput within the accepted variance gate.
       - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain both aggregate
         and per-sample regressions.
       - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the accepted variance gate.

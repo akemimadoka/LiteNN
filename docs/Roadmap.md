@@ -3398,9 +3398,24 @@ Priority classes:
                               prefix agreement is `6.7708%`, same-context top-10 is `83.125%` mean/`70%` minimum, and
                               median first divergence is step 3 with no fallback/non-finite cases. The gate fails.
                               Evidence: `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
-                        - [ ] P0: capture same-input prefill/decode whole-block state at all three first-divergence
-                              boundaries. Sweep representative early/middle/late blocks, then split the earliest owner
-                              across attention, KV state, FFN, residual composition, final norm, and LM head.
+                        - [x] P0: capture same-input prefill/decode whole-block state at all three first-divergence
+                              boundaries and split block 0 across 13 internal boundaries. Attention norm matches within
+                              `9.14e-7` NRMSE, while rotated Q/K jump to `0.854-1.001`/`0.277-0.357` NRMSE. Source audit
+                              proves Qwen2 requires NeoX half-split RoPE while LiteNN only represents adjacent-pair
+                              normal RoPE. Evidence: `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`.
+                        - [ ] P0: add an explicit `Normal`/`NeoX` RoPE layout enum to graph and executable-plan
+                              contracts, validation, hashing, vNext serialization, diagnostics, cloning, and transforms.
+                              Do not add a legacy implicit-layout path.
+                        - [ ] P0: propagate GGUF architecture metadata into RoPE layout, import Qwen2 as NeoX, and
+                              reject unknown or unsupported layouts explicitly.
+                        - [ ] P0: implement NeoX head-local half-split pairing in the Interpreter, CPU AOT helper, and
+                              generic MLIR path. Enabled CUDA/Vulkan paths must implement identical semantics or reject
+                              the layout before dispatch.
+                        - [ ] P0: add independent normal/NeoX formula fixtures for static/dynamic positions and multiple
+                              heads, expose pre-RoPE Q/K checkpoints, and quantify the remaining projection-only residual.
+                        - [ ] P0: rerun the exact three-prompt attribution and 192-token quality campaign after the fix.
+                              Require removal of the rotated-Q/K semantic jump, finite/no-fallback execution, material
+                              quality recovery, and cache-hit throughput within the accepted variance gate.
                         - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain
                               aggregate and per-sample regressions.
                         - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
@@ -3914,12 +3929,19 @@ These improvements do not require a compatibility break and should not block vNe
 
 ### 2026-08-12
 
+- Localized all three natural-generation first divergences with exact reference token histories, 48 whole-block
+  residuals, and 13 block-0 internal boundaries. Attention norm remains within `9.14e-7` NRMSE, but rotated Q/K jump
+  immediately to `0.854-1.001`/`0.277-0.357` NRMSE. A source audit proves Qwen2 is NeoX half-split RoPE while LiteNN's
+  graph, CPU helper, and generic MLIR contract only support adjacent pairs. Explicit RoPE layout, GGUF propagation,
+  backend semantics, external golden tests, and a repeat quality campaign are now correctness P0 work. Evidence:
+  `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`.
 - Added a natural-generation quality contract, paired LiteNN/llama.cpp greedy-logits capture, a multi-prompt campaign,
   JSON/Markdown quality reports, threshold exit status, and CTest-backed offline regression coverage. Two independent
   192-token campaigns are evidence-identical but fail quality: weighted prefix agreement is `6.7708%`, same-context
   top-10 overlap is `83.125%` mean/`70%` minimum, and median first divergence is step 3. All cases are fallback-free
-  and finite. Same-input prefill/decode whole-block attribution is promoted to the next P0. Evidence:
-  `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md`.
+  and finite. The completed same-input follow-up localizes the first drift to a Qwen2 NeoX RoPE contract mismatch.
+  Evidence: `docs/QwenNaturalGenerationQualityAnalysis_2026-08-12.md` and
+  `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`.
 - Reproduced and fixed the intermittent default-thread Qwen diagnostic deadlock twice. The initial generation-only
   atomic-wait repair passed its controls but was disproved by a second real stall at step 45, again at 31 requested and
   30 completed workers. A per-worker mutex/condition-variable predicate now passes 20,480 concurrent stress calls,
