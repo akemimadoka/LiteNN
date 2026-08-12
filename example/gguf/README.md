@@ -318,6 +318,22 @@ outputs use a separate AOT cache identity; the normal logits-only runtime ABI an
 cache remain unchanged. Omit `--layer-checkpoint-generated-indices` to capture
 every generated step.
 
+Compare two bundles with strict metadata/range validation and per-layer error
+metrics:
+
+```powershell
+python311 benchmark\compare_layer_checkpoints.py `
+  --reference build\reference_checkpoints\manifest.tsv `
+  --candidate build\qwen_checkpoints\manifest.tsv `
+  --generated-indices 23 `
+  --absolute-tolerance 1e-5 --relative-tolerance 1e-5 `
+  --output-dir build\checkpoint_comparison
+```
+
+The comparison emits JSON and Markdown with max/mean/RMS absolute error, max
+relative error, cosine similarity, mismatch count, and the first failing layer
+for every generated position.
+
 The smoke driver defaults LiteNN decode to `LITENN_COMPILE_DIAGNOSTICS=1` and
 `LITENN_CPU_AOT_LLVM_OPT_LEVEL=0`, because large GGUF first-run CPU AOT
 compilation is still measured in minutes. Increase `--steps` after the first

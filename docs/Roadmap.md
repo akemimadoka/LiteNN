@@ -3352,6 +3352,9 @@ Priority classes:
                         shape, offset, statistics, non-finite count, and checksum metadata. The diagnostic cache key is
                         isolated from normal logits-only artifacts. A real 14B Q4_K_M run validated 48 ordered
                         Float32 `[1,5120]` layers, zero non-finite values, and about `3.07 ms` write overhead.
+                  - [x] Add a strict checkpoint comparison tool covering metadata/range validation, low-precision
+                        decoding, per-layer absolute/relative/RMS/cosine metrics, tolerance failures, and the first
+                        failing layer per generated position. A zero-tolerance real-bundle self-compare passed 48/48.
                   - [ ] Capture matching llama.cpp hidden states on the fixed trajectory and identify the first failing
                         layer at generated index 23 before selecting a numerical fix.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
@@ -3864,6 +3867,8 @@ These improvements do not require a compatibility break and should not block vNe
 - Added opt-in per-layer hidden-state checkpoints to the stateful CPU AOT Qwen path without changing the normal
   logits-only ABI or cache identity. A real 14B Q4_K_M diagnostic run emitted 48 ordered `[1,5120]` Float32 layers in
   a 983,040-byte bundle with no non-finite values; the selected-position write cost was about `3.07 ms`.
+- Added a dependency-free layer-checkpoint comparator with strict schema/payload validation, low-precision decoding,
+  per-layer error metrics, and first-failing-layer reports; a zero-tolerance real 14B self-compare passed all 48 rows.
 - Removed model-sized gradient allocation from GGUF inference import and released source tensor owners immediately
   after CPU AOT module construction. Continuous 14B sampling now peaks at `18.566/18.679 GB` RSS/private instead of
   the earlier `27.37/27.49 GB` single observation; active decode uses approximately `9.4-9.9/9.5-10.0 GB`.

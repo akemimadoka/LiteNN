@@ -126,6 +126,9 @@ P0 implementation order:
       plus a TSV manifest with dtype, shape, offset, statistics, non-finite count, and checksum. Normal logits-only
       artifacts retain their existing ABI/cache identity. A real 14B Q4_K_M run produced 48 ordered Float32
       `[1,5120]` checkpoints with no non-finite values and about `3.07 ms` output overhead for one position.
+    - [x] Add a dependency-free checkpoint comparator with strict coordinate/dtype/shape/payload-range validation,
+      Float64/32/16, BFloat16, and FP8 decoding, per-layer absolute/relative/RMS/cosine metrics, tolerance mismatch
+      counts, and first-failing-layer reports. A zero-tolerance self-compare passed all 48 real 14B layers.
     - [ ] Capture the same hidden-state boundary from the controlled llama.cpp path, compare forced trajectory index 23,
       and report the first failing layer plus elementwise absolute/relative error before changing model math.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
