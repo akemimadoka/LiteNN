@@ -40,6 +40,11 @@
 
 using namespace LiteNN;
 
+extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
+                                                         float* out, std::uint64_t m, std::uint64_t k, std::uint64_t n,
+                                                         std::uint64_t biasRows, std::uint64_t threadCount,
+                                                         std::uint64_t schedulingPolicy, bool relu);
+
 namespace
 {
 	static_assert(CPUAOTCompilationCacheVersion >= 4,
@@ -2898,6 +2903,34 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 			{
 				EXPECT_NEAR(ReadFloat(outputs[0], i), ReadFloat(expected[0], i), 1e-4f);
 			}
+		}
+	}
+}
+
+TEST(CompiledModuleTest, CPUParallelThreadPoolSurvivesRapidParticipantCountChanges)
+{
+	constexpr std::uint64_t rows = 32;
+	constexpr std::uint64_t inner = 128;
+	constexpr std::uint64_t columns = 128;
+	std::vector<float> lhs(rows * inner, 1.0F);
+	std::vector<float> rhs(inner * columns, 0.5F);
+	std::vector<float> bias(columns, 1.0F);
+	std::vector<float> output(rows * columns);
+	constexpr std::array threadCounts{ std::uint64_t{ 0 }, std::uint64_t{ 16 }, std::uint64_t{ 4 },
+		                               std::uint64_t{ 8 }, std::uint64_t{ 2 },  std::uint64_t{ 0 } };
+	constexpr std::array waitPolicies{ CPUAOTWorkerWaitPolicy::Adaptive, CPUAOTWorkerWaitPolicy::LowPower,
+		                               CPUAOTWorkerWaitPolicy::Latency };
+
+	for (std::size_t iteration = 0; iteration < 384; ++iteration)
+	{
+		std::ranges::fill(output, std::numeric_limits<float>::quiet_NaN());
+		const auto schedulingPolicy = static_cast<std::uint64_t>(waitPolicies[iteration % waitPolicies.size()]) << 8;
+		litenn_cpu_matmul_bias_relu_parallel_f32(lhs.data(), rhs.data(), bias.data(), output.data(), rows, inner,
+		                                         columns, 1, threadCounts[iteration % threadCounts.size()],
+		                                         schedulingPolicy, false);
+		for (const auto index : { std::size_t{ 0 }, output.size() / 2, output.size() - 1 })
+		{
+			ASSERT_FLOAT_EQ(output[index], 65.0F) << "at iteration " << iteration << " element " << index;
 		}
 	}
 }
