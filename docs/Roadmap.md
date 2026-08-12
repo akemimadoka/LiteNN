@@ -3376,13 +3376,14 @@ Priority classes:
                         source-Q6_K, production field-v4/Q8_K, and captured llama.cpp Down projections for blocks 43-47.
                         Production matches captured output within `3.67e-7` NRMSE and `1.15e-5` max absolute error;
                         Q6_K Down is closed as the mismatch owner.
-                  - [ ] P0: feed identical captured `ffn_norm` activations through exact, ggml, LiteNN grouped field-v4
-                        Q4_K Gate/Up and strict SwiGLU for blocks 43-47. Change FFN math only if LiteNN uniquely leaves
-                        the captured/reference envelope.
+                  - [x] P0: feed identical captured `ffn_norm` activations through exact, ggml, LiteNN grouped field-v4
+                        Q4_K Gate/Up and strict SwiGLU for blocks 43-47. Production Gate/Up/SwiGLU match captured
+                        llama.cpp within `1.44e-7/2.21e-7/3.62e-7` NRMSE; complete FFN correctness is closed.
                   - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run remained inside step 4 for
                         over five minutes on one core after three normal steps; fixed T8 completed the same trajectory.
                   - [ ] P0: align final RMSNorm and logits capture, record expected-vs-selected top-k margin, and select
-                        a numerical fix only when one boundary explains the rank crossing.
+                        a numerical fix only when one boundary explains the rank crossing. Attention output and the
+                        complete FFN are now closed, making this the primary remaining correctness gate.
                   - [ ] P1: gate the eventual fix on 128-token natural parity, corpus perplexity delta, task quality,
                         and unchanged cache-hit throughput.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
@@ -3895,8 +3896,8 @@ These improvements do not require a compatibility break and should not block vNe
 - Completed selectable Qwen sub-layer checkpointing in LiteNN and llama.cpp without patching vendored code. The
   index-16-23 panel covers 13 boundaries in blocks 31-33 and 43-47, and the suite comparator aggregates 832 matched
   coordinates. Attention output does not create the block-46 target anomaly; late FFN SwiGLU/Q6_K Down consistently
-  increases separation. Identical-activation Down verification now proves production field-v4/Q8_K matches llama.cpp
-  within `3.67e-7` NRMSE, closing Down correctness and moving the next gate to Q4_K Gate/Up plus SwiGLU. Evidence:
+  increases separation. Identical-input verification proves production Q4_K Gate/Up, strict SwiGLU, and Q6_K Down all
+  match llama.cpp within `3.62e-7` NRMSE. The complete late FFN is closed; final RMSNorm/logit margin is next. Evidence:
   `docs/QwenSubLayerDriftAnalysis_2026-08-12.md`.
 - Completed the generated-index 16-23 Qwen neighborhood panel and added native NRMSE/MAD target-outlier analysis to
   the checkpoint comparator. Index 23 exceeds both NRMSE and cosine-distance control maxima through blocks 38-46;

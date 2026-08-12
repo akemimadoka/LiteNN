@@ -140,9 +140,34 @@ production decode contract.
 
 This experiment closes Q6_K Down correctness for the observed mismatch. The earlier `1.396x-1.698x` Down-stage
 target/control ratios result from feeding different SwiGLU activations to equivalent production projection semantics.
-The next same-input experiment moves upstream: feed one captured `ffn_norm` tensor through Q4_K Gate/Up and strict
-SwiGLU in both implementations. If those outputs also match, the remaining owner is inherited residual-stream drift
-and final-logit margin rather than an FFN kernel defect.
+The same-input experiment therefore moved upstream to Q4_K Gate/Up and strict SwiGLU.
+
+## Identical-Input Gate, Up, And SwiGLU Result
+
+For each block 43-47, the llama.cpp-captured `ffn_norm` tensor at generated index 23 was fed unchanged to exact
+represented-weight Q4_K projection, ggml vec-dot, LiteNN source-Float32 projection, and LiteNN's production grouped
+field-v4/Q8_K Gate/Up helper. Every candidate pair was then passed through the real `litenn_cpu_swiglu_f32` strict
+activation helper. A fifth candidate applies only LiteNN strict SwiGLU to the captured llama.cpp Gate/Up values, which
+isolates activation math from projection math.
+
+| Block | Production Gate vs captured NRMSE | Production Up vs captured NRMSE | Production pipeline SwiGLU NRMSE | Captured Gate/Up + LiteNN SwiGLU NRMSE | Pipeline max abs |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 43 | 1.296e-7 | 1.944e-7 | 2.580e-7 | 3.756e-8 | 1.144e-5 |
+| 44 | 1.442e-7 | 2.207e-7 | 3.620e-7 | 6.044e-8 | 7.629e-6 |
+| 45 | 1.408e-7 | 2.171e-7 | 3.161e-7 | 4.394e-8 | 7.629e-6 |
+| 46 | 1.206e-7 | 1.587e-7 | 3.134e-7 | 5.273e-8 | 9.537e-6 |
+| 47 | 1.055e-7 | 1.657e-7 | 2.911e-7 | 4.942e-8 | 5.722e-6 |
+
+The maximum production Gate, Up, and complete SwiGLU NRMSE values are `1.44e-7`, `2.21e-7`, and `3.62e-7`.
+Recomputing only strict SwiGLU from captured Gate/Up stays below `6.05e-8`. These are floating-point ordering and
+elementary-function noise, not a model-semantic discrepancy. Together with the Down result, this closes the complete
+FFN implementation in blocks 43-47 as the owner of the index-23 token mismatch.
+
+The cross-runtime SwiGLU and Down outlier ratios are caused by different `ffn_norm` inputs entering equivalent FFN
+semantics. Since attention output also failed the target-outlier gate, the remaining useful question is no longer
+which late-layer kernel is wrong. It is whether accumulated residual-stream differences cross a small final-logit
+margin. Final RMSNorm, output projection, top-k candidates, and the expected-versus-selected margin are now the next
+causal gate.
 
 ## Conclusions
 
@@ -150,12 +175,12 @@ and final-logit margin rather than an FFN kernel defect.
    generated trajectory remains equal through index 22.
 2. Attention does not create the index-23 late-layer amplification. The strongest attention evidence is inherited in
    the residual stream, while block-46 attention output is only `1.030x` its control median.
-3. The first actionable causal window is FFN Gate/Up -> SwiGLU in blocks 43-47. Identical-activation verification below
-   closes Q6_K Down as an implementation-error candidate.
+3. Identical-input verification closes Q4_K Gate/Up, strict SwiGLU, and Q6_K Down in blocks 43-47 as
+   implementation-error candidates.
 4. Q6_K math must not be changed from the cross-runtime sub-layer ratios. On the same captured SwiGLU activation,
    LiteNN's production field-v4/Q8_K path matches the llama.cpp Down result within `3.67e-7` NRMSE across blocks 43-47.
-5. The final user-visible mismatch is still unproven until final RMSNorm/logits are aligned and the expected versus
-   selected top-token margin is measured.
+5. The final user-visible mismatch is now best explained as accumulated residual-stream drift, but this remains
+   unproven until final RMSNorm/logits are aligned and the expected versus selected top-token margin is measured.
 6. The default-thread long loop is separate from numerical drift and must be reproduced and localized independently.
 
 ## Decision Gates
@@ -163,8 +188,8 @@ and final-logit margin rather than an FFN kernel defect.
 | Identical-activation result | Decision |
 | --- | --- |
 | Observed: LiteNN production Q6_K matches captured llama.cpp Down | close Down-kernel correctness; do not rewrite it |
-| LiteNN Gate/Up or strict SwiGLU uniquely leaves the same-input reference envelope | fix the isolated FFN implementation and rerun the fixed trajectory |
-| Gate/Up and SwiGLU also match on the same `ffn_norm` input | close FFN kernel correctness and prioritize inherited residual/final-logit margin |
+| Observed: Gate/Up and strict SwiGLU match on the same `ffn_norm` input | close complete FFN kernel correctness |
+| Final logits show a narrow expected-versus-selected margin consistent with measured residual drift | validate quality statistically; do not force bitwise kernel parity |
 | A numerical change improves the selected token but worsens the control distribution | reject it as overfitting |
 
 Any accepted correction must preserve the fixed trajectory, pass at least 128 tokens of natural decode, improve or

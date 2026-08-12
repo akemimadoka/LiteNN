@@ -151,13 +151,15 @@ P0 implementation order:
       outputs are now compared by a reusable JSON diagnostic. Production matches captured output within `3.67e-7`
       NRMSE and `1.15e-5` max absolute error; both share the expected `1.21%-2.42%` Q8_K distance from exact. Down is
       closed as the mismatch owner.
-    - [ ] P0: feed identical captured `ffn_norm` activations through Q4_K Gate/Up and strict SwiGLU for blocks 43-47.
-      Compare exact represented-weight projection, ggml vec-dot, LiteNN grouped field-v4 execution, and captured
-      Gate/Up/SwiGLU before changing FFN math.
+    - [x] P0: feed identical captured `ffn_norm` activations through Q4_K Gate/Up and strict SwiGLU for blocks 43-47.
+      The JSON diagnostic compares exact represented-weight, ggml vec-dot, source-Float32, grouped field-v4/Q8_K, and
+      captured outputs. Production Gate/Up/SwiGLU match within `1.44e-7/2.21e-7/3.62e-7` NRMSE; applying only LiteNN
+      strict SwiGLU to captured Gate/Up stays below `6.05e-8`. Complete FFN correctness is closed.
     - [ ] P0: reproduce the default-thread diagnostic AOT long loop. One run stalled inside step 4 for over five
       minutes on one core after three normal steps; explicit T8 completed the same 32-step trajectory.
-    - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. Change model
-      math only after a specific boundary exceeds the neighborhood distribution and explains the logit-rank crossing.
+    - [ ] P0: align final RMSNorm/logits capture and report expected-vs-selected top-k margin at index 23. With attention
+      output and the complete FFN implementation closed by same-input evidence, this is now the primary correctness
+      gate. Change model math only if the aligned decomposition identifies a unique implementation error.
     - [ ] P1: add 128-token natural parity, corpus perplexity delta, and task-quality gates independently of throughput.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
