@@ -45,7 +45,9 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated cross-runtime stage decision:
 `docs/QwenCPUDecodeStageComparison_2026-08-09.md`; accepted sustained 128-token control and position-growth decision:
 `docs/QwenCPUDecodeSustained128Control_2026-08-09.md`; position-binned reference-stage evidence and its rejected gates:
-`docs/QwenCPUDecodePositionStageControl_2026-08-09.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+`docs/QwenCPUDecodePositionStageControl_2026-08-09.md`; LiteNN position attribution, grouped-attention parallelism,
+thread-pool waterfall, first-cache memory evidence, and the resulting re-prioritization:
+`docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
 historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
 LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
 `166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
@@ -75,22 +77,41 @@ P0 implementation order:
     remains the default; capability, helper-symbol, rodata-v6, cache-v4, CLI, and smoke-report identity are complete.
   - [ ] Select the vector-math owner, implement the bounded standalone/fused helpers, and pass standalone plus
     exact-token full-model promotion gates before reopening any other implementation direction.
-  - [ ] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
+  - [x] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
     control measures LiteNN/reference medians of `4.768/5.700 token/s` (`-15.01%` paired median); LiteNN module time
     rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. The first reference-side
     position campaign has exact call shape, `99.53%` aggregate coverage, and a stable power policy, but is rejected by
     the strict overhead/bin-variance gates. Its raw within-profile Attention/Gate-Up ratio stays within
-    `0.5299-0.5321`, so it does not support promoting generic Attention/KV work. Add accepted LiteNN position-binned
-    stage accounting next.
+    `0.5299-0.5321`, so it does not support promoting generic Attention/KV work. Six LiteNN profile processes then
+    identified `attention.core` as the only stable position-growth owner, with `15.8-18.7 ms/token` first-to-last-bin
+    growth. Evidence: `docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`.
     - [x] Add benchmark-only per-step reference counters for Attention, Gate/Up, activation, Down, and logits, plus
       configurable position bins and in-process power-policy rejection.
     - [x] Run the first three-pair 128-token reference campaign and document the rejected gates separately. Clean and
       profile CVs pass at `1.16/1.62%`, but whole overhead is `-3.08%`; per-bin clean CV reaches `7.06%` and one
       sub-millisecond activation bin reaches `17.01%` CV.
-    - [ ] Add LiteNN clean/profile position bins and split QKV projection, RoPE/KV append, score-softmax-value,
+    - [x] Add LiteNN clean/profile position bins and split QKV projection, RoPE/KV append, score-softmax-value,
       attention output, Gate/Up, activation, Down, logits, and generated-code residual.
+    - [x] Parallelize grouped active-prefix attention by KV head with a bounded work threshold and exact T1/T8 parity.
+      Qwen-shaped `context=128/2048` microbenchmarks improved from `0.365/6.72 ms` serial to `0.048/0.956 ms` after
+      the complete scheduling fix.
+    - [x] Add attention thread-pool waterfall events and replace unconditional semaphore release with a
+      polling-to-sleep handshake. Per-call dispatch fell from `0.191633` to `0.061233 ms`, parallel wall from
+      `0.247160` to `0.150719 ms`, and the final profile's attention growth fell from `17.134` to `4.073 ms/token`.
+      The adjacent three-pair whole-model result remains directional because clean variance and bin-overhead gates fail.
     - [ ] Add a dual absolute/relative variance rule for sub-millisecond stages and repeat at least five alternating
       reference pairs without relaxing whole-token or multi-millisecond stage gates.
+    - [ ] P0: rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under one stable power
+      policy. Require exact trajectory, no fallback, cache hit, whole/bin variance and overhead gates; retain and report
+      outliers instead of deleting them. This is the acceptance gate for the observed directional `7.02%` module gain.
+    - [ ] P0: capture continuous peak working set, private bytes, mapped model/artifact bytes, and prepared-weight bytes
+      during first cache publication. Remove avoidable full-model heap copies; the current single sample reaches about
+      `27.4 GB` while publishing `9.160 GB` of prepared weights from an approximately 9 GB archive.
+    - [ ] P1: use matched cross-runtime stages and cache-cold projection streams to attribute the post-attention
+      projection budget. QKV, attention output, Gate/Up, Down, and logits currently aggregate to `163.473 ms/token`
+      (`80.71%` of LiteNN module time), but local share alone must not select a kernel rewrite.
+    - [ ] P1: A/B shape-aware worker subsets and signal masks for medium projection/attention work. Require lower
+      dispatch/barrier time and whole-model gain; do not trade reduced wakeups for compute under-utilization.
   - [ ] Localize natural logit drift independently of performance. The first argmax mismatch is reproducible at
     generated index 23; functional/stateful logits are bit-identical and source/prepacked logits are very close, so add
     per-layer hidden-state checkpoints and model-quality gates rather than blaming state aliasing or weight packing.

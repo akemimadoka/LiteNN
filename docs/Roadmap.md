@@ -3299,7 +3299,7 @@ Priority classes:
             token ids/text, no fallback, and a regenerated cache-v4 artifact that imports the intended helper.
       - [ ] After promotion, repeat the accepted five-stage aggregate profile and require that activation moves without
             transferring its cost to Down, dispatch, or the module residual.
-      - [ ] P0 parallel: attribute the sustained context-dependent module slope before selecting Attention/KV
+      - [x] P0 parallel: attribute the sustained context-dependent module slope before selecting Attention/KV
             implementation work.
             - [x] Add fixed-reference replay while retaining natural argmax diagnostics, exact token-identity gates,
                   UTF-8 file transport, and Windows newline recovery.
@@ -3308,18 +3308,35 @@ Priority classes:
                   remains zero.
             - [x] Establish LiteNN's position trend: module mean rises from `198.080 ms` at positions 1-16 to
                   `221.030 ms` at positions 113-128 while sampling remains below `0.2 ms`.
-            - [ ] Add accepted position-binned counters to both runtimes and split QKV projection, RoPE/KV append,
+            - [x] Add position-binned counters to both runtimes and split QKV projection, RoPE/KV append,
                   score-softmax-value, attention output, FFN, logits, and residual before promoting a
-                  context-sensitive kernel.
+                  context-sensitive kernel. The reference campaign remains rejected by strict variance/overhead gates;
+                  six LiteNN profile processes consistently identify `attention.core` as the position-growth owner.
                   - [x] Add reference-side per-token five-stage counters, configurable bins, and power-policy rejection.
                         The first three-pair run has exact call shape and `99.53%` aggregate coverage, but is rejected:
                         whole overhead is `-3.08%`, clean bin CV reaches `7.06%`, and a `0.19 ms` activation bin reaches
                         `17.01%` CV. Raw Attention/Gate-Up ratios remain within `0.5299-0.5321`, providing no evidence for
                         a reference Attention-share increase over positions 1-128.
-                  - [ ] Add LiteNN clean/profile bins and separate QKV projection, RoPE/KV append,
+                  - [x] Add LiteNN clean/profile bins and separate QKV projection, RoPE/KV append,
                         score-softmax-value, attention output, Gate/Up, activation, Down, logits, and residual.
+                  - [x] Parallelize grouped active-prefix attention by KV head, add its thread-pool waterfall, and replace
+                        unconditional worker semaphore release with a polling-to-sleep handshake. Qwen-shaped
+                        `context=128/2048` microbenchmarks improve from `0.365/6.72 ms` T1 to `0.048/0.956 ms` T8 with
+                        exact output; the final profile reduces the attention first-to-last-bin growth from `17.134`
+                        to `4.073 ms/token`. The adjacent whole-model `7.02%` direction is not accepted because clean
+                        variance and bin-overhead gates still fail. Full evidence and next gates are recorded in
+                        `docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`.
                   - [ ] Add a dual absolute/relative variance gate for sub-millisecond stages and rerun at least five
                         alternating reference pairs without weakening whole-token or larger-stage gates.
+                  - [ ] Rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under a stable
+                        power policy before counting the whole-model gain. Preserve every outlier and require exact
+                        trajectory, no fallback, cache hit, whole/bin variance, overhead, and coverage gates.
+                  - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
+                        another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
+                        `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
+                  - [ ] Continuously measure first-cache peak residency and remove avoidable full-model copies. One
+                        observed write-weights sample reached about `27.4 GB` while publishing `9.160 GB` from an
+                        approximately 9 GB archive, making cache construction memory a production P0.
             - [ ] Localize the first natural logit mismatch with per-layer checkpoints. It occurs at generated index
                   23; functional/stateful outputs are bit-identical and source/prepacked outputs are close, excluding
                   those two suspected ownership boundaries.
@@ -3827,6 +3844,17 @@ These improvements do not require a compatibility break and should not block vNe
   use it as the production execution path.
 
 ## Date Notes
+
+### 2026-08-12
+
+- Completed LiteNN position-binned CPU AOT stage attribution. Across six profile processes, `attention.core` was the
+  only stable first-to-last-bin growth owner, increasing by `15.8-18.7 ms/token` over the fixed 128-token trajectory.
+- Parallelized grouped active-prefix attention by KV head and repaired the CPU pool's polling-to-sleep handshake.
+  Qwen-shaped `context=128/2048` microbenchmarks now measure `0.048/0.956 ms` at T8 versus `0.365/6.72 ms` at T1,
+  with exact output. The final profile reduces attention's position-growth delta from `17.134` to `4.073 ms/token`.
+- Kept the adjacent `7.02%` module-time direction unaccepted because clean variance and position-bin overhead gates
+  fail. Added a five-pair cross-runtime acceptance rerun, projection-stage attribution, and first-cache peak residency
+  as the next evidence-backed work. Full data: `docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`.
 
 ### 2026-08-09
 
