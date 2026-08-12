@@ -23,6 +23,21 @@ QUALITY_SCHEMA = "litenn.natural_generation_quality.v1"
 GENERATION_SCHEMA = "litenn.natural_generation.v1"
 REPORT_SCHEMA = "litenn.qwen_first_divergence_attribution.v1"
 NRMSE_THRESHOLDS = (1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2)
+SUB_LAYER_BOUNDARIES = (
+    "attention_norm",
+    "query_rotated",
+    "key_rotated",
+    "value",
+    "attention_context",
+    "attention_output",
+    "attention_residual",
+    "ffn_norm",
+    "ffn_gate",
+    "ffn_up",
+    "ffn_swiglu",
+    "ffn_down",
+    "post_ffn",
+)
 
 
 def load_json(path: Path, schema: str) -> dict[str, object]:
@@ -144,23 +159,100 @@ def summarize_comparison(comparison: dict[str, object], generated_index: int) ->
     }
 
 
+def summarize_sub_layers(
+    reference_root: Path,
+    candidate_root: Path,
+    generated_index: int,
+    blocks: list[int],
+    absolute_tolerance: float,
+    relative_tolerance: float,
+    output_dir: Path,
+) -> dict[str, object]:
+    boundary_reports: dict[str, dict[str, object]] = {}
+    coordinates: list[dict[str, object]] = []
+    for boundary in SUB_LAYER_BOUNDARIES:
+        reference_manifest = reference_root / boundary / "manifest.tsv"
+        candidate_manifest = candidate_root / boundary / "manifest.tsv"
+        if not reference_manifest.is_file() or not candidate_manifest.is_file():
+            raise RuntimeError(f"sub-layer boundary {boundary} is missing a manifest")
+        comparison = layer_compare.compare_manifests(
+            reference_manifest,
+            candidate_manifest,
+            absolute_tolerance,
+            relative_tolerance,
+            {generated_index},
+        )
+        boundary_reports[boundary] = comparison
+        for row in comparison["rows"]:
+            coordinate = compact_row(row)
+            coordinate["boundary"] = boundary
+            coordinates.append(coordinate)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "boundary_comparisons.json").write_text(
+        json.dumps(boundary_reports, indent=2) + "\n", encoding="utf-8"
+    )
+    per_block: list[dict[str, object]] = []
+    for block in blocks:
+        rows = [row for row in coordinates if row["layer"] == block]
+        rows.sort(key=lambda row: SUB_LAYER_BOUNDARIES.index(str(row["boundary"])))
+        if len(rows) != len(SUB_LAYER_BOUNDARIES):
+            raise RuntimeError(f"sub-layer block {block} does not cover every boundary")
+        first_by_threshold: dict[str, str | None] = {}
+        for threshold in NRMSE_THRESHOLDS:
+            first = next(
+                (
+                    str(row["boundary"])
+                    for row in rows
+                    if row["normalizedRmsError"] is not None
+                    and float(row["normalizedRmsError"]) >= threshold
+                ),
+                None,
+            )
+            first_by_threshold[f"{threshold:.0e}"] = first
+        peak = max(rows, key=lambda row: float(row["normalizedRmsError"] or 0.0))
+        previous = 0.0
+        increases: list[tuple[float, dict[str, object]]] = []
+        for row in rows:
+            nrmse = float(row["normalizedRmsError"] or 0.0)
+            increases.append((nrmse - previous, row))
+            previous = nrmse
+        increase, increase_row = max(increases, key=lambda item: item[0])
+        per_block.append(
+            {
+                "block": block,
+                "firstBoundaryByNrmseThreshold": first_by_threshold,
+                "peakNrmse": peak,
+                "largestPositiveNrmseIncrease": {**increase_row, "increase": increase},
+                "boundaries": rows,
+            }
+        )
+    return {"boundaryCount": len(SUB_LAYER_BOUNDARIES), "blocks": per_block}
+
+
 def markdown_report(report: dict[str, object]) -> str:
     lines = [
         "# Qwen First-Divergence Layer Attribution",
         "",
         "Each row compares LiteNN and llama.cpp after replaying the exact reference token history.",
         "",
-        "| Case | Decision | Layers | First exact | First NRMSE >=1e-4 | Peak layer | Peak NRMSE | Largest jump layer |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| Case | Decision | Layers | First NRMSE >=1e-4 | Peak layer | Peak NRMSE | First sub-layer >=1e-4 | Peak sub-layer |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
     ]
     for case in report["cases"]:
         summary = case["summary"]
         first_material = summary["firstLayerByNrmseThreshold"]["1e-04"]
+        sub_layer = case.get("subLayerSummary")
+        first_sub_layer = "n/a"
+        peak_sub_layer = "n/a"
+        if isinstance(sub_layer, dict) and sub_layer.get("blocks"):
+            first_block = sub_layer["blocks"][0]
+            first_sub_layer = first_block["firstBoundaryByNrmseThreshold"]["1e-04"]
+            peak_sub_layer = first_block["peakNrmse"]["boundary"]
         lines.append(
             f"| {case['name']} | {case['firstDivergenceDecisionStep']} | {summary['layerCount']} | "
-            f"{summary['firstExactFailingLayer']} | {first_material} | {summary['peakNrmse']['layer']} | "
-            f"{summary['peakNrmse']['normalizedRmsError']:.6g} | "
-            f"{summary['largestPositiveNrmseIncrease']['layer']} |"
+            f"{first_material} | {summary['peakNrmse']['layer']} | "
+            f"{summary['peakNrmse']['normalizedRmsError']:.6g} | {first_sub_layer} | {peak_sub_layer} |"
         )
     lines.extend(
         [
@@ -187,6 +279,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cpu-aot-threads", type=int)
     parser.add_argument("--absolute-tolerance", type=float, default=1.0e-5)
     parser.add_argument("--relative-tolerance", type=float, default=1.0e-5)
+    parser.add_argument(
+        "--sub-layer-blocks",
+        default="0",
+        help="Comma-separated blocks for internal attribution; empty disables sub-layer capture",
+    )
     parser.add_argument("--reuse-artifacts", action="store_true")
     return parser
 
@@ -199,6 +296,12 @@ def main() -> int:
         raise SystemExit("--require-aot-cache-hit requires --aot-cache-dir")
     if args.absolute_tolerance < 0 or args.relative_tolerance < 0:
         raise SystemExit("checkpoint tolerances must be non-negative")
+    try:
+        sub_layer_blocks = sorted({int(value) for value in args.sub_layer_blocks.split(",") if value})
+    except ValueError as error:
+        raise SystemExit("--sub-layer-blocks must contain comma-separated non-negative integers") from error
+    if any(block < 0 for block in sub_layer_blocks):
+        raise SystemExit("--sub-layer-blocks must contain comma-separated non-negative integers")
 
     quality_report = args.quality_report.resolve()
     quality = load_json(quality_report, QUALITY_SCHEMA)
@@ -289,16 +392,58 @@ def main() -> int:
         (comparison_dir / "layer_checkpoint_comparison.md").write_text(
             layer_compare.markdown_report(comparison), encoding="utf-8"
         )
-        case_reports.append(
-            {
-                "name": name,
-                "firstDivergenceDecisionStep": divergence,
-                "promptTokenCount": len(prompt),
-                "referencePrefixTokenCount": len(generated_prefix),
-                "comparisonReport": str(comparison_json.relative_to(workdir)),
-                "summary": summarize_comparison(comparison, divergence),
-            }
-        )
+        case_report: dict[str, object] = {
+            "name": name,
+            "firstDivergenceDecisionStep": divergence,
+            "promptTokenCount": len(prompt),
+            "referencePrefixTokenCount": len(generated_prefix),
+            "comparisonReport": str(comparison_json.relative_to(workdir)),
+            "summary": summarize_comparison(comparison, divergence),
+        }
+        if sub_layer_blocks:
+            sub_reference_dir = case_dir / "reference_sub_layers"
+            sub_candidate_dir = case_dir / "litenn_sub_layers"
+            sub_comparison_dir = case_dir / "sub_layer_comparison"
+            if not args.reuse_artifacts:
+                shutil.rmtree(sub_reference_dir, ignore_errors=True)
+                shutil.rmtree(sub_candidate_dir, ignore_errors=True)
+                sub_reference_command = [
+                    str(args.llamacpp_tokenizer_tool.resolve()),
+                    "decode-sub-layer-checkpoints",
+                    str(args.model.resolve()),
+                    prompt_text,
+                    prefix_text,
+                    str(divergence),
+                    ",".join(str(block) for block in sub_layer_blocks),
+                    str(sub_reference_dir),
+                ]
+                run_logged(f"{name}_sub_layer_reference", sub_reference_command, case_dir / "logs")
+
+                sub_candidate_command = candidate_command.copy()
+                sub_candidate_command[sub_candidate_command.index("--layer-checkpoint-dir") + 1] = str(
+                    sub_candidate_dir
+                )
+                sub_candidate_command[sub_candidate_command.index("--workdir") + 1] = str(
+                    case_dir / "litenn_sub_layer_smoke"
+                )
+                sub_candidate_command.extend(
+                    [
+                        "--sub-layer-checkpoint-blocks",
+                        ",".join(str(block) for block in sub_layer_blocks),
+                        "--paged-reference-decode",
+                    ]
+                )
+                run_logged(f"{name}_sub_layer_litenn", sub_candidate_command, case_dir / "logs")
+            case_report["subLayerSummary"] = summarize_sub_layers(
+                sub_reference_dir,
+                sub_candidate_dir,
+                divergence,
+                sub_layer_blocks,
+                args.absolute_tolerance,
+                args.relative_tolerance,
+                sub_comparison_dir,
+            )
+        case_reports.append(case_report)
 
     report: dict[str, object] = {
         "schema": REPORT_SCHEMA,

@@ -92,7 +92,51 @@ class QwenFirstDivergenceAttributionTest(unittest.TestCase):
                 ]
             }
         )
-        self.assertIn("| reasoning | 3 | 48 | 0 | 12 | 47 | 0.02 | 31 |", markdown)
+        self.assertIn("| reasoning | 3 | 48 | 12 | 47 | 0.02 | n/a | n/a |", markdown)
+
+    def test_sub_layer_summary_preserves_boundary_order(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            reference = root / "reference"
+            candidate = root / "candidate"
+            for boundary_index, boundary in enumerate(attribution.SUB_LAYER_BOUNDARIES):
+                nrmse = 1.0e-6 * (boundary_index + 1)
+                comparison = {
+                    "rows": [
+                        {
+                            "generated_index": 0,
+                            "layer": 0,
+                            "normalized_rms_error": nrmse,
+                            "cosine_similarity": 1.0 - nrmse,
+                            "max_absolute_error": nrmse,
+                            "mean_absolute_error": nrmse,
+                        }
+                    ],
+                    "first_failing_layer_by_generated_index": {"0": 0},
+                }
+                boundary_dir = root / "fixtures" / boundary
+                boundary_dir.mkdir(parents=True)
+                (boundary_dir / "comparison.json").write_text(json.dumps(comparison), encoding="utf-8")
+
+            original = attribution.layer_compare.compare_manifests
+            try:
+                attribution.layer_compare.compare_manifests = lambda reference_path, *_args, **_kwargs: json.loads(
+                    (root / "fixtures" / reference_path.parent.name / "comparison.json").read_text(encoding="utf-8")
+                )
+                for base in (reference, candidate):
+                    for boundary in attribution.SUB_LAYER_BOUNDARIES:
+                        path = base / boundary / "manifest.tsv"
+                        path.parent.mkdir(parents=True)
+                        path.write_text("fixture", encoding="utf-8")
+                summary = attribution.summarize_sub_layers(
+                    reference, candidate, 0, [0], 1.0e-5, 1.0e-5, root / "output"
+                )
+            finally:
+                attribution.layer_compare.compare_manifests = original
+            block = summary["blocks"][0]
+            self.assertEqual(block["boundaries"][0]["boundary"], "attention_norm")
+            self.assertEqual(block["boundaries"][-1]["boundary"], "post_ffn")
+            self.assertEqual(block["peakNrmse"]["boundary"], "post_ffn")
 
 
 if __name__ == "__main__":
