@@ -4130,10 +4130,22 @@ TEST(GGUFLLaMACausalLM, GroupedActivePrefixAttentionParallelHeadsMatchSerial)
 		    groupsPerKVHead, threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
 	};
 
-	invoke(serial, 1);
-	invoke(parallel, 8);
+	std::vector<CompiledModuleCPUParallelProfileEvent> parallelEvents;
+	{
+		CompiledModuleCPUHelperProfiler profiler;
+		invoke(serial, 1);
+		invoke(parallel, 8);
+		parallelEvents = profiler.SnapshotParallel();
+	}
 	EXPECT_EQ(parallel, serial);
 	EXPECT_TRUE(std::ranges::any_of(parallel, [](float value) { return value != 0.0F; }));
+	ASSERT_EQ(parallelEvents.size(), 2u);
+	EXPECT_EQ(parallelEvents[0].participantCount, 1u);
+	EXPECT_EQ(parallelEvents[1].participantCount, 8u);
+	EXPECT_EQ(parallelEvents[1].signaledWorkerCount, 7u);
+	EXPECT_EQ(parallelEvents[1].taskClaims, 8u);
+	EXPECT_EQ(parallelEvents[1].workUnits, 8u);
+	EXPECT_GT(parallelEvents[1].parallelWallMilliseconds, 0.0);
 }
 
 TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntimePosition)

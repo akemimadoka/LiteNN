@@ -1251,7 +1251,6 @@ namespace
 			aggregate->workUnits += event.workUnits;
 			aggregate->taskClaims += event.taskClaims;
 			aggregate->participants += event.participantCount;
-			aggregate->times.signaledWorkers += event.signaledWorkerCount;
 			aggregate->minTaskClaims = std::min(aggregate->minTaskClaims, event.minParticipantTaskClaims);
 			aggregate->maxTaskClaims = std::max(aggregate->maxTaskClaims, event.maxParticipantTaskClaims);
 			aggregate->minWorkUnits = std::min(aggregate->minWorkUnits, event.minParticipantWorkUnits);

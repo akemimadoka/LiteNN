@@ -1519,6 +1519,54 @@ namespace
 		}
 	}
 
+	void RecordGroupedActivePrefixAttentionParallelProfile(std::string_view detail, std::uint64_t activeKVHeads,
+	                                                       const LiteNNCPUThreadPool::ParallelForProfile& parallel)
+	{
+		if (!CompiledModuleCPUHelperProfilerAccess::Enabled())
+		{
+			return;
+		}
+		CompiledModuleCPUParallelProfileEvent event{
+			.helper = "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+			.detail = std::string(detail),
+			.workUnits = activeKVHeads,
+			.participantCount = parallel.participants.size(),
+			.signaledWorkerCount = parallel.signaledWorkerCount,
+			.threadPoolLockWaitMilliseconds = parallel.lockWaitMilliseconds,
+			.dispatchMilliseconds = parallel.dispatchMilliseconds,
+			.parallelWallMilliseconds = parallel.wallMilliseconds,
+			.barrierWaitMilliseconds = parallel.barrierWaitMilliseconds,
+		};
+		if (!parallel.participants.empty())
+		{
+			event.minParticipantTaskClaims = std::numeric_limits<std::uint64_t>::max();
+			event.minParticipantWorkUnits = std::numeric_limits<std::uint64_t>::max();
+			event.minParticipantUsefulMilliseconds = std::numeric_limits<double>::max();
+			for (std::size_t i = 0; i < parallel.participants.size(); ++i)
+			{
+				const auto& participant = parallel.participants[i];
+				event.taskClaims += participant.taskClaims;
+				event.minParticipantTaskClaims = std::min(event.minParticipantTaskClaims, participant.taskClaims);
+				event.maxParticipantTaskClaims = std::max(event.maxParticipantTaskClaims, participant.taskClaims);
+				event.minParticipantWorkUnits = std::min(event.minParticipantWorkUnits, participant.workUnits);
+				event.maxParticipantWorkUnits = std::max(event.maxParticipantWorkUnits, participant.workUnits);
+				event.minParticipantUsefulMilliseconds =
+				    std::min(event.minParticipantUsefulMilliseconds, participant.usefulMilliseconds);
+				event.maxParticipantUsefulMilliseconds =
+				    std::max(event.maxParticipantUsefulMilliseconds, participant.usefulMilliseconds);
+				if (i == 0)
+				{
+					event.callerUsefulMilliseconds = participant.usefulMilliseconds;
+				}
+				else
+				{
+					event.workerUsefulMilliseconds += participant.usefulMilliseconds;
+				}
+			}
+		}
+		CompiledModuleCPUHelperProfilerAccess::RecordParallel(std::move(event));
+	}
+
 	extern "C" void litenn_cpu_active_prefix_attention_f32(
 	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
 	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
@@ -1695,14 +1743,14 @@ namespace
 		}
 		const auto threadCount = ResolveGroupedActivePrefixAttentionThreadCount(
 		    queryRows, queryColumns, keyHeads, outColumns, activeRows, queryGroupsPerKVHead, requestedThreadCount);
-		CPUAOTHelperProfileTimer profileTimer(
-		    "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+		const auto profileDetail =
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
-		        ? std::format(
-		              "queries={}x{} keys={}x{}x{} out={}x{} groups_per_kv={} requested_threads={} resolved_threads={}",
-		              queryRows, queryColumns, keyRows, keyHeads, keyColumns, outRows, outColumns, queryGroupsPerKVHead,
-		              requestedThreadCount, threadCount)
-		        : std::string{});
+		        ? std::format("queries={}x{} keys={}x{}x{} out={}x{} groups_per_kv={} "
+		                      "requested_threads={} resolved_threads={}",
+		                      queryRows, queryColumns, keyRows, keyHeads, keyColumns, outRows, outColumns,
+		                      queryGroupsPerKVHead, requestedThreadCount, threadCount)
+		        : std::string{};
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3_grouped", profileDetail);
 
 		GroupedActivePrefixAttentionContext context{
 			.queries = queryAligned + queryOffset,
@@ -1730,12 +1778,28 @@ namespace
 		    std::min<std::int64_t>(keyHeads, (queryRows + queryGroupsPerKVHead - 1) / queryGroupsPerKVHead));
 		if (threadCount <= 1)
 		{
+			LiteNNCPUThreadPool::ParallelForProfile parallelProfile;
+			const auto start = CompiledModuleCPUHelperProfilerAccess::Enabled()
+			                       ? std::chrono::steady_clock::now()
+			                       : std::chrono::steady_clock::time_point{};
 			ComputeGroupedActivePrefixAttentionRange(0, activeKVHeads, &context);
+			if (CompiledModuleCPUHelperProfilerAccess::Enabled())
+			{
+				const auto elapsed =
+				    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+				parallelProfile.participants = { LiteNNCPUThreadPool::ParticipantProfile{
+					.taskClaims = 1, .workUnits = activeKVHeads, .usefulMilliseconds = elapsed } };
+				parallelProfile.wallMilliseconds = elapsed;
+			}
+			RecordGroupedActivePrefixAttentionParallelProfile(profileDetail, activeKVHeads, parallelProfile);
 			return;
 		}
+		LiteNNCPUThreadPool::ParallelForProfile parallelProfile;
 		LiteNNCPUParallelFor(0, activeKVHeads, 1, ComputeGroupedActivePrefixAttentionRange, &context, threadCount,
 		                     ResolveCPUAOTAffinityPolicy(schedulingPolicyValue),
-		                     ResolveCPUAOTWorkerWaitPolicy(schedulingPolicyValue));
+		                     ResolveCPUAOTWorkerWaitPolicy(schedulingPolicyValue),
+		                     CompiledModuleCPUHelperProfilerAccess::Enabled() ? &parallelProfile : nullptr);
+		RecordGroupedActivePrefixAttentionParallelProfile(profileDetail, activeKVHeads, parallelProfile);
 	}
 
 	extern "C" void litenn_cpu_grouped_paged_attention_f32(
