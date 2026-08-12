@@ -497,6 +497,11 @@ add_test(
     COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/GGUFGenerationQualityGateTest.py"
 )
 
+add_test(
+    NAME QwenFirstDivergenceAttribution.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/QwenFirstDivergenceAttributionTest.py"
+)
+
 if(LITENN_ENABLE_MLIR)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler
