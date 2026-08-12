@@ -309,7 +309,8 @@ extern "C" void litenn_cpu_active_prefix_attention_f32_rank3_grouped(
     std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
     std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
     std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
-    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead);
+    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead, std::uint64_t requestedThreadCount,
+    std::uint64_t schedulingPolicyValue);
 #endif
 
 namespace
@@ -500,7 +501,9 @@ namespace
 		ActivePrefixAttentionBenchmarkSpec{ "qwen_ctx_8192", 8192, 8, 128 },
 	};
 
-	constexpr std::array<GroupedActivePrefixAttentionBenchmarkSpec, 2> kGroupedActivePrefixAttentionBenchmarkSpecs = {
+	constexpr std::array<GroupedActivePrefixAttentionBenchmarkSpec, 4> kGroupedActivePrefixAttentionBenchmarkSpecs = {
+		GroupedActivePrefixAttentionBenchmarkSpec{ "qwen_gqa_ctx_16", 16, 40, 8, 128, 5 },
+		GroupedActivePrefixAttentionBenchmarkSpec{ "qwen_gqa_ctx_64", 64, 40, 8, 128, 5 },
 		GroupedActivePrefixAttentionBenchmarkSpec{ "qwen_gqa_ctx_128", 128, 40, 8, 128, 5 },
 		GroupedActivePrefixAttentionBenchmarkSpec{ "qwen_gqa_ctx_2048", 2048, 40, 8, 128, 5 },
 	};
@@ -3029,7 +3032,8 @@ namespace
 	}
 
 	void BMGroupedActivePrefixAttentionRank3Helper(benchmark::State& state,
-	                                               const GroupedActivePrefixAttentionBenchmarkSpec& spec, bool grouped)
+	                                               const GroupedActivePrefixAttentionBenchmarkSpec& spec, bool grouped,
+	                                               std::uint64_t requestedThreadCount)
 	{
 		const auto rowElements = spec.kvHeads * spec.headDim;
 		const auto elementCount = spec.activeRows * rowElements;
@@ -3080,8 +3084,8 @@ namespace
 			    static_cast<std::int64_t>(spec.headDim), 1, nullptr, position.data(), 0,
 			    static_cast<std::int64_t>(position.size()), 1, nullptr, target.data(), 0,
 			    static_cast<std::int64_t>(spec.queryHeads), static_cast<std::int64_t>(spec.headDim),
-			    static_cast<std::int64_t>(spec.headDim), 1, scale,
-			    static_cast<std::int64_t>(spec.queryGroupsPerKVHead));
+			    static_cast<std::int64_t>(spec.headDim), 1, scale, static_cast<std::int64_t>(spec.queryGroupsPerKVHead),
+			    requestedThreadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
 		};
 
 		if (grouped)
@@ -3112,6 +3116,7 @@ namespace
 		state.counters["kv_heads"] = benchmark::Counter(static_cast<double>(spec.kvHeads));
 		state.counters["query_groups_per_kv_head"] = benchmark::Counter(static_cast<double>(spec.queryGroupsPerKVHead));
 		state.counters["query_heads"] = benchmark::Counter(static_cast<double>(spec.queryHeads));
+		state.counters["requested_threads"] = benchmark::Counter(static_cast<double>(requestedThreadCount));
 	}
 
 	std::vector<Tensor<CPU>> AllocateOutputs(const CompiledModule<CPU>& module)
@@ -5585,13 +5590,22 @@ namespace
 		}
 		for (const auto shape : kGroupedActivePrefixAttentionBenchmarkSpecs)
 		{
-			for (const auto grouped : { false, true })
+			struct GroupedMode
+			{
+				const char* name;
+				bool grouped;
+				std::uint64_t requestedThreads;
+			};
+			for (const auto mode : { GroupedMode{ "repeated", false, 1 }, GroupedMode{ "grouped_t1", true, 1 },
+			                         GroupedMode{ "grouped_t8", true, 8 } })
 			{
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("ActivePrefixAttentionGroupedRank3Helper/{}/{}/rows:{}/qheads:{}/kvheads:{}/dim:{}",
-				                shape.name, grouped ? "grouped" : "repeated", shape.activeRows, shape.queryHeads,
-				                shape.kvHeads, shape.headDim),
-				    [=](benchmark::State& state) { BMGroupedActivePrefixAttentionRank3Helper(state, shape, grouped); });
+				                shape.name, mode.name, shape.activeRows, shape.queryHeads, shape.kvHeads,
+				                shape.headDim),
+				    [=](benchmark::State& state) {
+					    BMGroupedActivePrefixAttentionRank3Helper(state, shape, mode.grouped, mode.requestedThreads);
+				    });
 				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
 		}

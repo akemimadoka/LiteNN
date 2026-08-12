@@ -460,9 +460,9 @@ namespace litenn
 
 			auto format = builder.create<mlir::arith::ConstantIntOp>(loc, formatAttr.getInt(), 64).getResult();
 			auto threadCount =
-			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulThreadCount, 64).getResult();
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.cpuAOTThreadCount, 64).getResult();
 			auto affinityPolicy =
-			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulAffinityPolicy, 64).getResult();
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.cpuAOTSchedulingPolicy, 64).getResult();
 			auto dynamicRhs = builder.create<mlir::memref::CastOp>(loc, dynamicRhsType, rhs).getResult();
 			auto dynamicOut = builder.create<mlir::memref::CastOp>(loc, dynamicOutType, out).getResult();
 			if (fuseSwiGLU)
@@ -753,9 +753,9 @@ namespace litenn
 				callArgs.push_back(builder.create<mlir::arith::ConstantIntOp>(loc, width, 64).getResult());
 			}
 			callArgs.push_back(
-			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulThreadCount, 64).getResult());
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.cpuAOTThreadCount, 64).getResult());
 			callArgs.push_back(
-			    builder.create<mlir::arith::ConstantIntOp>(loc, options.ggmlBlockMatMulAffinityPolicy, 64).getResult());
+			    builder.create<mlir::arith::ConstantIntOp>(loc, options.cpuAOTSchedulingPolicy, 64).getResult());
 			builder.create<mlir::func::CallOp>(loc, helper, callArgs);
 			op.erase();
 			return mlir::success();
@@ -1064,7 +1064,8 @@ namespace litenn
 		}
 
 		mlir::LogicalResult rewriteGroupedActivePrefixAttentionCall(mlir::ModuleOp module, mlir::linalg::GenericOp op,
-		                                                            mlir::OpBuilder& builder)
+		                                                            mlir::OpBuilder& builder,
+		                                                            const LLVMCodegenOptions& options)
 		{
 			auto scaleAttr = op->getAttrOfType<mlir::FloatAttr>(kGroupedActivePrefixAttentionAttr);
 			auto groupsAttr = op->getAttrOfType<mlir::IntegerAttr>(kGroupedActivePrefixAttentionGroupsAttr);
@@ -1109,10 +1110,10 @@ namespace litenn
 			    keysType.getElementType(), dynamicLayoutRank3);
 			auto dynamicI64Rank1 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, positionType.getElementType(),
 			                                             dynamicLayoutRank1);
-			auto funcType =
-			    builder.getFunctionType(mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank3, dynamicF32Rank3,
-			                                             dynamicI64Rank1, dynamicF32Rank2, f64, builder.getI64Type() },
-			                            mlir::TypeRange{});
+			auto funcType = builder.getFunctionType(
+			    mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank3, dynamicF32Rank3, dynamicI64Rank1, dynamicF32Rank2,
+			                     f64, builder.getI64Type(), builder.getI64Type(), builder.getI64Type() },
+			    mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGroupedActivePrefixAttentionRank3Helper);
 			if (!helper)
 			{
@@ -1134,9 +1135,16 @@ namespace litenn
 			auto scale = builder.create<mlir::arith::ConstantFloatOp>(loc, f64, scaleAttr.getValue()).getResult();
 			auto groups =
 			    builder.create<mlir::arith::ConstantIntOp>(loc, builder.getI64Type(), groupsAttr.getInt()).getResult();
+			auto threadCount =
+			    builder.create<mlir::arith::ConstantIntOp>(loc, builder.getI64Type(), options.cpuAOTThreadCount)
+			        .getResult();
+			auto schedulingPolicy =
+			    builder.create<mlir::arith::ConstantIntOp>(loc, builder.getI64Type(), options.cpuAOTSchedulingPolicy)
+			        .getResult();
 			builder.create<mlir::func::CallOp>(loc, helper,
 			                                   mlir::ValueRange{ dynamicQuery, dynamicKeys, dynamicValues,
-			                                                     dynamicPosition, dynamicOut, scale, groups });
+			                                                     dynamicPosition, dynamicOut, scale, groups,
+			                                                     threadCount, schedulingPolicy });
 			op.erase();
 			return mlir::success();
 		}
@@ -2478,7 +2486,7 @@ namespace litenn
 					{
 						continue;
 					}
-					if (mlir::succeeded(rewriteGroupedActivePrefixAttentionCall(getOperation(), op, builder)))
+					if (mlir::succeeded(rewriteGroupedActivePrefixAttentionCall(getOperation(), op, builder, options_)))
 					{
 						continue;
 					}

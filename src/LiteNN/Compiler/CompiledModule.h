@@ -231,7 +231,7 @@ namespace LiteNN
 
 	/// Increment when CPU AOT lowering or code generation changes the instructions produced for an unchanged plan.
 	/// Persistent compilation caches must include this value in their cache key.
-	inline constexpr std::uint32_t CPUAOTCompilationCacheVersion = 4;
+	inline constexpr std::uint32_t CPUAOTCompilationCacheVersion = 5;
 
 	struct CompiledModuleExternalTensorInfo
 	{

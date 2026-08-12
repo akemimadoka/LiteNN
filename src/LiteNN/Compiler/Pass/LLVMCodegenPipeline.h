@@ -22,8 +22,8 @@ namespace litenn
 {
 	struct LLVMCodegenOptions
 	{
-		std::uint64_t ggmlBlockMatMulThreadCount{};
-		std::uint64_t ggmlBlockMatMulAffinityPolicy{};
+		std::uint64_t cpuAOTThreadCount{};
+		std::uint64_t cpuAOTSchedulingPolicy{};
 		bool enableGGMLQ8KStagedMatMul{};
 		bool enableGGMLPrepackedWeights{};
 		bool enableBoundedActivationMath{};

@@ -1438,6 +1438,87 @@ namespace
 		}
 	}
 
+	std::span<float> PrepareActivePrefixAttentionScores(std::size_t activeRows)
+	{
+		thread_local std::vector<float> scores;
+		scores.resize(activeRows);
+		return scores;
+	}
+
+	std::uint64_t ResolveGroupedActivePrefixAttentionThreadCount(std::int64_t queryRows, std::int64_t queryColumns,
+	                                                             std::int64_t keyHeads, std::int64_t outColumns,
+	                                                             std::int64_t activeRows,
+	                                                             std::int64_t queryGroupsPerKVHead,
+	                                                             std::uint64_t requestedThreadCount)
+	{
+		constexpr std::uint64_t kMinimumParallelWork = 1ull << 20;
+		const auto hardware = static_cast<std::uint64_t>(LiteNNCPUHardwareThreadCount());
+		const auto requestedOrHardware =
+		    requestedThreadCount == 0 ? hardware : std::min(requestedThreadCount, hardware);
+		const auto activeKVHeads = static_cast<std::uint64_t>(
+		    std::min<std::int64_t>(keyHeads, (queryRows + queryGroupsPerKVHead - 1) / queryGroupsPerKVHead));
+		if (requestedOrHardware <= 1 || activeKVHeads <= 1)
+		{
+			return 1;
+		}
+
+		auto remaining = kMinimumParallelWork - 1;
+		for (const auto extent : { queryRows, activeRows, queryColumns + outColumns })
+		{
+			const auto unsignedExtent = static_cast<std::uint64_t>(extent);
+			if (unsignedExtent > remaining)
+			{
+				return std::min(requestedOrHardware, activeKVHeads);
+			}
+			remaining /= unsignedExtent;
+		}
+		return 1;
+	}
+
+	struct GroupedActivePrefixAttentionContext
+	{
+		const float* queries{};
+		std::int64_t queryRows{};
+		std::int64_t queryColumns{};
+		std::int64_t queryRowStride{};
+		std::int64_t queryColumnStride{};
+		const float* keys{};
+		std::int64_t keyHeadStride{};
+		std::int64_t keyRowStride{};
+		std::int64_t keyColumnStride{};
+		const float* values{};
+		std::int64_t valueHeadStride{};
+		std::int64_t valueRowStride{};
+		std::int64_t valueColumnStride{};
+		std::int64_t activeRows{};
+		float* out{};
+		std::int64_t outColumns{};
+		std::int64_t outRowStride{};
+		std::int64_t outColumnStride{};
+		double scale{};
+		std::int64_t queryGroupsPerKVHead{};
+	};
+
+	void ComputeGroupedActivePrefixAttentionRange(std::uint64_t begin, std::uint64_t end, void* userData)
+	{
+		const auto& ctx = *static_cast<const GroupedActivePrefixAttentionContext*>(userData);
+		auto scores = PrepareActivePrefixAttentionScores(static_cast<std::size_t>(ctx.activeRows));
+		for (auto kvHead = begin; kvHead < end; ++kvHead)
+		{
+			const auto queryBegin = static_cast<std::int64_t>(kvHead) * ctx.queryGroupsPerKVHead;
+			const auto queryEnd = std::min(ctx.queryRows, queryBegin + ctx.queryGroupsPerKVHead);
+			for (auto queryHead = queryBegin; queryHead < queryEnd; ++queryHead)
+			{
+				ComputeActivePrefixAttentionF32(
+				    ctx.queries + queryHead * ctx.queryRowStride, ctx.queryColumns, ctx.queryColumnStride,
+				    ctx.keys + static_cast<std::int64_t>(kvHead) * ctx.keyHeadStride, ctx.keyRowStride,
+				    ctx.keyColumnStride, ctx.values + static_cast<std::int64_t>(kvHead) * ctx.valueHeadStride,
+				    ctx.valueRowStride, ctx.valueColumnStride, ctx.activeRows, ctx.out + queryHead * ctx.outRowStride,
+				    ctx.outColumns, ctx.outColumnStride, ctx.scale, scores);
+			}
+		}
+	}
+
 	extern "C" void litenn_cpu_active_prefix_attention_f32(
 	    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
 	    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
@@ -1474,7 +1555,7 @@ namespace
 		const auto* keys = keysAligned + keysOffset;
 		const auto* values = valuesAligned + valuesOffset;
 		auto* out = outAligned + outOffset;
-		std::vector<float> scores(static_cast<std::size_t>(activeRows));
+		auto scores = PrepareActivePrefixAttentionScores(static_cast<std::size_t>(activeRows));
 		ComputeActivePrefixAttentionF32(query, queryColumns, queryColumnStride, keys, keyRowStride, keyColumnStride,
 		                                values, valueRowStride, valueColumnStride, activeRows, out, outColumns,
 		                                outColumnStride, scale, scores);
@@ -1574,7 +1655,7 @@ namespace
 		const auto* keys = keysAligned + keysOffset;
 		const auto* values = valuesAligned + valuesOffset;
 		auto* out = outAligned + outOffset;
-		std::vector<float> scores(static_cast<std::size_t>(activeRows));
+		auto scores = PrepareActivePrefixAttentionScores(static_cast<std::size_t>(activeRows));
 		ComputeActivePrefixAttentionF32(query, queryColumns, queryColumnStride, keys + kvHead * keyHeadStride,
 		                                keyRowStride, keyColumnStride, values + kvHead * valueHeadStride,
 		                                valueRowStride, valueColumnStride, activeRows, out, outColumns, outColumnStride,
@@ -1591,14 +1672,9 @@ namespace
 	    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
 	    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
 	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
-	    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead)
+	    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead,
+	    std::uint64_t requestedThreadCount, std::uint64_t schedulingPolicyValue)
 	{
-		CPUAOTHelperProfileTimer profileTimer(
-		    "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
-		    CompiledModuleCPUHelperProfilerAccess::Enabled()
-		        ? std::format("queries={}x{} keys={}x{}x{} out={}x{} groups_per_kv={}", queryRows, queryColumns,
-		                      keyRows, keyHeads, keyColumns, outRows, outColumns, queryGroupsPerKVHead)
-		        : std::string{});
 		if (queryRows <= 0 || outRows != queryRows || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyHeads <= 0 || queryGroupsPerKVHead <= 0 || keyColumns != queryColumns || valueRows != keyRows ||
 		    valueHeads != keyHeads || valueColumns != outColumns || outColumns <= 0 ||
@@ -1617,20 +1693,49 @@ namespace
 		{
 			return;
 		}
+		const auto threadCount = ResolveGroupedActivePrefixAttentionThreadCount(
+		    queryRows, queryColumns, keyHeads, outColumns, activeRows, queryGroupsPerKVHead, requestedThreadCount);
+		CPUAOTHelperProfileTimer profileTimer(
+		    "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
+		    CompiledModuleCPUHelperProfilerAccess::Enabled()
+		        ? std::format(
+		              "queries={}x{} keys={}x{}x{} out={}x{} groups_per_kv={} requested_threads={} resolved_threads={}",
+		              queryRows, queryColumns, keyRows, keyHeads, keyColumns, outRows, outColumns, queryGroupsPerKVHead,
+		              requestedThreadCount, threadCount)
+		        : std::string{});
 
-		const auto* queries = queryAligned + queryOffset;
-		const auto* keys = keysAligned + keysOffset;
-		const auto* values = valuesAligned + valuesOffset;
-		auto* out = outAligned + outOffset;
-		std::vector<float> scores(static_cast<std::size_t>(activeRows));
-		for (std::int64_t queryHead = 0; queryHead < queryRows; ++queryHead)
+		GroupedActivePrefixAttentionContext context{
+			.queries = queryAligned + queryOffset,
+			.queryRows = queryRows,
+			.queryColumns = queryColumns,
+			.queryRowStride = queryRowStride,
+			.queryColumnStride = queryColumnStride,
+			.keys = keysAligned + keysOffset,
+			.keyHeadStride = keyHeadStride,
+			.keyRowStride = keyRowStride,
+			.keyColumnStride = keyColumnStride,
+			.values = valuesAligned + valuesOffset,
+			.valueHeadStride = valueHeadStride,
+			.valueRowStride = valueRowStride,
+			.valueColumnStride = valueColumnStride,
+			.activeRows = activeRows,
+			.out = outAligned + outOffset,
+			.outColumns = outColumns,
+			.outRowStride = outRowStride,
+			.outColumnStride = outColumnStride,
+			.scale = scale,
+			.queryGroupsPerKVHead = queryGroupsPerKVHead,
+		};
+		const auto activeKVHeads = static_cast<std::uint64_t>(
+		    std::min<std::int64_t>(keyHeads, (queryRows + queryGroupsPerKVHead - 1) / queryGroupsPerKVHead));
+		if (threadCount <= 1)
 		{
-			const auto kvHead = queryHead / queryGroupsPerKVHead;
-			ComputeActivePrefixAttentionF32(
-			    queries + queryHead * queryRowStride, queryColumns, queryColumnStride, keys + kvHead * keyHeadStride,
-			    keyRowStride, keyColumnStride, values + kvHead * valueHeadStride, valueRowStride, valueColumnStride,
-			    activeRows, out + queryHead * outRowStride, outColumns, outColumnStride, scale, scores);
+			ComputeGroupedActivePrefixAttentionRange(0, activeKVHeads, &context);
+			return;
 		}
+		LiteNNCPUParallelFor(0, activeKVHeads, 1, ComputeGroupedActivePrefixAttentionRange, &context, threadCount,
+		                     ResolveCPUAOTAffinityPolicy(schedulingPolicyValue),
+		                     ResolveCPUAOTWorkerWaitPolicy(schedulingPolicyValue));
 	}
 
 	extern "C" void litenn_cpu_grouped_paged_attention_f32(
@@ -19646,8 +19751,8 @@ namespace
 			mlir::PassManager pm(&ctx);
 			litenn::addLLVMCodegenPipeline(
 			    pm, litenn::LLVMCodegenOptions{
-			            .ggmlBlockMatMulThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
-			            .ggmlBlockMatMulAffinityPolicy =
+			            .cpuAOTThreadCount = static_cast<std::uint64_t>(options.cpuAOTThreadCount),
+			            .cpuAOTSchedulingPolicy =
 			                EncodeCPUAOTSchedulingPolicy(options.cpuAOTAffinityPolicy, options.cpuAOTWorkerWaitPolicy),
 			            .enableGGMLQ8KStagedMatMul = options.enableCPUAOTGGMLQ8KStagedMatMul,
 			            .enableGGMLPrepackedWeights =

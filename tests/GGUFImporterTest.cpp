@@ -297,6 +297,19 @@ extern "C" void litenn_cpu_scatter_update_axis0_f32_rank3(
     std::int64_t updatesStride1, std::int64_t updatesStride2, float*, float* outAligned, std::int64_t outOffset,
     std::int64_t outDim0, std::int64_t outDim1, std::int64_t outDim2, std::int64_t outStride0, std::int64_t outStride1,
     std::int64_t outStride2);
+
+extern "C" void litenn_cpu_active_prefix_attention_f32_rank3_grouped(
+    const float*, const float* queryAligned, std::int64_t queryOffset, std::int64_t queryRows,
+    std::int64_t queryColumns, std::int64_t queryRowStride, std::int64_t queryColumnStride, const float*,
+    const float* keysAligned, std::int64_t keysOffset, std::int64_t keyRows, std::int64_t keyHeads,
+    std::int64_t keyColumns, std::int64_t keyRowStride, std::int64_t keyHeadStride, std::int64_t keyColumnStride,
+    const float*, const float* valuesAligned, std::int64_t valuesOffset, std::int64_t valueRows,
+    std::int64_t valueHeads, std::int64_t valueColumns, std::int64_t valueRowStride, std::int64_t valueHeadStride,
+    std::int64_t valueColumnStride, const std::int64_t*, const std::int64_t* positionAligned,
+    std::int64_t positionOffset, std::int64_t positionSize, std::int64_t positionStride, float*, float* outAligned,
+    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+    std::int64_t outColumnStride, double scale, std::int64_t queryGroupsPerKVHead, std::uint64_t requestedThreadCount,
+    std::uint64_t schedulingPolicyValue);
 #endif
 
 namespace
@@ -4085,6 +4098,44 @@ TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 }
 
 #ifdef LITENN_ENABLE_MLIR
+TEST(GGUFLLaMACausalLM, GroupedActivePrefixAttentionParallelHeadsMatchSerial)
+{
+	constexpr std::int64_t queryHeads = 40;
+	constexpr std::int64_t kvHeads = 8;
+	constexpr std::int64_t headDim = 128;
+	constexpr std::int64_t activeRows = 128;
+	constexpr std::int64_t groupsPerKVHead = 5;
+	constexpr std::int64_t kvRowStride = kvHeads * headDim;
+	std::vector<float> queries(static_cast<std::size_t>(queryHeads * headDim));
+	std::vector<float> keys(static_cast<std::size_t>(activeRows * kvRowStride));
+	std::vector<float> values(keys.size());
+	for (std::size_t i = 0; i < queries.size(); ++i)
+	{
+		queries[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.03125F;
+	}
+	for (std::size_t i = 0; i < keys.size(); ++i)
+	{
+		keys[i] = static_cast<float>(static_cast<int>(i % 31) - 15) * 0.015625F;
+		values[i] = static_cast<float>(static_cast<int>(i % 43) - 21) * 0.02F;
+	}
+	const std::array<std::int64_t, 1> position{ activeRows - 1 };
+	std::vector<float> serial(queries.size());
+	std::vector<float> parallel(queries.size());
+	const auto invoke = [&](std::span<float> output, std::uint64_t threadCount) {
+		litenn_cpu_active_prefix_attention_f32_rank3_grouped(
+		    queries.data(), queries.data(), 0, queryHeads, headDim, headDim, 1, keys.data(), keys.data(), 0, activeRows,
+		    kvHeads, headDim, kvRowStride, headDim, 1, values.data(), values.data(), 0, activeRows, kvHeads, headDim,
+		    kvRowStride, headDim, 1, position.data(), position.data(), 0, position.size(), 1, output.data(),
+		    output.data(), 0, queryHeads, headDim, headDim, 1, 1.0 / std::sqrt(static_cast<double>(headDim)),
+		    groupsPerKVHead, threadCount, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::None));
+	};
+
+	invoke(serial, 1);
+	invoke(parallel, 8);
+	EXPECT_EQ(parallel, serial);
+	EXPECT_TRUE(std::ranges::any_of(parallel, [](float value) { return value != 0.0F; }));
+}
+
 TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntimePosition)
 {
 	const auto lowered = GGUF::LowerLLaMACausalLMDecodeCapacity(BuildTinyLLaMAArchive(), 4);
@@ -4113,7 +4164,9 @@ TEST(GGUFLLaMACausalLM, CompilesCapacityDecodeOnceAndMatchesInterpreterAtRuntime
 	}
 	EXPECT_TRUE(std::ranges::any_of(profileEvents, [](const CompiledModuleCPUHelperProfileEvent& event) {
 		return event.helper == "litenn_cpu_active_prefix_attention_f32_rank3_grouped" && event.calls > 0 &&
-		       event.detail.find("queries=") != std::string::npos && event.detail.find("keys=") != std::string::npos;
+		       event.detail.find("queries=") != std::string::npos && event.detail.find("keys=") != std::string::npos &&
+		       event.detail.find("requested_threads=") != std::string::npos &&
+		       event.detail.find("resolved_threads=") != std::string::npos;
 	}));
 	const auto attentionNode = std::ranges::find_if(nodeEvents, [](const CompiledModuleCPUNodeProfileEvent& event) {
 		return event.opKind == "GroupedActivePrefixAttentionNode";
