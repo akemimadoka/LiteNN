@@ -16,14 +16,18 @@ class QwenSmokeMemoryTest(unittest.TestCase):
                 "--token-ids",
                 "1,2",
                 "--stateful",
+                "--paged-reference-decode",
                 "--layer-checkpoint-dir",
                 "checkpoints",
                 "--layer-checkpoint-generated-indices",
                 "23,7",
+                "--sub-layer-checkpoint-blocks",
+                "46,44,46",
             ]
         )
         self.assertEqual(args.layer_checkpoint_dir, Path("checkpoints"))
         self.assertEqual(args.layer_checkpoint_generated_indices, (23, 7))
+        self.assertEqual(args.sub_layer_checkpoint_blocks, (46, 44, 46))
 
     def test_records_stage_labeled_memory_and_trace_counters(self) -> None:
         script = (

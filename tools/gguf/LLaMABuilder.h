@@ -3,6 +3,7 @@
 #include <LiteNN/Layer/Layer.h>
 #include <LiteNN/Runtime/Scheduler.h>
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <span>
@@ -14,6 +15,12 @@
 
 namespace LiteNN::GGUF
 {
+	inline constexpr std::array<std::string_view, 13> LLaMASubLayerCheckpointBoundaryNames{
+		"attention_norm",   "query_rotated",      "key_rotated", "value",    "attention_context",
+		"attention_output", "attention_residual", "ffn_norm",    "ffn_gate", "ffn_up",
+		"ffn_swiglu",       "ffn_down",           "post_ffn",
+	};
+
 	struct LLaMADecoderBlock
 	{
 		Layer::RMSNormLayer attentionNorm;
@@ -149,6 +156,8 @@ namespace LiteNN::GGUF
 		bool usePagedReferenceDecode{};
 		/// Append each decoder block's hidden state to the public diagnostic outputs.
 		bool exposeLayerCheckpoints{};
+		/// Append internal diagnostic boundaries for these decoder blocks. Paged-reference decode only.
+		std::vector<std::size_t> subLayerCheckpointBlocks;
 		/// Optional physical paged-KV backing capacity. Logical capacity remains maxCacheLength.
 		std::optional<std::size_t> pagedResidentPageCount;
 	};
@@ -160,6 +169,8 @@ namespace LiteNN::GGUF
 		bool conditionalLogits{};
 		/// Append each decoder block's hidden state after all runtime-state outputs.
 		bool exposeLayerCheckpoints{};
+		/// Append internal diagnostic boundaries for these decoder blocks. Paged-reference decode only.
+		std::vector<std::size_t> subLayerCheckpointBlocks;
 		/// Optional physical paged-KV backing capacity for paged-reference decode lowering.
 		std::optional<std::size_t> pagedResidentPageCount;
 	};

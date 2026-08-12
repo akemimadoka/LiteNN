@@ -395,6 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Zero-based generated-token indices to checkpoint; defaults to every generated step",
     )
     parser.add_argument(
+        "--sub-layer-checkpoint-blocks",
+        type=comma_token_ids,
+        help="Decoder block indices whose internal attention/FFN boundaries are checkpointed",
+    )
+    parser.add_argument(
         "--llvm-opt-level",
         type=int,
         default=0,
@@ -541,6 +546,10 @@ def main() -> int:
         raise SystemExit("--layer-checkpoint-generated-indices requires --layer-checkpoint-dir")
     if args.layer_checkpoint_dir is not None and not args.stateful:
         raise SystemExit("--layer-checkpoint-dir requires --stateful")
+    if args.sub_layer_checkpoint_blocks is not None and args.layer_checkpoint_dir is None:
+        raise SystemExit("--sub-layer-checkpoint-blocks requires --layer-checkpoint-dir")
+    if args.sub_layer_checkpoint_blocks is not None and not args.paged_reference_decode:
+        raise SystemExit("--sub-layer-checkpoint-blocks requires --paged-reference-decode")
     if args.layer_checkpoint_generated_indices is not None and any(
         index >= args.steps for index in args.layer_checkpoint_generated_indices
     ):
@@ -809,6 +818,13 @@ def main() -> int:
                     ",".join(str(value) for value in args.layer_checkpoint_generated_indices),
                 ]
             )
+        if args.sub_layer_checkpoint_blocks is not None:
+            decode_cmd.extend(
+                [
+                    "--sub-layer-checkpoint-blocks",
+                    ",".join(str(value) for value in sorted(set(args.sub_layer_checkpoint_blocks))),
+                ]
+            )
         if args.stream_tokens:
             decode_cmd.append("--stream-tokens")
         if args.stream_stats:
@@ -915,6 +931,11 @@ def main() -> int:
                 else None
             ),
             "selection": "selected" if args.layer_checkpoint_generated_indices is not None else "all_generated",
+            "sub_layer_blocks": (
+                sorted(set(args.sub_layer_checkpoint_blocks))
+                if args.sub_layer_checkpoint_blocks is not None
+                else None
+            ),
         },
         "max_cache_length": args.max_cache_length,
         "forced_replay": (

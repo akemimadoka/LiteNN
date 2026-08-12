@@ -18,6 +18,14 @@ namespace LiteNN::Layer
 		LinearLayer downProjection;
 	};
 
+	struct SwiGLUMLPResult
+	{
+		NodeOutput gate;
+		NodeOutput up;
+		NodeOutput gated;
+		NodeOutput output;
+	};
+
 	inline void ValidateSwiGLUMLP(const LinearLayer& gateProjection, const LinearLayer& upProjection,
 	                              const LinearLayer& downProjection)
 	{
@@ -63,7 +71,8 @@ namespace LiteNN::Layer
 		                                   std::move(downWeight));
 	}
 
-	inline NodeOutput AddSwiGLUMLP(Subgraph& subgraph, const SwiGLUMLPLayer& layer, NodeOutput input)
+	inline SwiGLUMLPResult AddSwiGLUMLPWithIntermediates(Subgraph& subgraph, const SwiGLUMLPLayer& layer,
+	                                                     NodeOutput input)
 	{
 		ValidateSwiGLUMLP(layer.gateProjection, layer.upProjection, layer.downProjection);
 		const std::array groupedLayers{ layer.gateProjection, layer.upProjection };
@@ -73,7 +82,17 @@ namespace LiteNN::Layer
 		const auto gated =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, gate, up },
 		                     { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gate).shape } } });
-		return AddLinear(subgraph, layer.downProjection, { gated, 0 });
+		return {
+			.gate = gate,
+			.up = up,
+			.gated = { gated, 0 },
+			.output = AddLinear(subgraph, layer.downProjection, { gated, 0 }),
+		};
+	}
+
+	inline NodeOutput AddSwiGLUMLP(Subgraph& subgraph, const SwiGLUMLPLayer& layer, NodeOutput input)
+	{
+		return AddSwiGLUMLPWithIntermediates(subgraph, layer, input).output;
 	}
 
 	namespace Detail

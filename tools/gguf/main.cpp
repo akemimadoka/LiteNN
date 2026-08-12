@@ -32,7 +32,9 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -91,7 +93,7 @@ namespace
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		       "[--seed N] [--forced-generated-token-ids ids] [--logits-output output.txt] "
 		       "[--logits-output-dir dir] [--layer-checkpoint-dir dir] "
-		       "[--layer-checkpoint-generated-indices ids] [--ignore-eos] "
+		       "[--layer-checkpoint-generated-indices ids] [--sub-layer-checkpoint-blocks ids] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
@@ -107,7 +109,7 @@ namespace
 		       "[--sample greedy|random] [--temperature T] [--top-k K] [--top-p P] [--repeat-penalty R] "
 		       "[--seed N] [--forced-generated-token-ids ids] [--logits-output output.txt] "
 		       "[--logits-output-dir dir] [--layer-checkpoint-dir dir] "
-		       "[--layer-checkpoint-generated-indices ids] [--ignore-eos] "
+		       "[--layer-checkpoint-generated-indices ids] [--sub-layer-checkpoint-blocks ids] [--ignore-eos] "
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
@@ -353,6 +355,7 @@ namespace
 		std::optional<std::string> logitsOutputDirectory;
 		std::optional<std::string> layerCheckpointDirectory;
 		std::vector<std::size_t> layerCheckpointGeneratedIndices;
+		std::vector<std::size_t> subLayerCheckpointBlocks;
 		std::vector<std::int32_t> forcedGeneratedTokenIds;
 		LiteNN::GGUF::LLMSamplingConfig sampling;
 		bool stopAtEos{ true };
@@ -411,6 +414,11 @@ namespace
 			{
 				options.layerCheckpointGeneratedIndices =
 				    ParseNonNegativeSizes(requireValue(arg), "layer-checkpoint-generated-indices");
+			}
+			else if (arg == "--sub-layer-checkpoint-blocks")
+			{
+				options.subLayerCheckpointBlocks =
+				    ParseNonNegativeSizes(requireValue(arg), "sub-layer-checkpoint-blocks");
 			}
 			else if (arg == "--sample")
 			{
@@ -1616,7 +1624,7 @@ namespace
 	DecodeAOTCachePath(std::string_view modelPath, std::size_t requestedTokenCount,
 	                   const LiteNN::CompilerOptions& options, std::string_view decodeMode,
 	                   std::optional<std::size_t> pagedResidentPageCount = std::nullopt,
-	                   bool exposeLayerCheckpoints = false)
+	                   bool exposeLayerCheckpoints = false, std::span<const std::size_t> subLayerCheckpointBlocks = {})
 	{
 		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
 		if (root == nullptr || std::string_view(root).empty())
@@ -1644,7 +1652,15 @@ namespace
 		    options.enableCPUAOTGGMLQ8KStagedMatMul ? 1 : 0, options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		    static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
 		    CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout), residentPagesText);
-		const auto diagnosticKey = exposeLayerCheckpoints ? keyText + "|layer_checkpoints=v1" : keyText;
+		auto diagnosticKey = exposeLayerCheckpoints ? keyText + "|layer_checkpoints=v1" : keyText;
+		if (!subLayerCheckpointBlocks.empty())
+		{
+			diagnosticKey += "|sub_layer_checkpoints=v1:";
+			for (const auto block : subLayerCheckpointBlocks)
+			{
+				diagnosticKey += std::format("{},", block);
+			}
+		}
 		return std::filesystem::path(root) / std::format("{:016x}", FNV1a(diagnosticKey));
 	}
 
@@ -2028,89 +2044,105 @@ namespace
 	{
 	public:
 		LayerCheckpointWriter(const std::filesystem::path& directory,
-		                      std::span<const LiteNN::CompiledTensorSpec> outputSpecs, std::size_t expectedLayerCount)
-		    : directory_(directory)
+		                      std::span<const LiteNN::CompiledTensorSpec> outputSpecs, std::size_t expectedLayerCount,
+		                      std::span<const std::size_t> subLayerBlocks)
 		{
-			std::filesystem::create_directories(directory_);
+			groups_.push_back({ .directory = directory });
+			for (const auto boundary : LiteNN::GGUF::LLaMASubLayerCheckpointBoundaryNames)
+			{
+				if (!subLayerBlocks.empty())
+				{
+					groups_.push_back({ .boundary = std::string(boundary), .directory = directory / boundary });
+				}
+			}
 			for (std::size_t outputIndex = 0; outputIndex < outputSpecs.size(); ++outputIndex)
 			{
 				const auto& spec = outputSpecs[outputIndex];
 				constexpr std::string_view prefix = "layer_hidden_";
-				if (!std::string_view(spec.name).starts_with(prefix))
+				if (std::string_view(spec.name).starts_with(prefix))
 				{
+					groups_.front().outputs.push_back({ .outputIndex = outputIndex,
+					                                    .layerIndex = ParseLayerSuffix(spec.name, prefix),
+					                                    .name = spec.name });
 					continue;
 				}
-				const auto suffix = std::string_view(spec.name).substr(prefix.size());
-				std::size_t layerIndex{};
-				const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(), layerIndex);
-				if (parsed.ec != std::errc{} || parsed.ptr != suffix.data() + suffix.size())
+				for (auto& group : groups_ | std::views::drop(1))
 				{
-					throw std::runtime_error("invalid layer checkpoint output name: " + spec.name);
-				}
-				outputs_.push_back({ .outputIndex = outputIndex, .layerIndex = layerIndex, .name = spec.name });
-			}
-			std::ranges::sort(outputs_, {}, &CheckpointOutput::layerIndex);
-			if (outputs_.size() != expectedLayerCount)
-			{
-				throw std::runtime_error(
-				    std::format("layer checkpoint output count {} does not match model block count {}", outputs_.size(),
-				                expectedLayerCount));
-			}
-			for (std::size_t i = 0; i < outputs_.size(); ++i)
-			{
-				if (outputs_[i].layerIndex != i)
-				{
-					throw std::runtime_error("layer checkpoint outputs must cover every decoder block in order");
+					const auto groupPrefix = std::format("layer_checkpoint_{}_", group.boundary);
+					if (std::string_view(spec.name).starts_with(groupPrefix))
+					{
+						group.outputs.push_back({ .outputIndex = outputIndex,
+						                          .layerIndex = ParseLayerSuffix(spec.name, groupPrefix),
+						                          .name = spec.name });
+						break;
+					}
 				}
 			}
-
-			manifest_.open(directory_ / "manifest.tsv", std::ios::binary | std::ios::trunc);
-			if (!manifest_)
+			std::vector<std::size_t> allLayers(expectedLayerCount);
+			std::iota(allLayers.begin(), allLayers.end(), 0);
+			ValidateGroup(groups_.front(), allLayers);
+			for (auto& group : groups_ | std::views::drop(1))
 			{
-				throw std::runtime_error("failed to open layer checkpoint manifest");
+				ValidateGroup(group, subLayerBlocks);
 			}
-			manifest_ << "# litenn-layer-checkpoints-v1\n"
-			          << "generated_index\tabsolute_step\tposition\tinput_token_id\tfile\tlayer\tname\tdtype\tshape\t"
-			             "byte_offset\tbyte_size\tminimum\tmaximum\tmean\trms\tnon_finite\tchecksum_fnv1a64\n";
+			for (auto& group : groups_)
+			{
+				std::filesystem::create_directories(group.directory);
+				group.manifest.open(group.directory / "manifest.tsv", std::ios::binary | std::ios::trunc);
+				if (!group.manifest)
+				{
+					throw std::runtime_error("failed to open layer checkpoint manifest: " + group.directory.string());
+				}
+				group.manifest
+				    << "# litenn-layer-checkpoints-v1\n"
+				    << "generated_index\tabsolute_step\tposition\tinput_token_id\tfile\tlayer\tname\tdtype\tshape\t"
+				       "byte_offset\tbyte_size\tminimum\tmaximum\tmean\trms\tnon_finite\tchecksum_fnv1a64\n";
+			}
 		}
 
 		void Write(std::size_t generatedIndex, std::size_t absoluteStep, std::size_t position,
 		           std::int32_t inputTokenId, std::span<const LiteNN::Tensor<LiteNN::CPU>> tensors)
 		{
-			const auto fileName = std::format("generated-{:06}.bin", generatedIndex);
-			std::ofstream output(directory_ / fileName, std::ios::binary | std::ios::trunc);
-			if (!output)
+			for (auto& group : groups_)
 			{
-				throw std::runtime_error("failed to open layer checkpoint payload: " + fileName);
-			}
-			std::size_t byteOffset = 0;
-			for (const auto& checkpoint : outputs_)
-			{
-				if (checkpoint.outputIndex >= tensors.size())
-				{
-					throw std::runtime_error("layer checkpoint output index exceeds runtime output count");
-				}
-				const auto& tensor = tensors[checkpoint.outputIndex];
-				const auto byteSize = tensor.NumElements() * LiteNN::ElementByteSize(tensor.DType());
-				output.write(static_cast<const char*>(tensor.UnsafeRawData()), static_cast<std::streamsize>(byteSize));
+				const auto fileName = std::format("generated-{:06}.bin", generatedIndex);
+				std::ofstream output(group.directory / fileName, std::ios::binary | std::ios::trunc);
 				if (!output)
 				{
-					throw std::runtime_error("failed to write layer checkpoint payload: " + fileName);
+					throw std::runtime_error("failed to open layer checkpoint payload: " +
+					                         (group.directory / fileName).string());
 				}
-				const auto summary = SummarizeLayerCheckpoint(tensor);
-				manifest_ << std::setprecision(17) << generatedIndex << '\t' << absoluteStep << '\t' << position << '\t'
-				          << inputTokenId << '\t' << fileName << '\t' << checkpoint.layerIndex << '\t'
-				          << checkpoint.name << '\t' << LiteNN::DataTypeName(tensor.DType()) << '\t'
-				          << LayerCheckpointShapeText(tensor.Shape()) << '\t' << byteOffset << '\t' << byteSize << '\t'
-				          << summary.minimum << '\t' << summary.maximum << '\t' << summary.mean << '\t' << summary.rms
-				          << '\t' << summary.nonFiniteCount << '\t'
-				          << std::format("{:016x}", HashLayerCheckpointBytes(tensor)) << '\n';
-				byteOffset += byteSize;
-			}
-			manifest_.flush();
-			if (!manifest_)
-			{
-				throw std::runtime_error("failed to write layer checkpoint manifest");
+				std::size_t byteOffset = 0;
+				for (const auto& checkpoint : group.outputs)
+				{
+					if (checkpoint.outputIndex >= tensors.size())
+					{
+						throw std::runtime_error("layer checkpoint output index exceeds runtime output count");
+					}
+					const auto& tensor = tensors[checkpoint.outputIndex];
+					const auto byteSize = tensor.NumElements() * LiteNN::ElementByteSize(tensor.DType());
+					output.write(static_cast<const char*>(tensor.UnsafeRawData()),
+					             static_cast<std::streamsize>(byteSize));
+					if (!output)
+					{
+						throw std::runtime_error("failed to write layer checkpoint payload: " + fileName);
+					}
+					const auto summary = SummarizeLayerCheckpoint(tensor);
+					group.manifest << std::setprecision(17) << generatedIndex << '\t' << absoluteStep << '\t'
+					               << position << '\t' << inputTokenId << '\t' << fileName << '\t'
+					               << checkpoint.layerIndex << '\t' << checkpoint.name << '\t'
+					               << LiteNN::DataTypeName(tensor.DType()) << '\t'
+					               << LayerCheckpointShapeText(tensor.Shape()) << '\t' << byteOffset << '\t' << byteSize
+					               << '\t' << summary.minimum << '\t' << summary.maximum << '\t' << summary.mean << '\t'
+					               << summary.rms << '\t' << summary.nonFiniteCount << '\t'
+					               << std::format("{:016x}", HashLayerCheckpointBytes(tensor)) << '\n';
+					byteOffset += byteSize;
+				}
+				group.manifest.flush();
+				if (!group.manifest)
+				{
+					throw std::runtime_error("failed to write layer checkpoint manifest: " + group.directory.string());
+				}
 			}
 		}
 
@@ -2122,9 +2154,46 @@ namespace
 			std::string name;
 		};
 
-		std::filesystem::path directory_;
-		std::vector<CheckpointOutput> outputs_;
-		std::ofstream manifest_;
+		struct CheckpointGroup
+		{
+			std::string boundary;
+			std::filesystem::path directory;
+			std::vector<CheckpointOutput> outputs;
+			std::ofstream manifest;
+		};
+
+		static std::size_t ParseLayerSuffix(std::string_view name, std::string_view prefix)
+		{
+			const auto suffix = name.substr(prefix.size());
+			std::size_t layerIndex{};
+			const auto parsed = std::from_chars(suffix.data(), suffix.data() + suffix.size(), layerIndex);
+			if (suffix.empty() || parsed.ec != std::errc{} || parsed.ptr != suffix.data() + suffix.size())
+			{
+				throw std::runtime_error("invalid layer checkpoint output name: " + std::string(name));
+			}
+			return layerIndex;
+		}
+
+		static void ValidateGroup(CheckpointGroup& group, std::span<const std::size_t> expectedLayers)
+		{
+			std::ranges::sort(group.outputs, {}, &CheckpointOutput::layerIndex);
+			if (group.outputs.size() != expectedLayers.size())
+			{
+				throw std::runtime_error(
+				    std::format("layer checkpoint group '{}' output count {} does not match expected {}",
+				                group.boundary.empty() ? "post_ffn_all" : group.boundary, group.outputs.size(),
+				                expectedLayers.size()));
+			}
+			for (std::size_t i = 0; i < expectedLayers.size(); ++i)
+			{
+				if (group.outputs[i].layerIndex != expectedLayers[i])
+				{
+					throw std::runtime_error("layer checkpoint group does not cover selected decoder blocks in order");
+				}
+			}
+		}
+
+		std::vector<CheckpointGroup> groups_;
 	};
 #endif
 
@@ -2146,6 +2215,14 @@ namespace
 		if (options.layerCheckpointDirectory && !options.statefulDecode)
 		{
 			throw std::runtime_error("--layer-checkpoint-dir currently requires --stateful");
+		}
+		if (!options.subLayerCheckpointBlocks.empty() && !options.layerCheckpointDirectory)
+		{
+			throw std::runtime_error("--sub-layer-checkpoint-blocks requires --layer-checkpoint-dir");
+		}
+		if (!options.subLayerCheckpointBlocks.empty() && !options.pagedReferenceDecode)
+		{
+			throw std::runtime_error("--sub-layer-checkpoint-blocks currently requires --paged-reference-decode");
 		}
 		if (std::ranges::any_of(options.layerCheckpointGeneratedIndices,
 		                        [&](std::size_t index) { return index >= options.steps; }))
@@ -2246,9 +2323,9 @@ namespace
 		LiteNN::CompiledModule<LiteNN::CPU> decodeModule = [&] {
 			if (options.statefulDecode)
 			{
-				const auto cachePath =
-				    DecodeAOTCachePath(options.inputPath, maxCacheLength, compilerOptions, decodeMode,
-				                       options.pagedResidentPageCount, options.layerCheckpointDirectory.has_value());
+				const auto cachePath = DecodeAOTCachePath(
+				    options.inputPath, maxCacheLength, compilerOptions, decodeMode, options.pagedResidentPageCount,
+				    options.layerCheckpointDirectory.has_value(), options.subLayerCheckpointBlocks);
 				const auto sharedWeightsPath = DecodeAOTSharedWeightsPath(options.inputPath, compilerOptions);
 				if (auto cached = TryLoadDecodeAOTCache(cachePath, diagnostics))
 				{
@@ -2269,6 +2346,7 @@ namespace
 					      .conditionalLogits = true,
 					      .usePagedReferenceDecode = options.pagedReferenceDecode,
 					      .exposeLayerCheckpoints = options.layerCheckpointDirectory.has_value(),
+					      .subLayerCheckpointBlocks = options.subLayerCheckpointBlocks,
 					      .pagedResidentPageCount = options.pagedResidentPageCount });
 				});
 				decodePlan = schedule.module.plan;
@@ -2385,7 +2463,7 @@ namespace
 		if (options.layerCheckpointDirectory)
 		{
 			layerCheckpointWriter.emplace(*options.layerCheckpointDirectory, decodeModule.OutputSpecs(),
-			                              hyperparameters.blockCount);
+			                              hyperparameters.blockCount, options.subLayerCheckpointBlocks);
 		}
 
 		const auto runStart = std::chrono::steady_clock::now();

@@ -4070,6 +4070,42 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeSeparatesLogicalAndResidentKVCapaci
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 }
 
+TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeExposesSelectedSubLayerCheckpoints)
+{
+	const auto schedule =
+	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
+	                                                                     .decodePastLength = 0,
+	                                                                     .maxCacheLength = 4,
+	                                                                     .dynamicDecodePosition = true,
+	                                                                     .usePagedReferenceDecode = true,
+	                                                                     .exposeLayerCheckpoints = true,
+	                                                                     .subLayerCheckpointBlocks = { 0 } });
+	const auto& plan = schedule.module.plan;
+	ASSERT_EQ(plan.outputs.size(), 20u);
+	EXPECT_EQ(plan.outputs[0].name, "logits");
+	EXPECT_EQ(plan.outputs[6].name, "layer_hidden_0");
+	for (std::size_t boundaryIndex = 0; boundaryIndex < GGUF::LLaMASubLayerCheckpointBoundaryNames.size();
+	     ++boundaryIndex)
+	{
+		EXPECT_EQ(plan.outputs[7 + boundaryIndex].name,
+		          std::format("layer_checkpoint_{}_0", GGUF::LLaMASubLayerCheckpointBoundaryNames[boundaryIndex]));
+	}
+	const auto projection = Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, plan.forward);
+	ASSERT_EQ(projection.publicOutputIndices.size(), 15u);
+	EXPECT_EQ(projection.publicOutputIndices.front(), 0u);
+	EXPECT_EQ(projection.publicOutputIndices[1], 6u);
+	EXPECT_EQ(projection.publicOutputIndices.back(), 19u);
+	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
+
+	EXPECT_THROW(GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
+	                                                                              .decodePastLength = 0,
+	                                                                              .maxCacheLength = 4,
+	                                                                              .dynamicDecodePosition = true,
+	                                                                              .usePagedReferenceDecode = true,
+	                                                                              .subLayerCheckpointBlocks = { 1 } }),
+	             std::runtime_error);
+}
+
 TEST(GGUFLLaMACausalLM, PrefillThenDecodeMatchesFullPrefillLogit)
 {
 	const auto archive = BuildTinyLLaMAArchive();

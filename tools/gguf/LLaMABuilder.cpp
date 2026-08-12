@@ -16,6 +16,18 @@ namespace LiteNN::GGUF
 {
 	namespace
 	{
+		void ValidateSubLayerCheckpointBlocks(std::span<const std::size_t> blocks, std::size_t blockCount)
+		{
+			if (!std::ranges::is_sorted(blocks) || std::ranges::adjacent_find(blocks) != blocks.end())
+			{
+				throw std::runtime_error("Sub-layer checkpoint block indices must be sorted and unique");
+			}
+			if (std::ranges::any_of(blocks, [=](std::size_t block) { return block >= blockCount; }))
+			{
+				throw std::runtime_error("Sub-layer checkpoint block index exceeds decoder block count");
+			}
+		}
+
 		std::shared_ptr<Variable> MaterializeArchiveVariable(const Graph& archive, std::size_t variableIndex,
 		                                                     std::string_view name)
 		{
@@ -657,6 +669,14 @@ namespace LiteNN::GGUF
 				decode.outputNames.push_back(std::format("layer_hidden_{}", blockIndex));
 			}
 		}
+		ValidateSubLayerCheckpointBlocks(options.subLayerCheckpointBlocks, hyperparameters.blockCount);
+		for (const auto blockIndex : options.subLayerCheckpointBlocks)
+		{
+			for (const auto boundary : LLaMASubLayerCheckpointBoundaryNames)
+			{
+				decode.outputNames.push_back(std::format("layer_checkpoint_{}_{}", boundary, blockIndex));
+			}
+		}
 
 		Runtime::LLMDecodeStateABI decodeStateABI;
 		decodeStateABI.kvCaches.reserve(decode.kvCaches.size());
@@ -943,6 +963,13 @@ namespace LiteNN::GGUF
 			NodeOutput pageTable;
 			NodeOutput pageDescriptors;
 			NodeOutput activeLength;
+			std::vector<std::pair<std::string, NodeOutput>> subLayerCheckpoints;
+		};
+
+		struct SubLayerCheckpointBlock
+		{
+			std::size_t blockIndex{};
+			std::vector<std::pair<std::string, NodeOutput>> outputs;
 		};
 
 		struct PagedDecodeResult
@@ -953,6 +980,7 @@ namespace LiteNN::GGUF
 			std::vector<NodeOutput> pageDescriptors;
 			std::vector<NodeOutput> activeLengths;
 			std::vector<NodeOutput> layerHiddenStates;
+			std::vector<SubLayerCheckpointBlock> subLayerCheckpoints;
 		};
 
 		void AppendLayerCheckpointOutputs(std::vector<NodeOutput>& outputs, std::vector<std::string>& outputNames,
@@ -962,6 +990,19 @@ namespace LiteNN::GGUF
 			{
 				outputs.push_back(layerHiddenStates[blockIndex]);
 				outputNames.push_back(std::format("layer_hidden_{}", blockIndex));
+			}
+		}
+
+		void AppendSubLayerCheckpointOutputs(std::vector<NodeOutput>& outputs, std::vector<std::string>& outputNames,
+		                                     std::span<const SubLayerCheckpointBlock> blocks)
+		{
+			for (const auto& block : blocks)
+			{
+				for (const auto& [boundary, output] : block.outputs)
+				{
+					outputs.push_back(output);
+					outputNames.push_back(std::format("layer_checkpoint_{}_{}", boundary, block.blockIndex));
+				}
 			}
 		}
 	} // namespace
@@ -1174,7 +1215,8 @@ namespace LiteNN::GGUF
 	                                                                const LLaMAHyperparameters& hyperparameters,
 	                                                                NodeOutput hiddenState, NodeOutput pagedKVState,
 	                                                                NodeOutput pageTable, NodeOutput pageDescriptors,
-	                                                                NodeOutput activeLength, NodeOutput currentPosition)
+	                                                                NodeOutput activeLength, NodeOutput currentPosition,
+	                                                                bool exposeSubLayerCheckpoints = false)
 	{
 		const auto hiddenInfo = subgraph.GetOutputInfo(hiddenState);
 		const auto positionInfo = subgraph.GetOutputInfo(currentPosition);
@@ -1278,15 +1320,36 @@ namespace LiteNN::GGUF
 			0,
 		};
 		const auto normalizedFeedForwardInput = Layer::AddRMSNorm(subgraph, block.feedForwardNorm, attentionResidual);
-		const auto feedForwardOutput = Layer::AddSwiGLUMLP(subgraph, block.mlp, normalizedFeedForwardInput);
+		const auto mlp = Layer::AddSwiGLUMLPWithIntermediates(subgraph, block.mlp, normalizedFeedForwardInput);
+		const auto hiddenOutput =
+		    NodeOutput{ subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, attentionResidual, mlp.output }, { hiddenInfo }),
+			            0 };
+		std::vector<std::pair<std::string, NodeOutput>> subLayerCheckpoints;
+		if (exposeSubLayerCheckpoints)
+		{
+			subLayerCheckpoints = {
+				{ "attention_norm", normalizedAttentionInput },
+				{ "query_rotated", groupedQueries },
+				{ "key_rotated", rotatedKeys2D },
+				{ "value", values2D },
+				{ "attention_context", groupedAttention },
+				{ "attention_output", attentionOutput },
+				{ "attention_residual", attentionResidual },
+				{ "ffn_norm", normalizedFeedForwardInput },
+				{ "ffn_gate", mlp.gate },
+				{ "ffn_up", mlp.up },
+				{ "ffn_swiglu", mlp.gated },
+				{ "ffn_down", mlp.output },
+				{ "post_ffn", hiddenOutput },
+			};
+		}
 		return {
-			.hiddenState = { subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, attentionResidual, feedForwardOutput },
-			                                  { hiddenInfo }),
-			                 0 },
+			.hiddenState = hiddenOutput,
 			.kvState = updatedKVState,
 			.pageTable = updatedPageTable,
 			.pageDescriptors = updatedPageDescriptors,
 			.activeLength = updatedActiveLength,
+			.subLayerCheckpoints = std::move(subLayerCheckpoints),
 		};
 	}
 
@@ -1553,13 +1616,14 @@ namespace LiteNN::GGUF
 	    NodeOutput tokenIds, NodeOutput currentPosition, std::span<const NodeOutput> pagedKVStates,
 	    std::span<const NodeOutput> pageTables, std::span<const NodeOutput> pageDescriptors,
 	    std::span<const NodeOutput> activeLengths, std::optional<NodeOutput> emitLogits = std::nullopt,
-	    bool exposeLayerCheckpoints = false)
+	    bool exposeLayerCheckpoints = false, std::span<const std::size_t> subLayerCheckpointBlocks = {})
 	{
 		if (pagedKVStates.size() != model.blocks.size() || pageTables.size() != model.blocks.size() ||
 		    pageDescriptors.size() != model.blocks.size() || activeLengths.size() != model.blocks.size())
 		{
 			throw std::runtime_error("Paged-reference decode requires one paged KV state bundle per decoder block");
 		}
+		ValidateSubLayerCheckpointBlocks(subLayerCheckpointBlocks, model.blocks.size());
 		auto hiddenState = AddLLaMATokenEmbedding(subgraph, model, tokenIds);
 		std::vector<NodeOutput> updatedKVStates;
 		std::vector<NodeOutput> updatedPageTables;
@@ -1570,19 +1634,27 @@ namespace LiteNN::GGUF
 		updatedPageDescriptors.reserve(model.blocks.size());
 		updatedActiveLengths.reserve(model.blocks.size());
 		std::vector<NodeOutput> layerHiddenStates;
+		std::vector<SubLayerCheckpointBlock> subLayerCheckpoints;
 		if (exposeLayerCheckpoints)
 		{
 			layerHiddenStates.reserve(model.blocks.size());
 		}
+		subLayerCheckpoints.reserve(subLayerCheckpointBlocks.size());
 		for (std::size_t blockIndex = 0; blockIndex < model.blocks.size(); ++blockIndex)
 		{
+			const auto exposeSubLayer = std::ranges::binary_search(subLayerCheckpointBlocks, blockIndex);
 			const auto blockResult = AddLLaMADecoderBlockDecodePagedReference(
 			    subgraph, model.blocks[blockIndex], hyperparameters, hiddenState, pagedKVStates[blockIndex],
-			    pageTables[blockIndex], pageDescriptors[blockIndex], activeLengths[blockIndex], currentPosition);
+			    pageTables[blockIndex], pageDescriptors[blockIndex], activeLengths[blockIndex], currentPosition,
+			    exposeSubLayer);
 			hiddenState = blockResult.hiddenState;
 			if (exposeLayerCheckpoints)
 			{
 				layerHiddenStates.push_back(hiddenState);
+			}
+			if (exposeSubLayer)
+			{
+				subLayerCheckpoints.push_back({ .blockIndex = blockIndex, .outputs = blockResult.subLayerCheckpoints });
 			}
 			updatedKVStates.push_back(blockResult.kvState);
 			updatedPageTables.push_back(blockResult.pageTable);
@@ -1597,6 +1669,7 @@ namespace LiteNN::GGUF
 			.pageDescriptors = std::move(updatedPageDescriptors),
 			.activeLengths = std::move(updatedActiveLengths),
 			.layerHiddenStates = std::move(layerHiddenStates),
+			.subLayerCheckpoints = std::move(subLayerCheckpoints),
 		};
 	}
 
@@ -1875,7 +1948,8 @@ namespace LiteNN::GGUF
 		}
 		const auto result = AddLLaMACausalLMDecodePagedReference(
 		    graph, subgraph, model, hyperparameters, { tokenIds, 0 }, { currentPosition, 0 }, pagedKVStates, pageTables,
-		    pageDescriptors, activeLengths, emitLogits, options.exposeLayerCheckpoints);
+		    pageDescriptors, activeLengths, emitLogits, options.exposeLayerCheckpoints,
+		    options.subLayerCheckpointBlocks);
 		const std::array<double, 1> one{ 1.0 };
 		const auto oneValue =
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
@@ -1896,6 +1970,7 @@ namespace LiteNN::GGUF
 			outputNames.push_back(std::format("updated_active_length_{}", blockIndex));
 		}
 		AppendLayerCheckpointOutputs(outputs, outputNames, result.layerHiddenStates);
+		AppendSubLayerCheckpointOutputs(outputs, outputNames, result.subLayerCheckpoints);
 		subgraph.SetResults(std::move(outputs));
 		const auto forward = graph.AddSubgraph(std::move(subgraph));
 		graph.SetForward(forward);
@@ -1919,6 +1994,10 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error("Conditional logits currently require dynamic decode position");
 		}
+		if (!options.subLayerCheckpointBlocks.empty() && !options.usePagedReferenceDecode)
+		{
+			throw std::runtime_error("Sub-layer checkpoints currently require paged-reference decode");
+		}
 		const auto artifacts = PlanLLaMAArtifacts(archive, options);
 		auto graph =
 		    options.usePagedReferenceDecode
@@ -1926,6 +2005,7 @@ namespace LiteNN::GGUF
 		                                                 { .preserveQuantizedWeights = options.preserveQuantizedWeights,
 		                                                   .conditionalLogits = options.conditionalLogits,
 		                                                   .exposeLayerCheckpoints = options.exposeLayerCheckpoints,
+		                                                   .subLayerCheckpointBlocks = options.subLayerCheckpointBlocks,
 		                                                   .pagedResidentPageCount = options.pagedResidentPageCount })
 		    : options.dynamicDecodePosition
 		        ? LowerLLaMACausalLMDecodeCapacity(archive, artifacts.decodeStep.maxCacheLength,
