@@ -9,9 +9,8 @@
 
 namespace LiteNN::Layer
 {
-	// Rotary Position Embedding helper.
-	// 当前实现支持 2D 输入 [sequenceLength, featureSize]，并在最后一维上按 pair 做旋转。
-	inline NodeOutput AddRoPE(Subgraph& subgraph, NodeOutput input, double base = 10000.0,
+	// Rotary Position Embedding helper for 2D [sequenceLength, featureSize] inputs.
+	inline NodeOutput AddRoPE(Subgraph& subgraph, NodeOutput input, RoPELayout layout, double base = 10000.0,
 	                          std::size_t positionOffset = 0, double frequencyScale = 1.0)
 	{
 		const auto info = subgraph.GetOutputInfo(input); // copy
@@ -38,6 +37,7 @@ namespace LiteNN::Layer
 
 		const auto output = subgraph.AddNode(RoPENode{ .input = input,
 		                                               .positions = std::nullopt,
+		                                               .layout = layout,
 		                                               .base = base,
 		                                               .frequencyScale = frequencyScale,
 		                                               .positionOffset = positionOffset },
@@ -46,7 +46,7 @@ namespace LiteNN::Layer
 	}
 
 	/// Applies RoPE using one runtime position per input row.
-	inline NodeOutput AddRoPEAtPositions(Subgraph& subgraph, NodeOutput input, NodeOutput positions,
+	inline NodeOutput AddRoPEAtPositions(Subgraph& subgraph, NodeOutput input, NodeOutput positions, RoPELayout layout,
 	                                     double base = 10000.0, double frequencyScale = 1.0)
 	{
 		const auto info = subgraph.GetOutputInfo(input);
@@ -66,6 +66,7 @@ namespace LiteNN::Layer
 		}
 		const auto output = subgraph.AddNode(RoPENode{ .input = input,
 		                                               .positions = positions,
+		                                               .layout = layout,
 		                                               .base = base,
 		                                               .frequencyScale = frequencyScale,
 		                                               .positionOffset = 0 },
@@ -73,12 +74,12 @@ namespace LiteNN::Layer
 		return { output, 0 };
 	}
 
-	inline SubgraphId BuildRoPE(ModelBuilder& builder, DataType dtype, ShapeView shape, double base = 10000.0,
-	                            std::size_t positionOffset = 0, double frequencyScale = 1.0)
+	inline SubgraphId BuildRoPE(ModelBuilder& builder, DataType dtype, ShapeView shape, RoPELayout layout,
+	                            double base = 10000.0, std::size_t positionOffset = 0, double frequencyScale = 1.0)
 	{
 		Subgraph subgraph;
 		const auto input = subgraph.AddParam(dtype, shape.ToOwned());
-		const auto result = AddRoPE(subgraph, { input, 0 }, base, positionOffset, frequencyScale);
+		const auto result = AddRoPE(subgraph, { input, 0 }, layout, base, positionOffset, frequencyScale);
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}

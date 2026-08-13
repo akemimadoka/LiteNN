@@ -447,7 +447,10 @@ namespace LiteNN
 				    {
 					    return RoPENode{ remap(n.input),
 						                 n.positions ? std::optional<NodeOutput>{ remap(*n.positions) } : std::nullopt,
-						                 n.base, n.frequencyScale, n.positionOffset };
+						                 n.layout,
+						                 n.base,
+						                 n.frequencyScale,
+						                 n.positionOffset };
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {

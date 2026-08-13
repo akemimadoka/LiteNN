@@ -2531,7 +2531,8 @@ TEST(CompiledModuleTest, DynamicRoPECacheInvalidatesAcrossPositions)
 	Subgraph subgraph;
 	const auto input = subgraph.AddParam(DataType::Float32, { 1, 8 });
 	const auto positions = subgraph.AddParam(DataType::Int64, { 1 });
-	const auto output = Layer::AddRoPEAtPositions(subgraph, { input, 0 }, { positions, 0 }, 10000.0, 0.5);
+	const auto output =
+	    Layer::AddRoPEAtPositions(subgraph, { input, 0 }, { positions, 0 }, RoPELayout::Normal, 10000.0, 0.5);
 	subgraph.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 

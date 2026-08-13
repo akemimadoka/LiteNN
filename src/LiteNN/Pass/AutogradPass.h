@@ -916,6 +916,7 @@ namespace LiteNN
 						                 n.positions ? std::optional<NodeOutput>{ NodeOutput{
 						                                   nodeMap[n.positions->node], n.positions->port } }
 						                             : std::nullopt,
+						                 n.layout,
 						                 n.base,
 						                 n.frequencyScale,
 						                 n.positionOffset };

@@ -525,6 +525,7 @@ namespace LiteNN
 	{
 		std::vector<ExecutablePlanAttribute> attrs;
 		AddPlanAttribute(attrs, "hasPositions", node.positions.has_value());
+		AddPlanAttribute(attrs, "layout", node.layout);
 		AddPlanAttribute(attrs, "base", node.base);
 		AddPlanAttribute(attrs, "frequencyScale", node.frequencyScale);
 		AddPlanAttribute(attrs, "positionOffset", node.positionOffset);

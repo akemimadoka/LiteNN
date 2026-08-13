@@ -318,11 +318,11 @@ namespace
 		if (positionType)
 		{
 			const auto positions = sg.AddParam(*positionType, { 3 });
-			output = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, 100.0, 0.5);
+			output = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, RoPELayout::Normal, 100.0, 0.5);
 		}
 		else
 		{
-			output = Layer::AddRoPE(sg, { input, 0 }, 100.0, 2, 0.5);
+			output = Layer::AddRoPE(sg, { input, 0 }, RoPELayout::Normal, 100.0, 2, 0.5);
 		}
 		sg.SetResults({ output });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));

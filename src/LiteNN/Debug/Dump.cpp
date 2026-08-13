@@ -503,10 +503,11 @@ namespace LiteNN::Debug
 				    }
 				    else if constexpr (std::same_as<T, RoPENode>)
 				    {
-					    return std::format(
-					        "RoPENode(input={}, positions={}, base={}, frequencyScale={}, positionOffset={})",
-					        FormatValueRef(value.input), FormatOptionalValueRef(value.positions), value.base,
-					        value.frequencyScale, value.positionOffset);
+					    return std::format("RoPENode(input={}, positions={}, layout={}, base={}, frequencyScale={}, "
+					                       "positionOffset={})",
+					                       FormatValueRef(value.input), FormatOptionalValueRef(value.positions),
+					                       EnumToString<EnumToStringStyle::Unqualified>(value.layout), value.base,
+					                       value.frequencyScale, value.positionOffset);
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {

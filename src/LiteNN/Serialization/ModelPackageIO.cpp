@@ -1412,6 +1412,7 @@ namespace LiteNN::Serialization
 					             .positions = hasPositions
 					                              ? std::optional<NodeOutput>{ RequireNodeInput(inputs, 1, op.kind) }
 					                              : std::nullopt,
+					             .layout = PlanAttributeEnum<RoPELayout>(op, "layout"),
 					             .base = PlanAttributeDouble(op, "base"),
 					             .frequencyScale = PlanAttributeDouble(op, "frequencyScale"),
 					             .positionOffset = PlanAttributeSize(op, "positionOffset") };

@@ -1,5 +1,6 @@
 #include <LiteNN/Device.h>
 #include <LiteNN/Metadata.h>
+#include <LiteNN/Operators.h>
 #include <LiteNN/Quantization.h>
 #include <LiteNN/Tensor.h>
 #include <LiteNN/TensorType.h>
@@ -396,12 +397,13 @@ namespace LiteNN
 			std::size_t axis;
 		};
 
-		// Rotary position embedding over adjacent pairs in a 2D [sequence, feature] tensor.
+		// Rotary position embedding in a 2D [sequence, feature] tensor.
 		// Runtime positions, when present, override the static positionOffset + row convention.
 		struct RoPENode
 		{
 			NodeOutput input;
 			std::optional<NodeOutput> positions;
+			RoPELayout layout;
 			double base{ 10000.0 };
 			double frequencyScale{ 1.0 };
 			std::size_t positionOffset{};

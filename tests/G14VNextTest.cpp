@@ -651,7 +651,8 @@ TEST(G14VNext, VNextModelPackageRoundTripsRoPEWithRuntimePositions)
 	Subgraph forward;
 	const auto input = forward.AddParam(DataType::Float32, { 2, 2 });
 	const auto positions = forward.AddParam(DataType::Int64, { 2 });
-	const auto output = Layer::AddRoPEAtPositions(forward, { input, 0 }, { positions, 0 }, 100.0, 0.5);
+	const auto output =
+	    Layer::AddRoPEAtPositions(forward, { input, 0 }, { positions, 0 }, RoPELayout::NeoX, 100.0, 0.5);
 	forward.SetResults({ output });
 	graph.SetForward(graph.AddSubgraph(std::move(forward)));
 	graph.SetInputNames({ "input", "positions" });
@@ -666,6 +667,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsRoPEWithRuntimePositions)
 	ASSERT_TRUE(std::holds_alternative<RoPENode>(node.node));
 	const auto& rope = std::get<RoPENode>(node.node);
 	ASSERT_TRUE(rope.positions.has_value());
+	EXPECT_EQ(rope.layout, RoPELayout::NeoX);
 	EXPECT_DOUBLE_EQ(rope.base, 100.0);
 	EXPECT_DOUBLE_EQ(rope.frequencyScale, 0.5);
 

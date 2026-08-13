@@ -1559,6 +1559,10 @@ namespace LiteNN::Validation
 			{
 				Fail(subgraphId, nodeId, "RoPENode base and frequencyScale must be finite and positive");
 			}
+			if (node.layout != RoPELayout::Normal && node.layout != RoPELayout::NeoX)
+			{
+				Fail(subgraphId, nodeId, "RoPENode layout is invalid");
+			}
 			if (node.positions)
 			{
 				const auto positions =

@@ -259,7 +259,10 @@ namespace LiteNN
 								                 node.positions
 								                     ? std::optional<NodeOutput>{ remapOutput(*node.positions) }
 								                     : std::nullopt,
-								                 node.base, node.frequencyScale, node.positionOffset };
+								                 node.layout,
+								                 node.base,
+								                 node.frequencyScale,
+								                 node.positionOffset };
 						    }
 						    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 						    {

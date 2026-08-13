@@ -87,6 +87,12 @@ namespace LiteNN
 		GroupNorm,
 	};
 
+	enum class RoPELayout
+	{
+		Normal,
+		NeoX,
+	};
+
 	enum class PoolMode
 	{
 		Max,

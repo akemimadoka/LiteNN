@@ -1384,7 +1384,7 @@ TEST(LayerRoPE, PositionZeroIsIdentity)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 1, 4 });
-	const auto out = Layer::AddRoPE(sg, { input, 0 });
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, RoPELayout::Normal);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1400,7 +1400,7 @@ TEST(LayerRoPE, RotatesPairsAtPositionOne)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 4 });
-	const auto out = Layer::AddRoPE(sg, { input, 0 }, 1.0);
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, RoPELayout::Normal, 1.0);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1418,7 +1418,7 @@ TEST(LayerRoPE, AppliesFrequencyScale)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
-	const auto out = Layer::AddRoPE(sg, { input, 0 }, 1.0, 1, 0.5);
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, RoPELayout::Normal, 1.0, 1, 0.5);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1434,7 +1434,7 @@ TEST(LayerRoPE, UsesRuntimePositions)
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 2 });
 	const auto positions = sg.AddParam(DataType::Int64, { 2 });
-	const auto out = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, 1.0);
+	const auto out = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, RoPELayout::Normal, 1.0);
 	sg.SetResults({ out });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -1453,7 +1453,7 @@ TEST(LayerRoPE, RejectsOddFeatureSize)
 	Graph graph;
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 2, 3 });
-	EXPECT_THROW(static_cast<void>(Layer::AddRoPE(sg, { input, 0 })), std::runtime_error);
+	EXPECT_THROW(static_cast<void>(Layer::AddRoPE(sg, { input, 0 }, RoPELayout::Normal)), std::runtime_error);
 }
 
 TEST(LayerSiLU, MatchesAnalyticValue)
