@@ -15,10 +15,10 @@
 
 namespace LiteNN::GGUF
 {
-	inline constexpr std::array<std::string_view, 13> LLaMASubLayerCheckpointBoundaryNames{
-		"attention_norm",   "query_rotated",      "key_rotated", "value",    "attention_context",
-		"attention_output", "attention_residual", "ffn_norm",    "ffn_gate", "ffn_up",
-		"ffn_swiglu",       "ffn_down",           "post_ffn",
+	inline constexpr std::array<std::string_view, 15> LLaMASubLayerCheckpointBoundaryNames{
+		"attention_norm",    "query_pre_rope",   "key_pre_rope",       "query_rotated", "key_rotated", "value",
+		"attention_context", "attention_output", "attention_residual", "ffn_norm",      "ffn_gate",    "ffn_up",
+		"ffn_swiglu",        "ffn_down",         "post_ffn",
 	};
 
 	struct LLaMADecoderBlock

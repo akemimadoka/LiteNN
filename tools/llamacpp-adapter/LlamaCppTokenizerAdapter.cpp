@@ -327,10 +327,10 @@ namespace LiteNN::LlamaCppAdapter
 			std::string error_;
 		};
 
-		constexpr std::array<std::string_view, 13> SubLayerBoundaries{
-			"attention_norm",   "query_rotated",      "key_rotated", "value",    "attention_context",
-			"attention_output", "attention_residual", "ffn_norm",    "ffn_gate", "ffn_up",
-			"ffn_swiglu",       "ffn_down",           "post_ffn",
+		constexpr std::array<std::string_view, 15> SubLayerBoundaries{
+			"attention_norm",    "query_pre_rope",   "key_pre_rope",       "query_rotated", "key_rotated", "value",
+			"attention_context", "attention_output", "attention_residual", "ffn_norm",      "ffn_gate",    "ffn_up",
+			"ffn_swiglu",        "ffn_down",         "post_ffn",
 		};
 
 		struct NamedLayerTensor
@@ -543,19 +543,20 @@ namespace LiteNN::LlamaCppAdapter
 				std::ofstream manifest;
 			};
 
-			static std::optional<std::string_view> BoundaryFor(std::string_view base)
+			static std::optional<std::string_view> BoundaryFor(const ggml_tensor* tensor)
 			{
+				const auto base = ParseNamedLayerTensor(tensor).base;
 				if (base == "attn_norm")
 				{
 					return "attention_norm";
 				}
 				if (base == "Qcur")
 				{
-					return "query_rotated";
+					return tensor->op == GGML_OP_ROPE ? "query_rotated" : "query_pre_rope";
 				}
 				if (base == "Kcur")
 				{
-					return "key_rotated";
+					return tensor->op == GGML_OP_ROPE ? "key_rotated" : "key_pre_rope";
 				}
 				if (base == "Vcur")
 				{
@@ -611,7 +612,7 @@ namespace LiteNN::LlamaCppAdapter
 				{
 					return selectedBlocks_.contains(*named.layer) || selectedBlocks_.contains(*named.layer + 1);
 				}
-				return selectedBlocks_.contains(*named.layer) && BoundaryFor(named.base).has_value();
+				return selectedBlocks_.contains(*named.layer) && BoundaryFor(tensor).has_value();
 			}
 
 			void Store(const ggml_tensor* tensor)
@@ -631,7 +632,7 @@ namespace LiteNN::LlamaCppAdapter
 				{
 					layerOutputs_[*named.layer] = values;
 				}
-				if (const auto boundary = BoundaryFor(named.base); boundary && selectedBlocks_.contains(*named.layer))
+				if (const auto boundary = BoundaryFor(tensor); boundary && selectedBlocks_.contains(*named.layer))
 				{
 					values_[std::string(*boundary)][*named.layer] = std::move(values);
 				}
@@ -658,7 +659,7 @@ namespace LiteNN::LlamaCppAdapter
 
 			std::string ShapeFor(std::string_view boundary, std::size_t count) const
 			{
-				if (boundary == "query_rotated" || boundary == "attention_context")
+				if (boundary == "query_pre_rope" || boundary == "query_rotated" || boundary == "attention_context")
 				{
 					if (count != attentionHeads_ * headWidth_)
 					{
@@ -666,7 +667,7 @@ namespace LiteNN::LlamaCppAdapter
 					}
 					return std::format("{}x{}", attentionHeads_, headWidth_);
 				}
-				if (boundary == "key_rotated" || boundary == "value")
+				if (boundary == "key_pre_rope" || boundary == "key_rotated" || boundary == "value")
 				{
 					if (count != kvHeads_ * headWidth_)
 					{

@@ -1249,6 +1249,8 @@ namespace LiteNN::GGUF
 		const auto queries = attentionProjectionOutputs[0];
 		const auto keys = attentionProjectionOutputs[1];
 		const auto values = attentionProjectionOutputs[2];
+		const auto queries2D = Reshape2D(subgraph, queries, hyperparameters.attentionHeadCount, headDim);
+		const auto keys2D = Reshape2D(subgraph, keys, hyperparameters.attentionHeadCountKV, headDim);
 		const auto keys3D = Reshape3D(subgraph, keys, 1, hyperparameters.attentionHeadCountKV, headDim);
 		const auto values2D = Reshape2D(subgraph, values, hyperparameters.attentionHeadCountKV, headDim);
 		std::vector<NodeOutput> rotatedKeyHeads;
@@ -1330,6 +1332,8 @@ namespace LiteNN::GGUF
 		{
 			subLayerCheckpoints = {
 				{ "attention_norm", normalizedAttentionInput },
+				{ "query_pre_rope", queries2D },
+				{ "key_pre_rope", keys2D },
 				{ "query_rotated", groupedQueries },
 				{ "key_rotated", rotatedKeys2D },
 				{ "value", values2D },

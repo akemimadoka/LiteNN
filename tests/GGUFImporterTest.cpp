@@ -4163,7 +4163,7 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeExposesSelectedSubLayerCheckpoints)
 	                                                                     .exposeLayerCheckpoints = true,
 	                                                                     .subLayerCheckpointBlocks = { 0 } });
 	const auto& plan = schedule.module.plan;
-	ASSERT_EQ(plan.outputs.size(), 20u);
+	ASSERT_EQ(plan.outputs.size(), 22u);
 	EXPECT_EQ(plan.outputs[0].name, "logits");
 	EXPECT_EQ(plan.outputs[6].name, "layer_hidden_0");
 	for (std::size_t boundaryIndex = 0; boundaryIndex < GGUF::LLaMASubLayerCheckpointBoundaryNames.size();
@@ -4172,11 +4172,13 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeExposesSelectedSubLayerCheckpoints)
 		EXPECT_EQ(plan.outputs[7 + boundaryIndex].name,
 		          std::format("layer_checkpoint_{}_0", GGUF::LLaMASubLayerCheckpointBoundaryNames[boundaryIndex]));
 	}
+	EXPECT_EQ(plan.outputs[8].type.StaticShape(), std::vector<std::size_t>({ 2, 2 }));
+	EXPECT_EQ(plan.outputs[9].type.StaticShape(), std::vector<std::size_t>({ 1, 2 }));
 	const auto projection = Runtime::RuntimeScheduleOutputProjectionForFunction(schedule, plan.forward);
-	ASSERT_EQ(projection.publicOutputIndices.size(), 15u);
+	ASSERT_EQ(projection.publicOutputIndices.size(), 17u);
 	EXPECT_EQ(projection.publicOutputIndices.front(), 0u);
 	EXPECT_EQ(projection.publicOutputIndices[1], 6u);
-	EXPECT_EQ(projection.publicOutputIndices.back(), 19u);
+	EXPECT_EQ(projection.publicOutputIndices.back(), 21u);
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(schedule));
 
 	EXPECT_THROW(GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,

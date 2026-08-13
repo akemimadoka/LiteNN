@@ -25,6 +25,8 @@ REPORT_SCHEMA = "litenn.qwen_first_divergence_attribution.v1"
 NRMSE_THRESHOLDS = (1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2)
 SUB_LAYER_BOUNDARIES = (
     "attention_norm",
+    "query_pre_rope",
+    "key_pre_rope",
     "query_rotated",
     "key_rotated",
     "value",
