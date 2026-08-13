@@ -1,5 +1,8 @@
 # Qwen First-Divergence RoPE Analysis (2026-08-12)
 
+> Follow-up: `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md` records the implemented fix, pre/post-RoPE attribution,
+> whole-network recovery, and the post-fix 192-token quality campaign.
+
 ## Scope
 
 This report localizes LiteNN's deterministic Qwen2.5-Coder 14B Q4_K_M natural-generation regression at the first

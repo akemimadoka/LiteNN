@@ -3403,21 +3403,30 @@ Priority classes:
                               `9.14e-7` NRMSE, while rotated Q/K jump to `0.854-1.001`/`0.277-0.357` NRMSE. Source audit
                               proves Qwen2 requires NeoX half-split RoPE while LiteNN only represents adjacent-pair
                               normal RoPE. Evidence: `docs/QwenFirstDivergenceRoPEAnalysis_2026-08-12.md`.
-                        - [ ] P0: add an explicit `Normal`/`NeoX` RoPE layout enum to graph and executable-plan
+                        - [x] P0: add an explicit `Normal`/`NeoX` RoPE layout enum to graph and executable-plan
                               contracts, validation, hashing, vNext serialization, diagnostics, cloning, and transforms.
                               Do not add a legacy implicit-layout path.
-                        - [ ] P0: propagate GGUF architecture metadata into RoPE layout, import Qwen2 as NeoX, and
+                        - [x] P0: propagate GGUF architecture metadata into RoPE layout, import Qwen2 as NeoX, and
                               reject unknown or unsupported layouts explicitly.
-                        - [ ] P0: implement NeoX head-local half-split pairing in the Interpreter, CPU AOT helper, and
+                        - [x] P0: implement NeoX head-local half-split pairing in the Interpreter, CPU AOT helper, and
                               generic MLIR path. Enabled CUDA/Vulkan paths must implement identical semantics or reject
                               the layout before dispatch.
-                        - [ ] P0: add independent normal/NeoX formula fixtures for static/dynamic positions and multiple
-                              heads, expose pre-RoPE Q/K checkpoints, and quantify the remaining projection-only residual.
-                        - [ ] P0: rerun the exact three-prompt attribution and 192-token quality campaign after the fix.
-                              Require removal of the rotated-Q/K semantic jump, finite/no-fallback execution, material
-                              quality recovery, and cache-hit throughput within the accepted variance gate.
-                        - [ ] Measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain
-                              aggregate and per-sample regressions.
+                        - [x] P0: add independent normal/NeoX formula fixtures for static/dynamic positions, preserve
+                              head-local pairing, expose pre-RoPE Q/K checkpoints, and quantify projection-only error.
+                              Pre/post RoPE NRMSE changes by at most `3.43e-8`; Q/K residuals are `0.0557%-0.207%`.
+                        - [ ] P0: complete post-fix model acceptance.
+                              - [x] Rerun exact attribution and the 192-token campaign. Peak NRMSE falls
+                                    `88.98%-94.04%`; prefix agreement reaches `71.875%`; same-context top-10 reaches
+                                    `98.849%`; two cases match 64/64 tokens; no fallback/non-finite values occur. The
+                                    remaining divergence is a top-2 near tie. Evidence:
+                                    `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
+                              - [ ] Run normal cache-hit throughput outside checkpoint builds and enforce the accepted
+                                    variance gate.
+                        - [ ] P0: replay the complete fixed reference trajectory and retain distribution distance,
+                              top-k/rank, and selected-token margin at every position. Do not mask near ties with a
+                              tolerant argmax.
+                        - [ ] P0: measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and
+                              retain aggregate and per-sample regressions.
                         - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
                               accepted variance gate.
                         - [ ] P1: replace full-vocabulary text logits with a compact indexed Float32 container. One
