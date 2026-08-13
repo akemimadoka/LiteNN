@@ -159,6 +159,20 @@ namespace LiteNN::GGUF
 			return value;
 		}
 
+		RoPELayout RoPELayoutForArchitecture(std::string_view architecture)
+		{
+			if (architecture == "llama")
+			{
+				return RoPELayout::Normal;
+			}
+			if (architecture == "qwen2")
+			{
+				return RoPELayout::NeoX;
+			}
+			throw std::runtime_error(
+			    std::format("Unsupported GGUF architecture '{}' for explicit RoPE layout", architecture));
+		}
+
 		struct GGUFContextDeleter
 		{
 			void operator()(gguf_context* ctx) const
@@ -978,6 +992,7 @@ namespace LiteNN::GGUF
 
 		LLaMAHyperparameters hyperparameters{
 			.architecture = architecture,
+			.ropeLayout = RoPELayoutForArchitecture(architecture),
 			.contextLength = ReadSizeValue(RequireMetadata(graph, key("context_length"))),
 			.embeddingLength = ReadSizeValue(RequireMetadata(graph, key("embedding_length"))),
 			.blockCount = ReadSizeValue(RequireMetadata(graph, key("block_count"))),

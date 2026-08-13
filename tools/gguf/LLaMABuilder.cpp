@@ -284,7 +284,7 @@ namespace LiteNN::GGUF
 				};
 			}();
 			const auto rotated =
-			    Layer::AddRoPE(subgraph, rotatedPrefix, RoPELayout::Normal, hyperparameters.ropeFrequencyBase,
+			    Layer::AddRoPE(subgraph, rotatedPrefix, hyperparameters.ropeLayout, hyperparameters.ropeFrequencyBase,
 			                   positionOffset, hyperparameters.ropeFrequencyScale);
 			if (hyperparameters.ropeDimensionCount == info.shape[1])
 			{
@@ -319,7 +319,7 @@ namespace LiteNN::GGUF
 				          0
 			          };
 			const auto rotated =
-			    Layer::AddRoPEAtPositions(subgraph, rotatedPrefix, positions, RoPELayout::Normal,
+			    Layer::AddRoPEAtPositions(subgraph, rotatedPrefix, positions, hyperparameters.ropeLayout,
 			                              hyperparameters.ropeFrequencyBase, hyperparameters.ropeFrequencyScale);
 			if (hyperparameters.ropeDimensionCount == info.shape[1])
 			{

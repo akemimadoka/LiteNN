@@ -16,6 +16,7 @@ namespace LiteNN::GGUF
 	struct LLaMAHyperparameters
 	{
 		std::string architecture;
+		RoPELayout ropeLayout;
 		std::size_t contextLength{};
 		std::size_t embeddingLength{};
 		std::size_t blockCount{};

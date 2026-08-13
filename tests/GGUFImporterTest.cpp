@@ -1010,6 +1010,7 @@ TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 
 	const auto hyperparameters = GGUF::ParseLLaMAHyperparameters(graph);
 	EXPECT_EQ(hyperparameters.architecture, "llama");
+	EXPECT_EQ(hyperparameters.ropeLayout, RoPELayout::Normal);
 	EXPECT_EQ(hyperparameters.contextLength, 4096u);
 	EXPECT_EQ(hyperparameters.embeddingLength, 128u);
 	EXPECT_EQ(hyperparameters.blockCount, 2u);
@@ -1022,6 +1023,24 @@ TEST(GGUFLLaMAHyperparameters, ParsesRequiredKeysAndDefaultsOptionalOnes)
 	EXPECT_EQ(hyperparameters.HeadDimension(), 16u);
 	EXPECT_EQ(hyperparameters.ropeDimensionCount, 16u);
 	EXPECT_EQ(hyperparameters.QueryGroupsPerKVHead(), 1u);
+}
+
+TEST(GGUFLLaMAHyperparameters, SelectsArchitectureSpecificRoPELayoutAndRejectsUnknownArchitecture)
+{
+	const auto qwen2 = GGUF::ParseLLaMAHyperparameters(BuildTinyQwen2Archive());
+	EXPECT_EQ(qwen2.ropeLayout, RoPELayout::NeoX);
+
+	auto unsupported =
+	    CopyArchiveWithMetadataOverride(BuildTinyLLaMAArchive(), "general.architecture", std::string("mistral"));
+	try
+	{
+		static_cast<void>(GGUF::ParseLLaMAHyperparameters(unsupported));
+		FAIL() << "Expected unsupported architecture to be rejected";
+	}
+	catch (const std::runtime_error& ex)
+	{
+		EXPECT_NE(std::string(ex.what()).find("explicit RoPE layout"), std::string::npos);
+	}
 }
 
 TEST(GGUFLLaMACompatibility, ReportsNamedProductionProfiles)
@@ -3561,6 +3580,29 @@ TEST(GGUFLLaMACausalLM, LowersFullGraphAndRunsCPUForwardOnTokenIds)
 	EXPECT_NEAR(ReadFloat(outputs[0], 3), 0.0f, 1e-5f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 4), expected, 1e-4f);
 	EXPECT_NEAR(ReadFloat(outputs[0], 5), 0.0f, 1e-5f);
+}
+
+TEST(GGUFLLaMACausalLM, Qwen2PrefillAndDecodeCarryNeoXRoPELayout)
+{
+	const auto archive = BuildTinyQwen2Archive();
+	const std::array graphs{ GGUF::LowerLLaMACausalLM(archive, 2), GGUF::LowerLLaMACausalLMDecodeCapacity(archive, 4) };
+	for (const auto& graph : graphs)
+	{
+		std::size_t ropeCount = 0;
+		for (SubgraphId subgraphId = 0; subgraphId < graph.SubgraphCount(); ++subgraphId)
+		{
+			const auto& subgraph = graph.GetSubgraph(subgraphId);
+			for (NodeId nodeId = 0; nodeId < subgraph.NodeCount(); ++nodeId)
+			{
+				if (const auto* rope = std::get_if<RoPENode>(&subgraph.GetNodeEntry(nodeId).node))
+				{
+					++ropeCount;
+					EXPECT_EQ(rope->layout, RoPELayout::NeoX);
+				}
+			}
+		}
+		EXPECT_GT(ropeCount, 0u);
+	}
 }
 
 TEST(GGUFLLaMACausalLM, MatchesDeterministicGoldenPrefillLogits)
