@@ -2551,6 +2551,47 @@ TEST(CompiledModuleTest, DynamicRoPECacheInvalidatesAcrossPositions)
 	}
 }
 
+TEST(CompiledModuleTest, NeoXRoPEMatchesIndependentFormulaForStaticAndDynamicPositions)
+{
+	const auto run = [](bool dynamicPositions) {
+		Graph graph;
+		Subgraph subgraph;
+		const auto input = subgraph.AddParam(DataType::Float32, { 1, 8 });
+		NodeOutput output;
+		if (dynamicPositions)
+		{
+			const auto positions = subgraph.AddParam(DataType::Int64, { 1 });
+			output = Layer::AddRoPEAtPositions(subgraph, { input, 0 }, { positions, 0 }, RoPELayout::NeoX, 100.0, 0.5);
+		}
+		else
+		{
+			output = Layer::AddRoPE(subgraph, { input, 0 }, RoPELayout::NeoX, 100.0, 3, 0.5);
+		}
+		subgraph.SetResults({ output });
+		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
+
+		const std::vector<double> values{ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 };
+		std::vector<Tensor<CPU>> inputs;
+		inputs.emplace_back(std::span<const double>(values), ShapeView{ { 1, 8 } });
+		if (dynamicPositions)
+		{
+			inputs.emplace_back(std::initializer_list<double>{ 3.0 }, ShapeView{ { 1 } }, DataType::Int64);
+		}
+		auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
+		const auto result = compiled.RunTensors(inputs)[0];
+		for (std::size_t pair = 0; pair < 4; ++pair)
+		{
+			const auto angle = 3.0 * std::pow(100.0, -2.0 * static_cast<double>(pair) / 8.0) * 0.5;
+			const auto first = static_cast<double>(values[pair]);
+			const auto second = static_cast<double>(values[4 + pair]);
+			EXPECT_NEAR(ReadFloat(result, pair), first * std::cos(angle) - second * std::sin(angle), 1.0e-5);
+			EXPECT_NEAR(ReadFloat(result, 4 + pair), first * std::sin(angle) + second * std::cos(angle), 1.0e-5);
+		}
+	};
+	run(false);
+	run(true);
+}
+
 TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 {
 	Graph graph;

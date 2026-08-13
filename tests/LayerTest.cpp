@@ -1448,6 +1448,54 @@ TEST(LayerRoPE, UsesRuntimePositions)
 	EXPECT_NEAR(ReadFloat(result, 3), std::sin(1.0f), 1e-5f);
 }
 
+TEST(LayerRoPE, NeoXUsesHalfSplitPairs)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 2, 8 });
+	const auto out = Layer::AddRoPE(sg, { input, 0 }, RoPELayout::NeoX, 1.0);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const std::vector<float> values{ 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F,
+		                             1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F };
+	const auto result = RunSingleIO(graph, values, { 2, 8 });
+	const auto cosine = std::cos(1.0F);
+	const auto sine = std::sin(1.0F);
+	for (std::size_t pair = 0; pair < 4; ++pair)
+	{
+		const auto first = values[8 + pair];
+		const auto second = values[12 + pair];
+		EXPECT_NEAR(ReadFloat(result, 8 + pair), first * cosine - second * sine, 1.0e-5F);
+		EXPECT_NEAR(ReadFloat(result, 12 + pair), first * sine + second * cosine, 1.0e-5F);
+	}
+}
+
+TEST(LayerRoPE, NeoXRuntimePositionsUseIndependentFormula)
+{
+	Graph graph;
+	Subgraph sg;
+	const auto input = sg.AddParam(DataType::Float32, { 1, 8 });
+	const auto positions = sg.AddParam(DataType::Int64, { 1 });
+	const auto out = Layer::AddRoPEAtPositions(sg, { input, 0 }, { positions, 0 }, RoPELayout::NeoX, 100.0, 0.5);
+	sg.SetResults({ out });
+	graph.SetForward(graph.AddSubgraph(std::move(sg)));
+
+	const std::vector<double> values{ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 };
+	Runtime::Interpreter<CPU> interpreter;
+	std::array inputs{ Tensor<CPU>(std::span<const double>(values), { 1, 8 }),
+		               Tensor<CPU>({ 3.0 }, { 1 }, DataType::Int64) };
+	const auto result = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs)[0];
+	for (std::size_t pair = 0; pair < 4; ++pair)
+	{
+		const auto angle = 3.0 * std::pow(100.0, -2.0 * static_cast<double>(pair) / 8.0) * 0.5;
+		const auto first = static_cast<double>(values[pair]);
+		const auto second = static_cast<double>(values[4 + pair]);
+		EXPECT_NEAR(ReadFloat(result, pair), first * std::cos(angle) - second * std::sin(angle), 1.0e-5);
+		EXPECT_NEAR(ReadFloat(result, 4 + pair), first * std::sin(angle) + second * std::cos(angle), 1.0e-5);
+	}
+}
+
 TEST(LayerRoPE, RejectsOddFeatureSize)
 {
 	Graph graph;

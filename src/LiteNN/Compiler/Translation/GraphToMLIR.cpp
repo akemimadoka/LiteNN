@@ -3450,6 +3450,8 @@ namespace litenn
 					generic->setAttr("litenn.rope_at_positions_base", builder_.getF64FloatAttr(node.base));
 					generic->setAttr("litenn.rope_at_positions_frequency_scale",
 					                 builder_.getF64FloatAttr(node.frequencyScale));
+					generic->setAttr("litenn.rope_at_positions_layout",
+					                 builder_.getI32IntegerAttr(static_cast<std::int32_t>(node.layout)));
 					valueMap[nodeId] = { generic.getResult(0) };
 					return;
 				}
@@ -3496,9 +3498,25 @@ namespace litenn
 
 				auto cosine = emitUnaryValue(LiteNN::UnaryOp::Cos, angles, dtype, laneShape);
 				auto sine = emitUnaryValue(LiteNN::UnaryOp::Sin, angles, dtype, laneShape);
-				auto pairs = emitReshapeValue(input, dtype, pairShape);
-				auto first = emitSliceValue(pairs, dtype, laneShape, 2, 0, 1);
-				auto second = emitSliceValue(pairs, dtype, laneShape, 2, 1, 1);
+				Value first;
+				Value second;
+				if (node.layout == RoPELayout::Normal)
+				{
+					auto pairs = emitReshapeValue(input, dtype, pairShape);
+					first = emitSliceValue(pairs, dtype, laneShape, 2, 0, 1);
+					second = emitSliceValue(pairs, dtype, laneShape, 2, 1, 1);
+				}
+				else if (node.layout == RoPELayout::NeoX)
+				{
+					const std::vector<std::size_t> halfShape{ sequenceLength, halfDim };
+					first = emitReshapeValue(emitSliceValue(input, dtype, halfShape, 1, 0, halfDim), dtype, laneShape);
+					second = emitReshapeValue(emitSliceValue(input, dtype, halfShape, 1, halfDim, halfDim), dtype,
+					                          laneShape);
+				}
+				else
+				{
+					throw std::runtime_error("GraphToMLIR received an invalid RoPE layout");
+				}
 				auto rotatedFirst = emitBinaryValue(
 				    LiteNN::BinaryOp::Subtract,
 				    emitBinaryValue(LiteNN::BinaryOp::Multiply, first, cosine, dtype, laneShape),
@@ -3507,8 +3525,18 @@ namespace litenn
 				    LiteNN::BinaryOp::Add, emitBinaryValue(LiteNN::BinaryOp::Multiply, first, sine, dtype, laneShape),
 				    emitBinaryValue(LiteNN::BinaryOp::Multiply, second, cosine, dtype, laneShape), dtype, laneShape);
 				SmallVector<Value> rotatedValues{ rotatedFirst, rotatedSecond };
-				auto concatenated = emitConcatValue(rotatedValues, dtype, pairShape, 2);
-				valueMap[nodeId] = { emitReshapeValue(concatenated, dtype, outputInfos[0].shape) };
+				if (node.layout == RoPELayout::Normal)
+				{
+					auto concatenated = emitConcatValue(rotatedValues, dtype, pairShape, 2);
+					valueMap[nodeId] = { emitReshapeValue(concatenated, dtype, outputInfos[0].shape) };
+				}
+				else
+				{
+					const std::vector<std::size_t> halfShape{ sequenceLength, halfDim };
+					rotatedValues[0] = emitReshapeValue(rotatedValues[0], dtype, halfShape);
+					rotatedValues[1] = emitReshapeValue(rotatedValues[1], dtype, halfShape);
+					valueMap[nodeId] = { emitConcatValue(rotatedValues, dtype, outputInfos[0].shape, 1) };
+				}
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const BatchMatMulNode& node,

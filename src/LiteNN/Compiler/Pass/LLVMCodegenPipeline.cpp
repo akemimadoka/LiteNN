@@ -51,6 +51,7 @@ namespace litenn
 		constexpr llvm::StringLiteral kGGMLBlockQuantizedGetRowsAttr = "litenn.ggml_block_quantized_get_rows";
 		constexpr llvm::StringLiteral kRoPEAtPositionsBaseAttr = "litenn.rope_at_positions_base";
 		constexpr llvm::StringLiteral kRoPEAtPositionsFrequencyScaleAttr = "litenn.rope_at_positions_frequency_scale";
+		constexpr llvm::StringLiteral kRoPEAtPositionsLayoutAttr = "litenn.rope_at_positions_layout";
 		constexpr llvm::StringLiteral kRoPEAtPositionsHelper = "litenn_cpu_rope_at_positions_f32";
 		constexpr llvm::StringLiteral kRMSNormF32Attr = "litenn.rms_norm_f32";
 		constexpr llvm::StringLiteral kRMSNormF32Helper = "litenn_cpu_rms_norm_f32";
@@ -840,8 +841,9 @@ namespace litenn
 		{
 			auto baseAttr = op->getAttrOfType<mlir::FloatAttr>(kRoPEAtPositionsBaseAttr);
 			auto frequencyScaleAttr = op->getAttrOfType<mlir::FloatAttr>(kRoPEAtPositionsFrequencyScaleAttr);
-			if (!baseAttr || !frequencyScaleAttr || op->getNumResults() != 0 || op.getInputs().size() != 2 ||
-			    op.getOutputs().size() != 1)
+			auto layoutAttr = op->getAttrOfType<mlir::IntegerAttr>(kRoPEAtPositionsLayoutAttr);
+			if (!baseAttr || !frequencyScaleAttr || !layoutAttr || op->getNumResults() != 0 ||
+			    op.getInputs().size() != 2 || op.getOutputs().size() != 1)
 			{
 				return mlir::failure();
 			}
@@ -860,6 +862,7 @@ namespace litenn
 
 			const auto loc = op.getLoc();
 			auto f64 = builder.getF64Type();
+			auto i32 = builder.getI32Type();
 			auto* mlirContext = builder.getContext();
 			auto dynamicLayoutRank1 =
 			    mlir::StridedLayoutAttr::get(mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic });
@@ -870,7 +873,7 @@ namespace litenn
 			auto dynamicI64Rank1 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic }, positionType.getElementType(),
 			                                             dynamicLayoutRank1);
 			auto funcType = builder.getFunctionType(
-			    mlir::TypeRange{ dynamicF32Rank2, dynamicI64Rank1, dynamicF32Rank2, f64, f64 }, mlir::TypeRange{});
+			    mlir::TypeRange{ dynamicF32Rank2, dynamicI64Rank1, dynamicF32Rank2, f64, f64, i32 }, mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kRoPEAtPositionsHelper);
 			if (!helper)
 			{
@@ -890,8 +893,10 @@ namespace litenn
 			auto base = builder.create<mlir::arith::ConstantFloatOp>(loc, f64, baseAttr.getValue()).getResult();
 			auto frequencyScale =
 			    builder.create<mlir::arith::ConstantFloatOp>(loc, f64, frequencyScaleAttr.getValue()).getResult();
+			auto layout = builder.create<mlir::arith::ConstantIntOp>(loc, i32, layoutAttr.getInt()).getResult();
 			builder.create<mlir::func::CallOp>(
-			    loc, helper, mlir::ValueRange{ dynamicInput, dynamicPositions, dynamicOut, base, frequencyScale });
+			    loc, helper,
+			    mlir::ValueRange{ dynamicInput, dynamicPositions, dynamicOut, base, frequencyScale, layout });
 			op.erase();
 			return mlir::success();
 		}

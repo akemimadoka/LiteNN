@@ -1521,7 +1521,7 @@ namespace LiteNN::Runtime
 			const auto cpuPositions = positions ? std::optional{ positions->CopyToDevice(CPU{}) } : std::nullopt;
 			auto cpuResult = Detail::EvalRoPE(GetValue(slots, node.input).CopyToDevice(CPU{}),
 			                                  cpuPositions ? &*cpuPositions : nullptr, node.base, node.frequencyScale,
-			                                  node.positionOffset);
+			                                  node.positionOffset, node.layout);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));

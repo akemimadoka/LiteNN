@@ -1315,24 +1315,24 @@ namespace
 		}
 	};
 
-	extern "C" void litenn_cpu_rope_at_positions_f32(const float*, const float* inputAligned, std::int64_t inputOffset,
-	                                                 std::int64_t inputRows, std::int64_t inputColumns,
-	                                                 std::int64_t inputRowStride, std::int64_t inputColumnStride,
-	                                                 const std::int64_t*, const std::int64_t* positionAligned,
-	                                                 std::int64_t positionOffset, std::int64_t positionSize,
-	                                                 std::int64_t positionStride, float*, float* outAligned,
-	                                                 std::int64_t outOffset, std::int64_t outRows,
-	                                                 std::int64_t outColumns, std::int64_t outRowStride,
-	                                                 std::int64_t outColumnStride, double base, double frequencyScale)
+	extern "C" void litenn_cpu_rope_at_positions_f32(
+	    const float*, const float* inputAligned, std::int64_t inputOffset, std::int64_t inputRows,
+	    std::int64_t inputColumns, std::int64_t inputRowStride, std::int64_t inputColumnStride, const std::int64_t*,
+	    const std::int64_t* positionAligned, std::int64_t positionOffset, std::int64_t positionSize,
+	    std::int64_t positionStride, float*, float* outAligned, std::int64_t outOffset, std::int64_t outRows,
+	    std::int64_t outColumns, std::int64_t outRowStride, std::int64_t outColumnStride, double base,
+	    double frequencyScale, std::int32_t layoutValue)
 	{
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_rope_at_positions_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("input={}x{} out={}x{}", inputRows, inputColumns, outRows, outColumns)
 		        : std::string{});
+		const auto layout = static_cast<RoPELayout>(layoutValue);
 		if (inputRows <= 0 || inputColumns <= 0 || (inputColumns % 2) != 0 || inputRows != outRows ||
 		    inputColumns != outColumns || positionSize != inputRows || !std::isfinite(base) || base <= 0.0 ||
-		    !std::isfinite(frequencyScale) || frequencyScale <= 0.0)
+		    !std::isfinite(frequencyScale) || frequencyScale <= 0.0 ||
+		    (layout != RoPELayout::Normal && layout != RoPELayout::NeoX))
 		{
 			return;
 		}
@@ -1348,12 +1348,13 @@ namespace
 			{
 				const auto cosine = cache.cosines[static_cast<std::size_t>(pair)];
 				const auto sine = cache.sines[static_cast<std::size_t>(pair)];
-				const auto first = static_cast<double>(input[row * inputRowStride + pair * 2 * inputColumnStride]);
-				const auto second =
-				    static_cast<double>(input[row * inputRowStride + (pair * 2 + 1) * inputColumnStride]);
-				out[row * outRowStride + pair * 2 * outColumnStride] =
+				const auto firstColumn = layout == RoPELayout::Normal ? pair * 2 : pair;
+				const auto secondColumn = layout == RoPELayout::Normal ? pair * 2 + 1 : pair + inputColumns / 2;
+				const auto first = static_cast<double>(input[row * inputRowStride + firstColumn * inputColumnStride]);
+				const auto second = static_cast<double>(input[row * inputRowStride + secondColumn * inputColumnStride]);
+				out[row * outRowStride + firstColumn * outColumnStride] =
 				    static_cast<float>(first * cosine - second * sine);
-				out[row * outRowStride + (pair * 2 + 1) * outColumnStride] =
+				out[row * outRowStride + secondColumn * outColumnStride] =
 				    static_cast<float>(first * sine + second * cosine);
 			}
 		}
@@ -11259,6 +11260,7 @@ namespace
 		std::uint32_t positionOffset{};
 		double base{};
 		double frequencyScale{};
+		RoPELayout layout{};
 	};
 
 	struct CUDANativeBatchMatMulPlan
@@ -12991,7 +12993,8 @@ namespace
 			                       .elementCount = *elementCount,
 			                       .positionOffset = static_cast<std::uint32_t>(rope->positionOffset),
 			                       .base = rope->base,
-			                       .frequencyScale = rope->frequencyScale };
+			                       .frequencyScale = rope->frequencyScale,
+			                       .layout = rope->layout };
 	}
 
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
@@ -14371,6 +14374,7 @@ namespace
 		    .featureSize = plan->featureSize,
 		    .positionOffset = plan->positionOffset,
 		    .positionType = plan->positionType,
+		    .layout = plan->layout,
 		});
 		if (!ptx)
 		{

@@ -825,7 +825,8 @@ namespace LiteNN
 			{
 				if (spec.featureSize == 0 || (spec.featureSize % 2) != 0 ||
 				    (spec.positionType && *spec.positionType != DataType::Int32 &&
-				     *spec.positionType != DataType::Int64))
+				     *spec.positionType != DataType::Int64) ||
+				    (spec.layout != RoPELayout::Normal && spec.layout != RoPELayout::NeoX))
 				{
 					throw std::runtime_error(
 					    "CUDA native RoPE requires an even feature size and optional Int32/Int64 positions");
@@ -849,10 +850,17 @@ namespace LiteNN
 				auto featureSize = EmitI32Constant(spec.featureSize);
 				auto row = EmitI32UDiv(blocks.index32, featureSize);
 				auto column = EmitI32URem(blocks.index32, featureSize);
-				auto pair = EmitI32UDiv(column, EmitI32Constant(2));
-				auto pairBase = EmitI32Add(EmitI32Mul(row, featureSize), EmitI32Mul(pair, EmitI32Constant(2)));
+				auto halfFeatureSize = EmitI32Constant(spec.featureSize / 2);
+				auto pair = spec.layout == RoPELayout::Normal ? EmitI32UDiv(column, EmitI32Constant(2))
+				                                              : EmitI32URem(column, halfFeatureSize);
+				auto rowBase = EmitI32Mul(row, featureSize);
+				auto pairBase = spec.layout == RoPELayout::Normal
+				                    ? EmitI32Add(rowBase, EmitI32Mul(pair, EmitI32Constant(2)))
+				                    : EmitI32Add(rowBase, pair);
 				auto first = EmitLoadF32(EmitF32GEP(in, pairBase));
-				auto second = EmitLoadF32(EmitF32GEP(in, EmitI32Add(pairBase, EmitI32Constant(1))));
+				auto secondOffset =
+				    EmitI32Add(pairBase, spec.layout == RoPELayout::Normal ? EmitI32Constant(1) : halfFeatureSize);
+				auto second = EmitLoadF32(EmitF32GEP(in, secondOffset));
 				mlir::Value position;
 				if (spec.positionType)
 				{
@@ -872,10 +880,14 @@ namespace LiteNN
 				auto rotatedFirst = EmitF32Sub(EmitF32Mul(first, cosine), EmitF32Mul(second, sine));
 				auto rotatedSecond = EmitF32Add(EmitF32Mul(first, sine), EmitF32Mul(second, cosine));
 				auto isFirst =
-				    builder_
-				        .create<mlir::LLVM::ICmpOp>(loc_, mlir::LLVM::ICmpPredicate::eq,
-				                                    EmitI32URem(column, EmitI32Constant(2)), EmitI32Constant(0))
-				        .getResult();
+				    spec.layout == RoPELayout::Normal
+				        ? builder_
+				              .create<mlir::LLVM::ICmpOp>(loc_, mlir::LLVM::ICmpPredicate::eq,
+				                                          EmitI32URem(column, EmitI32Constant(2)), EmitI32Constant(0))
+				              .getResult()
+				        : builder_
+				              .create<mlir::LLVM::ICmpOp>(loc_, mlir::LLVM::ICmpPredicate::ult, column, halfFeatureSize)
+				              .getResult();
 				auto result =
 				    builder_.create<mlir::arith::SelectOp>(loc_, isFirst, rotatedFirst, rotatedSecond).getResult();
 				EmitStoreF32(result, EmitF32GEP(out, blocks.index32));

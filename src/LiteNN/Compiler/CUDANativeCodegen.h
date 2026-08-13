@@ -68,6 +68,7 @@ namespace LiteNN
 		std::uint32_t featureSize{};
 		std::uint32_t positionOffset{};
 		std::optional<DataType> positionType;
+		RoPELayout layout;
 	};
 
 	struct CUDANativeBatchMatMulF32CodegenSpec

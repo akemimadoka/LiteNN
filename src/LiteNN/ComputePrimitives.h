@@ -874,7 +874,7 @@ namespace LiteNN::Detail
 	}
 
 	inline Tensor<CPU> EvalRoPE(const Tensor<CPU>& input, const Tensor<CPU>* positions, double base,
-	                            double frequencyScale, std::size_t positionOffset)
+	                            double frequencyScale, std::size_t positionOffset, RoPELayout layout)
 	{
 		if (!IsFloatingDataType(input.DType()) || input.Shape().NumDim() != 2 || (input.Shape()[1] % 2) != 0)
 		{
@@ -916,11 +916,14 @@ namespace LiteNN::Detail
 					    frequencyScale;
 					const auto cosine = std::cos(angle);
 					const auto sine = std::sin(angle);
-					const auto offset = row * featureSize + pair * 2;
-					const auto first = static_cast<double>(src[offset]);
-					const auto second = static_cast<double>(src[offset + 1]);
-					dst[offset] = static_cast<T>(first * cosine - second * sine);
-					dst[offset + 1] = static_cast<T>(first * sine + second * cosine);
+					const auto firstColumn = layout == RoPELayout::Normal ? pair * 2 : pair;
+					const auto secondColumn = layout == RoPELayout::Normal ? pair * 2 + 1 : pair + featureSize / 2;
+					const auto firstOffset = row * featureSize + firstColumn;
+					const auto secondOffset = row * featureSize + secondColumn;
+					const auto first = static_cast<double>(src[firstOffset]);
+					const auto second = static_cast<double>(src[secondOffset]);
+					dst[firstOffset] = static_cast<T>(first * cosine - second * sine);
+					dst[secondOffset] = static_cast<T>(first * sine + second * cosine);
 				}
 			}
 		});

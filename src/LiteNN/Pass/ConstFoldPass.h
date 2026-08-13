@@ -1106,7 +1106,7 @@ namespace LiteNN
 							        node.positions ? &GetConstValue(constValues, *node.positions) : nullptr;
 							    constValues[nodeId] =
 							        Detail::EvalRoPE(GetConstValue(constValues, node.input), positions, node.base,
-							                         node.frequencyScale, node.positionOffset);
+							                         node.frequencyScale, node.positionOffset, node.layout);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
