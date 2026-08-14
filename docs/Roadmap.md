@@ -3422,15 +3422,24 @@ Priority classes:
                                     `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
                               - [ ] Run normal cache-hit throughput outside checkpoint builds and enforce the accepted
                                     variance gate.
-                        - [ ] P0: replay the complete fixed reference trajectory and retain distribution distance,
-                              top-k/rank, and selected-token margin at every position. Do not mask near ties with a
-                              tolerant argmax.
+                        - [x] P0: replay the complete fixed reference trajectory and retain distribution distance,
+                              top-k/rank, and selected-token margin at every position. Across 192 same-input decisions,
+                              top-1 agreement is `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner
+                              never falls below rank 2. The predeclared gate remains failed: worst centered cosine is
+                              `0.998840426` against `0.999`, and worst Jensen-Shannon divergence is `0.001292896` against
+                              `0.001`. The former is a prediction-stable vocabulary-tail outlier; the latter occurs at
+                              explanation step 33 and is the probability-level localization candidate. Evidence:
+                              `docs/QwenFixedReferenceTrajectoryAnalysis_2026-08-14.md`.
                         - [ ] P0: measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and
-                              retain aggregate and per-sample regressions.
+                              retain aggregate and per-sample regressions. This owns the decision to accept residual
+                              quantized drift or localize explanation step 33; do not change model math from centered-
+                              cosine evidence alone.
                         - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
                               accepted variance gate.
                         - [ ] P1: replace full-vocabulary text logits with a compact indexed Float32 container. One
-                              paired campaign currently emits 384 files/1.07 GiB and takes about 39 seconds to parse.
+                              paired campaign emits 384 files/1.07 GiB; the fixed-trajectory LiteNN half alone is
+                              `0.523 GiB`, and reevaluating reused artifacts with probability metrics takes about 77
+                              seconds. Preserve random access, dtype/shape metadata, checksums, and atomic publication.
       - [x] Instrument FFN-Down worker dispatch, useful work, and barrier wait at low overhead. Stable steps 10-24 of a
             real cache-hit 14B run measured `45.2007 ms/step` for Q8_K activation quantization, `14.9425 ms` dispatch,
             `77.7852 ms` parallel wall time, and `3.8463 ms` final barrier wait; lookup, copy, and lock contention were

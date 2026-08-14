@@ -194,14 +194,20 @@ P0 implementation order:
           Evidence: `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
         - [ ] Run normal cache-hit throughput outside checkpoint builds and require accepted variance against the
           pre-fix performance baseline.
-      - [ ] P0: replay the complete fixed reference trajectory and retain distribution-distance, top-k/rank, and
-        selected-token margin evidence at every position. Do not use tolerant argmax to hide near-tie divergence.
+      - [x] P0: replay the complete fixed reference trajectory and retain distribution-distance, top-k/rank, and
+        selected-token margin evidence at every position. Across 192 same-input decisions, top-1 agreement is
+        `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner never falls below rank 2. The
+        predeclared gate remains failed at worst centered cosine `0.998840426` and worst Jensen-Shannon divergence
+        `0.001292896`; these are distinct tail-sensitive and probability-level outliers. Evidence:
+        `docs/QwenFixedReferenceTrajectoryAnalysis_2026-08-14.md`.
       - [ ] P0: measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain both aggregate
-        and per-sample regressions.
+        and per-sample regressions. Use this gate, rather than centered-logit cosine alone, to decide whether explanation
+        step 33 needs same-input projection/sub-layer attribution.
       - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the accepted variance gate.
       - [ ] P1: replace per-step full-vocabulary text logits with a compact indexed Float32 container. One 192-token
-        paired campaign currently creates 384 files/1.07 GiB and takes about 39 seconds to parse, which is too heavy for
-        routine CI.
+        paired campaign creates 384 files/1.07 GiB; the LiteNN fixed-trajectory half is `0.523 GiB`, and recomputing full
+        probability metrics from reused text artifacts takes about 77 seconds. The replacement must preserve indexed
+        random access, dtype/shape metadata, checksums, and atomic publication for routine CI.
   - [ ] Reproduce the remaining external `6.85 token/s` provenance with two accepted paired batches.
   - [ ] After short-window closure, extend the same correctness and variance gates to 128/512 generated tokens and
     2K/32K/128K/1M context tiers.
