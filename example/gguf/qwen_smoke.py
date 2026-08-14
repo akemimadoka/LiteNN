@@ -33,6 +33,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,7 +85,7 @@ def write_natural_generation_manifest(
     generated_token_ids: list[int],
     requested_token_count: int,
     decode_step: dict[str, object],
-    forced_generated_token_ids: list[int] | None = None,
+    forced_generated_token_ids: Sequence[int] | None = None,
 ) -> Path:
     output_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[dict[str, object]] = []
@@ -110,7 +111,7 @@ def write_natural_generation_manifest(
             "LiteNN natural-generation logits are incomplete: "
             f"expected decision steps {expected_steps}, found {actual_steps}"
         )
-    if forced_generated_token_ids is not None and generated_token_ids != forced_generated_token_ids:
+    if forced_generated_token_ids is not None and generated_token_ids != list(forced_generated_token_ids):
         raise SystemExit("LiteNN forced trajectory output does not match the requested context token ids")
     manifest = {
         "schema": "litenn.natural_generation.v1",
