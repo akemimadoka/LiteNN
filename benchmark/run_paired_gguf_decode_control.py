@@ -367,6 +367,12 @@ def process_power_policy_stable(process: dict[str, object]) -> bool:
     return isinstance(before, dict) and isinstance(after, dict) and before == after
 
 
+def paired_power_policy_stable(first: dict[str, object], second: dict[str, object]) -> bool:
+    if not process_power_policy_stable(first) or not process_power_policy_stable(second):
+        return False
+    return first.get("power_policy_before") == second.get("power_policy_before")
+
+
 def summarize_frequency(samples: list[dict[str, object]]) -> dict[str, object]:
     current = [
         float(value) for sample in samples for value in sample.get("current_mhz", [])  # type: ignore[union-attr]
@@ -982,8 +988,8 @@ def main() -> int:
         pair["litenn_vs_llama_percent"] = (
             float(litenn_result["tokens_per_second"]) / float(llama["tokens_per_second"]) - 1.0  # type: ignore[index]
         ) * 100.0
-        pair["power_policy_stable"] = process_power_policy_stable(llama["process"]) and process_power_policy_stable(  # type: ignore[index]
-            litenn_result["process"]  # type: ignore[index]
+        pair["power_policy_stable"] = paired_power_policy_stable(  # type: ignore[index]
+            llama["process"], litenn_result["process"]  # type: ignore[index]
         )
         if document["configuration"]["prompt_tokens"] is None:  # type: ignore[index]
             document["configuration"]["prompt_tokens"] = llama["prompt_tokens"]  # type: ignore[index]
@@ -1003,6 +1009,9 @@ def main() -> int:
         elif bool(litenn_result["fallback_used"]):  # type: ignore[index]
             document["status"] = "failed"
             document["failure"] = f"LiteNN fallback in pair {repetition}"
+        elif not pair["power_policy_stable"]:
+            document["status"] = "failed"
+            document["failure"] = f"power policy changed within or between runtimes in pair {repetition}"
         checkpoint()
         if document["status"] == "failed":
             raise SystemExit(document["failure"])

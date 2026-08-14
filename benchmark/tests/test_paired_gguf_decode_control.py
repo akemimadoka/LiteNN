@@ -13,6 +13,7 @@ from run_paired_gguf_decode_control import (  # noqa: E402
     load_litenn_generated_token_ids,
     load_tokenizer_token_ids,
     normalize_completion_text,
+    paired_power_policy_stable,
     parse_forced_replay_metrics,
     process_power_policy_stable,
     token_ids_identity,
@@ -76,6 +77,18 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertTrue(process_power_policy_stable(stable))
         self.assertFalse(process_power_policy_stable(changed))
         self.assertFalse(process_power_policy_stable({}))
+
+    def test_rejects_cross_runtime_power_policy_mismatch(self) -> None:
+        high_performance = {
+            "power_policy_before": {"source": "powercfg", "value": "high-performance"},
+            "power_policy_after": {"source": "powercfg", "value": "high-performance"},
+        }
+        balanced = {
+            "power_policy_before": {"source": "powercfg", "value": "balanced"},
+            "power_policy_after": {"source": "powercfg", "value": "balanced"},
+        }
+        self.assertTrue(paired_power_policy_stable(high_performance, high_performance))
+        self.assertFalse(paired_power_policy_stable(high_performance, balanced))
 
     def test_litenn_command_preserves_explicit_cache_capacity(self) -> None:
         args = SimpleNamespace(
