@@ -43,6 +43,9 @@ namespace LiteNN::LlamaCppAdapter
 		NaturalGenerationResult CaptureGreedyGeneration(std::span<const std::int32_t> promptTokenIds,
 		                                                std::size_t maximumGeneratedTokens,
 		                                                const std::filesystem::path& logitsOutputDirectory) const;
+		void CaptureTeacherForcedLogits(std::span<const std::int32_t> promptTokenIds,
+		                                std::span<const std::int32_t> targetTokenIds,
+		                                const std::filesystem::path& logitsOutputDirectory) const;
 		void CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 		                         std::span<const std::int32_t> generatedTokenIds,
 		                         const std::filesystem::path& outputDirectory) const;
@@ -66,6 +69,9 @@ namespace LiteNN::LlamaCppAdapter
 	void WriteNaturalGenerationManifest(std::span<const std::int32_t> promptTokenIds,
 	                                    const NaturalGenerationResult& result,
 	                                    const std::filesystem::path& outputDirectory);
+	void WriteTeacherForcedManifest(std::span<const std::int32_t> promptTokenIds,
+	                                std::span<const std::int32_t> targetTokenIds,
+	                                const std::filesystem::path& outputDirectory);
 	std::vector<std::int32_t> ParseCommaTokenIds(std::string_view text, std::string_view label);
 } // namespace LiteNN::LlamaCppAdapter
 

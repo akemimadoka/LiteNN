@@ -43,6 +43,8 @@ namespace
 		    << "  " << executable
 		    << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
 		    << "  " << executable
+		    << " teacher-forced-logits <model.gguf> <comma-prompt-token-ids> <comma-target-token-ids> <output-dir>\n"
+		    << "  " << executable
 		    << " generate-greedy-logits <model.gguf> <comma-prompt-token-ids> <max-generated-tokens> <output-dir>\n"
 		    << "  " << executable
 		    << " decode-layer-checkpoints <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids-or-dash> "
@@ -121,6 +123,18 @@ try
 		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
 		model.CaptureDecodeLogits(promptTokens, generatedTokens, argv[5]);
 		std::cout << "Captured " << generatedTokens.size() << " llama.cpp decode-logits steps in " << argv[5] << '\n';
+		return 0;
+	}
+	if (command == "teacher-forced-logits" && argc == 6)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
+		const auto targetTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "target token ids");
+		const std::filesystem::path outputDirectory = argv[5];
+		model.CaptureTeacherForcedLogits(promptTokens, targetTokens, outputDirectory / "logits");
+		LiteNN::LlamaCppAdapter::WriteTeacherForcedManifest(promptTokens, targetTokens, outputDirectory);
+		std::cout << "Captured " << targetTokens.size() << " llama.cpp teacher-forced pre-target steps in "
+		          << outputDirectory << '\n';
 		return 0;
 	}
 	if (command == "generate-greedy-logits" && argc == 6)

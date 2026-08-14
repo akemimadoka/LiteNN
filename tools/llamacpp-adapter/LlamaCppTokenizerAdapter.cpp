@@ -896,6 +896,63 @@ namespace LiteNN::LlamaCppAdapter
 		return result;
 	}
 
+	void Model::CaptureTeacherForcedLogits(std::span<const std::int32_t> promptTokenIds,
+	                                       std::span<const std::int32_t> targetTokenIds,
+	                                       const std::filesystem::path& logitsOutputDirectory) const
+	{
+		if (promptTokenIds.empty() || targetTokenIds.empty())
+		{
+			throw std::runtime_error("teacher-forced-logits requires non-empty prompt and target token ids");
+		}
+		if (promptTokenIds.size() + targetTokenIds.size() > std::numeric_limits<std::uint32_t>::max())
+		{
+			throw std::runtime_error("teacher-forced-logits context exceeds llama.cpp's uint32 capacity");
+		}
+		std::filesystem::create_directories(logitsOutputDirectory);
+		for (const auto& entry : std::filesystem::directory_iterator(logitsOutputDirectory))
+		{
+			if (entry.is_regular_file() && entry.path().filename().string().starts_with("decision-step-") &&
+			    entry.path().extension() == ".txt")
+			{
+				std::filesystem::remove(entry.path());
+			}
+		}
+
+		auto contextParams = llama_context_default_params();
+		contextParams.n_ctx = static_cast<std::uint32_t>(promptTokenIds.size() + targetTokenIds.size());
+		contextParams.n_batch = static_cast<std::uint32_t>(promptTokenIds.size());
+		contextParams.no_perf = true;
+		auto* rawContext = llama_init_from_model(impl_->model, contextParams);
+		if (rawContext == nullptr)
+		{
+			throw std::runtime_error("failed to create llama.cpp teacher-forced context");
+		}
+		const std::unique_ptr<llama_context, decltype(&llama_free)> context(rawContext, llama_free);
+		auto prompt = ToLlamaTokens(promptTokenIds);
+		if (llama_decode(context.get(), llama_batch_get_one(prompt.data(), static_cast<std::int32_t>(prompt.size()))) !=
+		    0)
+		{
+			throw std::runtime_error("llama.cpp teacher-forced prompt decode failed");
+		}
+
+		const auto vocabularySize = llama_vocab_n_tokens(llama_model_get_vocab(impl_->model));
+		const auto targets = ToLlamaTokens(targetTokenIds);
+		for (std::size_t decisionStep = 0; decisionStep < targets.size(); ++decisionStep)
+		{
+			WriteLogits(llama_get_logits_ith(context.get(), -1), vocabularySize,
+			            logitsOutputDirectory / std::format("decision-step-{:06}.txt", decisionStep));
+			if (decisionStep + 1 < targets.size())
+			{
+				auto token = targets[decisionStep];
+				if (llama_decode(context.get(), llama_batch_get_one(&token, 1)) != 0)
+				{
+					throw std::runtime_error("llama.cpp teacher-forced token decode failed at decision step " +
+					                         std::to_string(decisionStep));
+				}
+			}
+		}
+	}
+
 	void Model::CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 	                                std::span<const std::int32_t> generatedTokenIds,
 	                                const std::filesystem::path& outputDirectory) const
@@ -1166,6 +1223,49 @@ namespace LiteNN::LlamaCppAdapter
 			output << "    {\"decisionStep\": " << step << ", \"position\": " << promptTokenIds.size() + step
 			       << ", \"path\": \"logits/decision-step-" << std::setw(6) << std::setfill('0') << step << ".txt\"}";
 			if (step + 1 != result.generatedTokenIds.size())
+			{
+				output << ',';
+			}
+			output << '\n';
+		}
+		output << "  ]\n}\n";
+	}
+
+	void WriteTeacherForcedManifest(std::span<const std::int32_t> promptTokenIds,
+	                                std::span<const std::int32_t> targetTokenIds,
+	                                const std::filesystem::path& outputDirectory)
+	{
+		std::filesystem::create_directories(outputDirectory);
+		std::ofstream output(outputDirectory / "manifest.json");
+		if (!output)
+		{
+			throw std::runtime_error("failed to open teacher-forced manifest");
+		}
+		const auto writeTokens = [&output](std::span<const std::int32_t> tokens) {
+			output << '[';
+			for (std::size_t index = 0; index < tokens.size(); ++index)
+			{
+				if (index != 0)
+				{
+					output << ", ";
+				}
+				output << tokens[index];
+			}
+			output << ']';
+		};
+		output << "{\n  \"schema\": \"litenn.teacher_forced_logits.v1\",\n"
+		       << "  \"producer\": \"llama.cpp\",\n  \"captureBoundary\": \"pre-target\",\n"
+		       << "  \"promptTokenIds\": ";
+		writeTokens(promptTokenIds);
+		output << ",\n  \"targetTokenIds\": ";
+		writeTokens(targetTokenIds);
+		output << ",\n  \"fallbackUsed\": false,\n  \"logitsArtifacts\": [\n";
+		for (std::size_t step = 0; step < targetTokenIds.size(); ++step)
+		{
+			output << "    {\"decisionStep\": " << step << ", \"position\": " << promptTokenIds.size() + step
+			       << ", \"targetTokenId\": " << targetTokenIds[step] << ", \"path\": \"logits/decision-step-"
+			       << std::setw(6) << std::setfill('0') << step << ".txt\"}";
+			if (step + 1 != targetTokenIds.size())
 			{
 				output << ',';
 			}
