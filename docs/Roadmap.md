@@ -3331,6 +3331,15 @@ Priority classes:
                   - [ ] Rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under a stable
                         power policy before counting the whole-model gain. Preserve every outlier and require exact
                         trajectory, no fallback, cache hit, whole/bin variance, overhead, and coverage gates.
+                        - [x] Make LiteNN cache capacity explicit in the paired harness so a shape-stable post-NeoX
+                              production artifact can be reused instead of silently compiling `prompt+predict` shapes.
+                        - [x] Reject power-policy drift both within a process and across the two runtimes in each pair;
+                              the first rerun exposed real High Performance/Balanced transitions.
+                        - [ ] Add process-internal repeated decode windows after one mapping/thread warmup phase for both
+                              runtimes. Retain all windows and process-level medians to distinguish kernel variance from
+                              fresh-process residency effects before another five-pair acceptance attempt. Three stable-
+                              power batches remain rejected at `-9.10%/-9.83%/-11.64%` paired medians because one
+                              runtime exceeds 3% CV. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
@@ -3421,7 +3430,11 @@ Priority classes:
                                     remaining divergence is a top-2 near tie. Evidence:
                                     `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
                               - [ ] Run normal cache-hit throughput outside checkpoint builds and enforce the accepted
-                                    variance gate.
+                                    variance gate. A post-NeoX capacity-256 production artifact now runs with exact
+                                    fixed trajectory and no fallback, but three stable-power five-pair controls remain
+                                    rejected: the 128-token batches report `-9.10%/-9.83%` paired medians with one
+                                    runtime at `4.03%/3.98%` CV, and the 15-eval control reports `-11.64%` with LiteNN
+                                    at `4.80%` CV. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
                         - [x] P0: replay the complete fixed reference trajectory and retain distribution distance,
                               top-k/rank, and selected-token margin at every position. Across 192 same-input decisions,
                               top-1 agreement is `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner

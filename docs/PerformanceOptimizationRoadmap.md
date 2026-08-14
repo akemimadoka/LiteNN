@@ -104,6 +104,12 @@ P0 implementation order:
     - [ ] P0: rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under one stable power
       policy. Require exact trajectory, no fallback, cache hit, whole/bin variance and overhead gates; retain and report
       outliers instead of deleting them. This is the acceptance gate for the observed directional `7.02%` module gain.
+      - [x] Add an explicit LiteNN max-cache-length axis to preserve production AOT cache identity.
+      - [x] Reject in-process and cross-runtime power-policy drift immediately; the rejected post-NeoX campaign proved
+        that checking each process independently is insufficient.
+      - [ ] Add repeated decode windows inside each mapped process, retain within-process and process-level CVs, and
+        rerun the five-pair acceptance gate. Current fresh-process batches move the failing variance owner between
+        runtimes even at stable measured frequency. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
@@ -193,7 +199,10 @@ P0 implementation order:
           cases match 64/64 tokens, and fallback/non-finite counts remain zero. The remaining case is a top-2 near tie.
           Evidence: `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
         - [ ] Run normal cache-hit throughput outside checkpoint builds and require accepted variance against the
-          pre-fix performance baseline.
+          pre-fix performance baseline. A fresh post-NeoX capacity-256 production artifact passes cache-hit,
+          trajectory, natural-sampler, fallback, and power gates, but three stable-power five-pair controls fail the
+          3% dual-runtime CV rule. Their paired medians are `-9.10%`, `-9.83%`, and `-11.64%`; this is directional,
+          not accepted point evidence. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
       - [x] P0: replay the complete fixed reference trajectory and retain distribution-distance, top-k/rank, and
         selected-token margin evidence at every position. Across 192 same-input decisions, top-1 agreement is
         `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner never falls below rank 2. The
