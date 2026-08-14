@@ -30,6 +30,7 @@ def write_manifest(
     generated: list[int],
     logits: list[list[float]],
     fallback: bool = False,
+    sampling: str = "greedy",
 ) -> Path:
     artifacts = []
     for step, values in enumerate(logits):
@@ -39,7 +40,7 @@ def write_manifest(
     manifest = {
         "schema": gate.MANIFEST_SCHEMA,
         "producer": producer,
-        "sampling": "greedy",
+        "sampling": sampling,
         "promptTokenIds": prompt,
         "generatedTokenIds": generated,
         "requestedTokenCount": len(generated),
@@ -81,6 +82,81 @@ class GenerationQualityGateTest(unittest.TestCase):
             self.assertEqual(report["disputedToken"]["candidateDistribution"]["referenceTokenRank"], 2)
             self.assertGreater(report["disputedToken"]["referenceDistribution"]["preferenceMargin"], 0.0)
             self.assertGreater(report["disputedToken"]["candidateDistribution"]["preferenceMargin"], 0.0)
+
+    def test_fixed_reference_trajectory_keeps_every_step_same_context(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            reference = write_manifest(
+                root / "reference",
+                "reference",
+                [7, 8],
+                [1, 2],
+                [[0.0, 3.0, 2.9], [0.0, 1.0, 4.0]],
+            )
+            candidate = write_manifest(
+                root / "candidate",
+                "candidate",
+                [7, 8],
+                [1, 2],
+                [[0.0, 2.9, 3.0], [0.0, 1.1, 3.9]],
+                sampling="forced-reference-trajectory",
+            )
+            report = gate.evaluate_case(
+                "fixed",
+                reference,
+                candidate,
+                2,
+                gate.FIXED_REFERENCE_COMPARISON,
+            )
+
+            self.assertTrue(report["passedIntegrity"])
+            self.assertIsNone(report["firstDivergenceDecisionStep"])
+            self.assertEqual([step["sameContext"] for step in report["steps"]], [True, True])
+            self.assertEqual(report["steps"][0]["candidateContextTokenId"], 1)
+            self.assertEqual(report["steps"][0]["candidateSelectedTokenId"], 2)
+            self.assertFalse(report["steps"][0]["top1Agreement"])
+            self.assertEqual(report["steps"][0]["referenceTopTokenCandidateRank"], 2)
+            self.assertGreater(report["steps"][0]["jensenShannonDivergenceNats"], 0.0)
+
+    def test_fixed_reference_campaign_enforces_distribution_thresholds(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            reference = write_manifest(root / "reference", "reference", [1], [2], [[0.0, 1.0, 3.0]])
+            candidate = write_manifest(
+                root / "candidate",
+                "candidate",
+                [1],
+                [2],
+                [[0.0, 1.0, 3.0]],
+                sampling="forced-reference-trajectory",
+            )
+            campaign = {
+                "schema": gate.CAMPAIGN_SCHEMA,
+                "thresholds": {
+                    "minimumCaseCount": 1,
+                    "minimumTotalReferenceTokens": 1,
+                    "minimumFixedTrajectoryTop1Agreement": 1.0,
+                    "minimumFixedTrajectoryTopKOverlap": 1.0,
+                    "minimumFixedTrajectoryCenteredCosine": 1.0,
+                    "maximumFixedTrajectoryJensenShannon": 0.0,
+                },
+                "cases": [
+                    {
+                        "name": "fixed",
+                        "comparisonMode": gate.FIXED_REFERENCE_COMPARISON,
+                        "referenceManifest": str(reference),
+                        "candidateManifest": str(candidate),
+                    }
+                ],
+            }
+            campaign_path = root / "campaign.json"
+            campaign_path.write_text(json.dumps(campaign), encoding="utf-8")
+
+            report = gate.evaluate_campaign(campaign_path)
+            self.assertTrue(report["passed"])
+            self.assertEqual(report["summary"]["fixedTrajectoryComparedStepCount"], 1)
+            self.assertEqual(report["summary"]["fixedTrajectoryTop1Agreement"], 1.0)
+            self.assertEqual(report["summary"]["fixedTrajectoryJensenShannonDivergenceNatsMaximum"], 0.0)
 
     def test_campaign_enforces_coverage_and_quality_thresholds(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

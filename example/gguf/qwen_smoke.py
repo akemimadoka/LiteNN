@@ -84,6 +84,7 @@ def write_natural_generation_manifest(
     generated_token_ids: list[int],
     requested_token_count: int,
     decode_step: dict[str, object],
+    forced_generated_token_ids: list[int] | None = None,
 ) -> Path:
     output_directory.mkdir(parents=True, exist_ok=True)
     artifacts: list[dict[str, object]] = []
@@ -109,11 +110,14 @@ def write_natural_generation_manifest(
             "LiteNN natural-generation logits are incomplete: "
             f"expected decision steps {expected_steps}, found {actual_steps}"
         )
+    if forced_generated_token_ids is not None and generated_token_ids != forced_generated_token_ids:
+        raise SystemExit("LiteNN forced trajectory output does not match the requested context token ids")
     manifest = {
         "schema": "litenn.natural_generation.v1",
         "producer": "LiteNN",
         "runtime": "cpu_aot",
-        "sampling": "greedy",
+        "sampling": "forced-reference-trajectory" if forced_generated_token_ids is not None else "greedy",
+        "trajectoryMode": "fixed-reference" if forced_generated_token_ids is not None else "natural",
         "promptTokenIds": prompt_token_ids,
         "generatedTokenIds": generated_token_ids,
         "requestedTokenCount": requested_token_count,
@@ -1005,6 +1009,7 @@ def main() -> int:
                     generated_ids,
                     args.steps,
                     decode,
+                    args.forced_generated_token_ids,
                 )
         if args.llamacpp_tokenizer_tool is not None and not args.compile_only:
             text_output = args.text_output if args.text_output is not None else workdir / "generated_text.bin"

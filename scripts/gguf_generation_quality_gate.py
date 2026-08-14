@@ -27,7 +27,14 @@ DEFAULT_THRESHOLDS: dict[str, int | float] = {
     "minimumTotalReferenceTokens": 128,
     "minimumPrefixAgreement": 0.95,
     "minimumSameContextTopKOverlap": 0.90,
+    "minimumFixedTrajectoryTop1Agreement": 0.95,
+    "minimumFixedTrajectoryTopKOverlap": 0.95,
+    "minimumFixedTrajectoryCenteredCosine": 0.999,
+    "maximumFixedTrajectoryJensenShannon": 0.001,
 }
+
+NATURAL_COMPARISON = "natural"
+FIXED_REFERENCE_COMPARISON = "fixed-reference-trajectory"
 
 
 class QualityError(RuntimeError):
@@ -116,7 +123,83 @@ def token_rank(values: list[float], token: int) -> int:
     return 1 + sum(value > selected or (value == selected and index < token) for index, value in enumerate(values))
 
 
-def distribution_metrics(reference: list[float], candidate: list[float], top_k: int) -> dict[str, object]:
+def centered_logit_metrics(reference: list[float], candidate: list[float]) -> dict[str, float]:
+    reference_mean = statistics.fmean(reference)
+    candidate_mean = statistics.fmean(candidate)
+    squared_error = 0.0
+    reference_energy = 0.0
+    candidate_energy = 0.0
+    dot = 0.0
+    maximum_absolute_error = 0.0
+    for reference_value, candidate_value in zip(reference, candidate, strict=True):
+        centered_reference = reference_value - reference_mean
+        centered_candidate = candidate_value - candidate_mean
+        difference = centered_candidate - centered_reference
+        squared_error += difference * difference
+        reference_energy += centered_reference * centered_reference
+        candidate_energy += centered_candidate * centered_candidate
+        dot += centered_reference * centered_candidate
+        maximum_absolute_error = max(maximum_absolute_error, abs(difference))
+    normalized_rms_error = (
+        math.sqrt(squared_error / reference_energy)
+        if reference_energy > 0.0
+        else (0.0 if squared_error == 0.0 else math.inf)
+    )
+    cosine_denominator = math.sqrt(reference_energy * candidate_energy)
+    cosine = dot / cosine_denominator if cosine_denominator > 0.0 else (1.0 if squared_error == 0.0 else 0.0)
+    return {
+        "centeredLogitNormalizedRmsError": normalized_rms_error,
+        "centeredLogitCosineSimilarity": max(-1.0, min(1.0, cosine)),
+        "centeredLogitMaximumAbsoluteError": maximum_absolute_error,
+        "logitMeanOffset": candidate_mean - reference_mean,
+    }
+
+
+def probability_metrics(reference: list[float], candidate: list[float]) -> dict[str, float]:
+    reference_maximum = max(reference)
+    candidate_maximum = max(candidate)
+    reference_exp_sum = math.fsum(math.exp(value - reference_maximum) for value in reference)
+    candidate_exp_sum = math.fsum(math.exp(value - candidate_maximum) for value in candidate)
+    reference_log_normalizer = reference_maximum + math.log(reference_exp_sum)
+    candidate_log_normalizer = candidate_maximum + math.log(candidate_exp_sum)
+    reference_entropy = 0.0
+    cross_entropy = 0.0
+    kl_divergence = 0.0
+    jensen_shannon = 0.0
+    total_variation = 0.0
+    for reference_value, candidate_value in zip(reference, candidate, strict=True):
+        reference_log_probability = reference_value - reference_log_normalizer
+        candidate_log_probability = candidate_value - candidate_log_normalizer
+        reference_probability = math.exp(reference_log_probability)
+        candidate_probability = math.exp(candidate_log_probability)
+        if reference_probability > 0.0:
+            reference_entropy -= reference_probability * reference_log_probability
+            cross_entropy -= reference_probability * candidate_log_probability
+            kl_divergence += reference_probability * (
+                reference_log_probability - candidate_log_probability
+            )
+        midpoint = 0.5 * (reference_probability + candidate_probability)
+        if midpoint > 0.0:
+            if reference_probability > 0.0:
+                jensen_shannon += 0.5 * reference_probability * math.log(reference_probability / midpoint)
+            if candidate_probability > 0.0:
+                jensen_shannon += 0.5 * candidate_probability * math.log(candidate_probability / midpoint)
+        total_variation += abs(reference_probability - candidate_probability)
+    return {
+        "referenceEntropyNats": reference_entropy,
+        "referenceCrossEntropyCandidateNats": cross_entropy,
+        "referenceToCandidateKLDivergenceNats": max(0.0, kl_divergence),
+        "jensenShannonDivergenceNats": max(0.0, jensen_shannon),
+        "totalVariationDistance": 0.5 * total_variation,
+    }
+
+
+def distribution_metrics(
+    reference: list[float],
+    candidate: list[float],
+    top_k: int,
+    include_full_distribution: bool = False,
+) -> dict[str, object]:
     if len(reference) != len(candidate):
         raise QualityError(
             f"logit vocabulary mismatch: reference={len(reference)}, candidate={len(candidate)}"
@@ -125,7 +208,7 @@ def distribution_metrics(reference: list[float], candidate: list[float], top_k: 
     candidate_top = top_indices(candidate, top_k)
     overlap_count = len(set(reference_top) & set(candidate_top))
     denominator = min(top_k, len(reference))
-    return {
+    result: dict[str, object] = {
         "vocabularySize": len(reference),
         "referenceTopTokenId": reference_top[0],
         "candidateTopTokenId": candidate_top[0],
@@ -135,7 +218,18 @@ def distribution_metrics(reference: list[float], candidate: list[float], top_k: 
         "candidateTopKTokenIds": candidate_top,
         "topKOverlapCount": overlap_count,
         "topKOverlap": overlap_count / denominator,
+        "top1Agreement": reference_top[0] == candidate_top[0],
     }
+    if include_full_distribution:
+        result.update(
+            {
+                "referenceTopTokenCandidateRank": token_rank(candidate, reference_top[0]),
+                "candidateTopTokenReferenceRank": token_rank(reference, candidate_top[0]),
+                **centered_logit_metrics(reference, candidate),
+                **probability_metrics(reference, candidate),
+            }
+        )
+    return result
 
 
 def common_prefix_length(reference: list[int], candidate: list[int]) -> int:
@@ -151,9 +245,16 @@ def mean(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
-def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: int) -> dict[str, object]:
+def evaluate_case(
+    name: str,
+    reference_path: Path,
+    candidate_path: Path,
+    top_k: int,
+    comparison_mode: str = NATURAL_COMPARISON,
+) -> dict[str, object]:
     report: dict[str, object] = {
         "name": name,
+        "comparisonMode": comparison_mode,
         "referenceManifest": str(reference_path),
         "candidateManifest": str(candidate_path),
         "passedIntegrity": False,
@@ -162,16 +263,27 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
         "errors": [],
     }
     try:
+        if comparison_mode not in (NATURAL_COMPARISON, FIXED_REFERENCE_COMPARISON):
+            raise QualityError(f"unsupported comparison mode {comparison_mode!r}")
         reference_document = load_json(reference_path, MANIFEST_SCHEMA)
         candidate_document = load_json(candidate_path, MANIFEST_SCHEMA)
-        if reference_document.get("sampling") != "greedy" or candidate_document.get("sampling") != "greedy":
-            raise QualityError("both natural-generation manifests must use sampling=greedy")
+        if reference_document.get("sampling") != "greedy":
+            raise QualityError("the reference manifest must use sampling=greedy")
+        expected_candidate_sampling = (
+            "greedy" if comparison_mode == NATURAL_COMPARISON else "forced-reference-trajectory"
+        )
+        if candidate_document.get("sampling") != expected_candidate_sampling:
+            raise QualityError(
+                f"candidate sampling must be {expected_candidate_sampling!r} for {comparison_mode} comparison"
+            )
         reference_prompt = token_ids(reference_document, "promptTokenIds", reference_path)
         candidate_prompt = token_ids(candidate_document, "promptTokenIds", candidate_path)
         if reference_prompt != candidate_prompt:
             raise QualityError("reference and candidate prompt token ids differ")
         reference_tokens = token_ids(reference_document, "generatedTokenIds", reference_path)
         candidate_tokens = token_ids(candidate_document, "generatedTokenIds", candidate_path)
+        if comparison_mode == FIXED_REFERENCE_COMPARISON and reference_tokens != candidate_tokens:
+            raise QualityError("fixed-reference candidate context tokens differ from the reference trajectory")
         reference_fallback = reference_document.get("fallbackUsed")
         candidate_fallback = candidate_document.get("fallbackUsed")
         report["fallbackUsed"] = reference_fallback is not False or candidate_fallback is not False
@@ -182,7 +294,12 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
 
         prefix_length = common_prefix_length(reference_tokens, candidate_tokens)
         denominator = max(len(reference_tokens), len(candidate_tokens), 1)
-        first_divergence = prefix_length if prefix_length < max(len(reference_tokens), len(candidate_tokens)) else None
+        first_divergence = (
+            prefix_length
+            if comparison_mode == NATURAL_COMPARISON
+            and prefix_length < max(len(reference_tokens), len(candidate_tokens))
+            else None
+        )
         common_steps = range(min(len(reference_tokens), len(candidate_tokens)))
         steps: list[dict[str, object]] = []
         same_context_overlaps: list[float] = []
@@ -192,8 +309,17 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
         for step in common_steps:
             reference_logits = parse_logits(reference_artifacts[step])
             candidate_logits = parse_logits(candidate_artifacts[step])
-            metrics = distribution_metrics(reference_logits, candidate_logits, top_k)
-            same_context = first_divergence is None or step <= first_divergence
+            metrics = distribution_metrics(
+                reference_logits,
+                candidate_logits,
+                top_k,
+                comparison_mode == FIXED_REFERENCE_COMPARISON,
+            )
+            same_context = (
+                comparison_mode == FIXED_REFERENCE_COMPARISON
+                or first_divergence is None
+                or step <= first_divergence
+            )
             overlap = float(metrics["topKOverlap"])
             trajectory_overlaps.append(overlap)
             if same_context:
@@ -204,7 +330,7 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
                 selected_top1_mismatches.append(
                     {"decisionStep": step, "producer": "reference", "selectedTokenId": reference_token}
                 )
-            if metrics["candidateTopTokenId"] != candidate_token:
+            if comparison_mode == NATURAL_COMPARISON and metrics["candidateTopTokenId"] != candidate_token:
                 selected_top1_mismatches.append(
                     {"decisionStep": step, "producer": "candidate", "selectedTokenId": candidate_token}
                 )
@@ -212,7 +338,10 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
                 "decisionStep": step,
                 "sameContext": same_context,
                 "referenceSelectedTokenId": reference_token,
-                "candidateSelectedTokenId": candidate_token,
+                "candidateSelectedTokenId": (
+                    candidate_token if comparison_mode == NATURAL_COMPARISON else metrics["candidateTopTokenId"]
+                ),
+                "candidateContextTokenId": candidate_token,
                 **metrics,
             }
             steps.append(step_report)
@@ -240,6 +369,7 @@ def evaluate_case(name: str, reference_path: Path, candidate_path: Path, top_k: 
             {
                 "referenceProducer": reference_document.get("producer"),
                 "candidateProducer": candidate_document.get("producer"),
+                "comparisonMode": comparison_mode,
                 "promptTokenCount": len(reference_prompt),
                 "referenceGeneratedTokenCount": len(reference_tokens),
                 "candidateGeneratedTokenCount": len(candidate_tokens),
@@ -287,9 +417,17 @@ def merged_thresholds(campaign: dict[str, object], overrides: dict[str, int | fl
         raise QualityError("topK and minimumCaseCount must be positive")
     if int(thresholds["minimumTotalReferenceTokens"]) <= 0:
         raise QualityError("minimumTotalReferenceTokens must be positive")
-    for key in ("minimumPrefixAgreement", "minimumSameContextTopKOverlap"):
+    for key in (
+        "minimumPrefixAgreement",
+        "minimumSameContextTopKOverlap",
+        "minimumFixedTrajectoryTop1Agreement",
+        "minimumFixedTrajectoryTopKOverlap",
+        "minimumFixedTrajectoryCenteredCosine",
+    ):
         if not 0.0 <= float(thresholds[key]) <= 1.0:
             raise QualityError(f"{key} must be in [0, 1]")
+    if float(thresholds["maximumFixedTrajectoryJensenShannon"]) < 0.0:
+        raise QualityError("maximumFixedTrajectoryJensenShannon must be non-negative")
     return thresholds
 
 
@@ -312,12 +450,16 @@ def evaluate_campaign(
         seen_names.add(name)
         if "referenceManifest" not in raw or "candidateManifest" not in raw:
             raise QualityError(f"campaign case {name} is missing a manifest path")
+        comparison_mode = raw.get("comparisonMode", NATURAL_COMPARISON)
+        if not isinstance(comparison_mode, str):
+            raise QualityError(f"campaign case {name} has an invalid comparisonMode")
         cases.append(
             evaluate_case(
                 name,
                 resolve_path(raw["referenceManifest"], campaign_path.parent),
                 resolve_path(raw["candidateManifest"], campaign_path.parent),
                 int(thresholds["topK"]),
+                comparison_mode,
             )
         )
 
@@ -347,6 +489,22 @@ def evaluate_campaign(
         for case in valid_cases
         if case.get("firstDivergenceDecisionStep") is not None
     ]
+    natural_cases = [case for case in valid_cases if case.get("comparisonMode") == NATURAL_COMPARISON]
+    fixed_cases = [case for case in valid_cases if case.get("comparisonMode") == FIXED_REFERENCE_COMPARISON]
+    fixed_steps = [
+        step
+        for case in fixed_cases
+        for step in case.get("steps", [])
+        if isinstance(step, dict)
+    ]
+    fixed_top1 = [1.0 if step["top1Agreement"] else 0.0 for step in fixed_steps]
+    fixed_top_k = [float(step["topKOverlap"]) for step in fixed_steps]
+    fixed_centered_nrmse = [float(step["centeredLogitNormalizedRmsError"]) for step in fixed_steps]
+    fixed_centered_cosine = [float(step["centeredLogitCosineSimilarity"]) for step in fixed_steps]
+    fixed_kl = [float(step["referenceToCandidateKLDivergenceNats"]) for step in fixed_steps]
+    fixed_jensen_shannon = [float(step["jensenShannonDivergenceNats"]) for step in fixed_steps]
+    fixed_total_variation = [float(step["totalVariationDistance"]) for step in fixed_steps]
+    fixed_reference_ranks = [float(step["referenceTopTokenCandidateRank"]) for step in fixed_steps]
     same_context_overlap = mean(same_context_values) or 0.0
     checks = [
         {
@@ -367,20 +525,58 @@ def evaluate_campaign(
             "actual": len(valid_cases),
             "required": len(cases),
         },
-        {
-            "name": "prefixAgreement",
-            "passed": weighted_prefix >= float(thresholds["minimumPrefixAgreement"]),
-            "actual": weighted_prefix,
-            "required": thresholds["minimumPrefixAgreement"],
-        },
-        {
-            "name": "sameContextTopKOverlap",
-            "passed": bool(same_context_values)
-            and same_context_overlap >= float(thresholds["minimumSameContextTopKOverlap"]),
-            "actual": same_context_overlap,
-            "required": thresholds["minimumSameContextTopKOverlap"],
-        },
     ]
+    if natural_cases:
+        checks.extend(
+            [
+                {
+                    "name": "prefixAgreement",
+                    "passed": weighted_prefix >= float(thresholds["minimumPrefixAgreement"]),
+                    "actual": weighted_prefix,
+                    "required": thresholds["minimumPrefixAgreement"],
+                },
+                {
+                    "name": "sameContextTopKOverlap",
+                    "passed": bool(same_context_values)
+                    and same_context_overlap >= float(thresholds["minimumSameContextTopKOverlap"]),
+                    "actual": same_context_overlap,
+                    "required": thresholds["minimumSameContextTopKOverlap"],
+                },
+            ]
+        )
+    if fixed_cases:
+        checks.extend(
+            [
+                {
+                    "name": "fixedTrajectoryTop1Agreement",
+                    "passed": bool(fixed_top1)
+                    and float(mean(fixed_top1)) >= float(thresholds["minimumFixedTrajectoryTop1Agreement"]),
+                    "actual": mean(fixed_top1),
+                    "required": thresholds["minimumFixedTrajectoryTop1Agreement"],
+                },
+                {
+                    "name": "fixedTrajectoryTopKOverlap",
+                    "passed": bool(fixed_top_k)
+                    and float(mean(fixed_top_k)) >= float(thresholds["minimumFixedTrajectoryTopKOverlap"]),
+                    "actual": mean(fixed_top_k),
+                    "required": thresholds["minimumFixedTrajectoryTopKOverlap"],
+                },
+                {
+                    "name": "fixedTrajectoryCenteredCosine",
+                    "passed": bool(fixed_centered_cosine)
+                    and min(fixed_centered_cosine) >= float(thresholds["minimumFixedTrajectoryCenteredCosine"]),
+                    "actual": min(fixed_centered_cosine) if fixed_centered_cosine else None,
+                    "required": thresholds["minimumFixedTrajectoryCenteredCosine"],
+                },
+                {
+                    "name": "fixedTrajectoryJensenShannon",
+                    "passed": bool(fixed_jensen_shannon)
+                    and max(fixed_jensen_shannon) <= float(thresholds["maximumFixedTrajectoryJensenShannon"]),
+                    "actual": max(fixed_jensen_shannon) if fixed_jensen_shannon else None,
+                    "required": thresholds["maximumFixedTrajectoryJensenShannon"],
+                },
+            ]
+        )
     passed = all(bool(check["passed"]) for check in checks)
     return {
         "schema": REPORT_SCHEMA,
@@ -403,6 +599,33 @@ def evaluate_campaign(
             "noDivergenceCaseCount": len(valid_cases) - len(divergences),
             "fallbackCaseCount": sum(case.get("fallbackUsed") is True for case in cases),
             "nonFiniteCaseCount": sum(case.get("finiteLogits") is False for case in cases),
+            "fixedTrajectoryCaseCount": len(fixed_cases),
+            "fixedTrajectoryComparedStepCount": len(fixed_steps),
+            "fixedTrajectoryTop1Agreement": mean(fixed_top1),
+            "fixedTrajectoryTopKOverlapMean": mean(fixed_top_k),
+            "fixedTrajectoryTopKOverlapMinimum": min(fixed_top_k) if fixed_top_k else None,
+            "fixedTrajectoryCenteredLogitNormalizedRmsErrorMean": mean(fixed_centered_nrmse),
+            "fixedTrajectoryCenteredLogitNormalizedRmsErrorMaximum": (
+                max(fixed_centered_nrmse) if fixed_centered_nrmse else None
+            ),
+            "fixedTrajectoryCenteredLogitCosineSimilarityMean": mean(fixed_centered_cosine),
+            "fixedTrajectoryCenteredLogitCosineSimilarityMinimum": (
+                min(fixed_centered_cosine) if fixed_centered_cosine else None
+            ),
+            "fixedTrajectoryReferenceToCandidateKLDivergenceNatsMean": mean(fixed_kl),
+            "fixedTrajectoryReferenceToCandidateKLDivergenceNatsMaximum": max(fixed_kl) if fixed_kl else None,
+            "fixedTrajectoryJensenShannonDivergenceNatsMean": mean(fixed_jensen_shannon),
+            "fixedTrajectoryJensenShannonDivergenceNatsMaximum": (
+                max(fixed_jensen_shannon) if fixed_jensen_shannon else None
+            ),
+            "fixedTrajectoryTotalVariationDistanceMean": mean(fixed_total_variation),
+            "fixedTrajectoryTotalVariationDistanceMaximum": (
+                max(fixed_total_variation) if fixed_total_variation else None
+            ),
+            "fixedTrajectoryReferenceTokenCandidateRankMean": mean(fixed_reference_ranks),
+            "fixedTrajectoryReferenceTokenCandidateRankMaximum": (
+                max(fixed_reference_ranks) if fixed_reference_ranks else None
+            ),
         },
         "cases": cases,
     }
@@ -430,19 +653,54 @@ def markdown_report(report: dict[str, object]) -> str:
         f"| Median first divergence | {summary['firstDivergenceDecisionStepMedian']} |",
         f"| Fallback / non-finite cases | {summary['fallbackCaseCount']} / {summary['nonFiniteCaseCount']} |",
         "",
-        "| Case | Ref / candidate tokens | Prefix | First divergence | Same-context top-k | Trajectory top-k | Integrity |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
+    if int(summary.get("fixedTrajectoryCaseCount", 0)) > 0:
+        lines.extend(
+            [
+                "## Fixed-Reference Trajectory",
+                "",
+                "| Metric | Mean | Worst |",
+                "| --- | ---: | ---: |",
+                f"| Top-1 agreement | {percent(summary['fixedTrajectoryTop1Agreement'])} | n/a |",
+                f"| Top-k overlap | {percent(summary['fixedTrajectoryTopKOverlapMean'])} "
+                f"| {percent(summary['fixedTrajectoryTopKOverlapMinimum'])} |",
+                f"| Centered logit NRMSE | {summary['fixedTrajectoryCenteredLogitNormalizedRmsErrorMean']:.6g} "
+                f"| {summary['fixedTrajectoryCenteredLogitNormalizedRmsErrorMaximum']:.6g} |",
+                f"| Centered logit cosine | {summary['fixedTrajectoryCenteredLogitCosineSimilarityMean']:.9f} "
+                f"| {summary['fixedTrajectoryCenteredLogitCosineSimilarityMinimum']:.9f} |",
+                f"| KL(reference || candidate), nats | "
+                f"{summary['fixedTrajectoryReferenceToCandidateKLDivergenceNatsMean']:.6g} "
+                f"| {summary['fixedTrajectoryReferenceToCandidateKLDivergenceNatsMaximum']:.6g} |",
+                f"| Jensen-Shannon, nats | {summary['fixedTrajectoryJensenShannonDivergenceNatsMean']:.6g} "
+                f"| {summary['fixedTrajectoryJensenShannonDivergenceNatsMaximum']:.6g} |",
+                f"| Total variation | {summary['fixedTrajectoryTotalVariationDistanceMean']:.6g} "
+                f"| {summary['fixedTrajectoryTotalVariationDistanceMaximum']:.6g} |",
+                f"| Reference top-token rank in candidate | "
+                f"{summary['fixedTrajectoryReferenceTokenCandidateRankMean']:.3f} "
+                f"| {summary['fixedTrajectoryReferenceTokenCandidateRankMaximum']:.0f} |",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "| Case | Mode | Ref / candidate tokens | Prefix | First divergence | Same-context top-k | Trajectory top-k | Integrity |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
     cases = report["cases"]
     assert isinstance(cases, list)
     for case in cases:
         assert isinstance(case, dict)
         if case.get("passedIntegrity") is not True:
             errors = case.get("errors", [])
-            lines.append(f"| {case['name']} | n/a | n/a | n/a | n/a | n/a | FAIL: {'; '.join(errors)} |")
+            lines.append(
+                f"| {case['name']} | {case.get('comparisonMode')} | n/a | n/a | n/a | n/a | n/a "
+                f"| FAIL: {'; '.join(errors)} |"
+            )
             continue
         lines.append(
-            f"| {case['name']} | {case['referenceGeneratedTokenCount']} / {case['candidateGeneratedTokenCount']} "
+            f"| {case['name']} | {case['comparisonMode']} "
+            f"| {case['referenceGeneratedTokenCount']} / {case['candidateGeneratedTokenCount']} "
             f"| {percent(case['prefixAgreement'])} | {case['firstDivergenceDecisionStep']} "
             f"| {percent(case['sameContextTopKOverlapMean'])} | {percent(case['trajectoryTopKOverlapMean'])} | PASS |"
         )
@@ -451,6 +709,7 @@ def markdown_report(report: dict[str, object]) -> str:
             "",
             "Same-context metrics include the first divergent decision because both runtimes consumed an identical token prefix.",
             "Post-divergence top-k overlap is trajectory-level evidence and is not interpreted as same-input numerical parity.",
+            "Fixed-reference metrics replay the reference tokens as context; candidate top-1 remains an observation, not the fed token.",
             "",
         ]
     )
@@ -467,6 +726,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minimum-total-reference-tokens", type=int)
     parser.add_argument("--minimum-prefix-agreement", type=float)
     parser.add_argument("--minimum-same-context-top-k-overlap", type=float)
+    parser.add_argument("--minimum-fixed-trajectory-top1-agreement", type=float)
+    parser.add_argument("--minimum-fixed-trajectory-top-k-overlap", type=float)
+    parser.add_argument("--minimum-fixed-trajectory-centered-cosine", type=float)
+    parser.add_argument("--maximum-fixed-trajectory-jensen-shannon", type=float)
     return parser
 
 
@@ -478,6 +741,10 @@ def main() -> int:
         "minimumTotalReferenceTokens": args.minimum_total_reference_tokens,
         "minimumPrefixAgreement": args.minimum_prefix_agreement,
         "minimumSameContextTopKOverlap": args.minimum_same_context_top_k_overlap,
+        "minimumFixedTrajectoryTop1Agreement": args.minimum_fixed_trajectory_top1_agreement,
+        "minimumFixedTrajectoryTopKOverlap": args.minimum_fixed_trajectory_top_k_overlap,
+        "minimumFixedTrajectoryCenteredCosine": args.minimum_fixed_trajectory_centered_cosine,
+        "maximumFixedTrajectoryJensenShannon": args.maximum_fixed_trajectory_jensen_shannon,
     }
     try:
         report = evaluate_campaign(args.campaign, overrides)
