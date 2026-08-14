@@ -245,6 +245,63 @@ def mean(values: list[float]) -> float | None:
     return statistics.fmean(values) if values else None
 
 
+def fixed_step_excerpt(step: dict[str, object]) -> dict[str, object]:
+    keys = (
+        "decisionStep",
+        "referenceTopTokenId",
+        "candidateTopTokenId",
+        "top1Agreement",
+        "topKOverlap",
+        "referenceTopMargin",
+        "candidateTopMargin",
+        "referenceTopTokenCandidateRank",
+        "centeredLogitNormalizedRmsError",
+        "centeredLogitCosineSimilarity",
+        "referenceToCandidateKLDivergenceNats",
+        "jensenShannonDivergenceNats",
+        "totalVariationDistance",
+    )
+    return {key: step[key] for key in keys}
+
+
+def fixed_trajectory_summary(steps: list[dict[str, object]]) -> dict[str, object]:
+    if not steps:
+        return {"comparedStepCount": 0}
+    top1_values = [1.0 if step["top1Agreement"] else 0.0 for step in steps]
+    top_k_values = [float(step["topKOverlap"]) for step in steps]
+    nrmse_values = [float(step["centeredLogitNormalizedRmsError"]) for step in steps]
+    cosine_values = [float(step["centeredLogitCosineSimilarity"]) for step in steps]
+    kl_values = [float(step["referenceToCandidateKLDivergenceNats"]) for step in steps]
+    jensen_shannon_values = [float(step["jensenShannonDivergenceNats"]) for step in steps]
+    total_variation_values = [float(step["totalVariationDistance"]) for step in steps]
+    rank_values = [float(step["referenceTopTokenCandidateRank"]) for step in steps]
+    return {
+        "comparedStepCount": len(steps),
+        "top1Agreement": statistics.fmean(top1_values),
+        "topKOverlapMean": statistics.fmean(top_k_values),
+        "topKOverlapMinimum": min(top_k_values),
+        "centeredLogitNormalizedRmsErrorMean": statistics.fmean(nrmse_values),
+        "centeredLogitNormalizedRmsErrorMaximum": max(nrmse_values),
+        "centeredLogitCosineSimilarityMean": statistics.fmean(cosine_values),
+        "centeredLogitCosineSimilarityMinimum": min(cosine_values),
+        "referenceToCandidateKLDivergenceNatsMean": statistics.fmean(kl_values),
+        "referenceToCandidateKLDivergenceNatsMaximum": max(kl_values),
+        "jensenShannonDivergenceNatsMean": statistics.fmean(jensen_shannon_values),
+        "jensenShannonDivergenceNatsMaximum": max(jensen_shannon_values),
+        "totalVariationDistanceMean": statistics.fmean(total_variation_values),
+        "totalVariationDistanceMaximum": max(total_variation_values),
+        "referenceTokenCandidateRankMean": statistics.fmean(rank_values),
+        "referenceTokenCandidateRankMaximum": max(rank_values),
+        "top1Mismatches": [fixed_step_excerpt(step) for step in steps if not step["top1Agreement"]],
+        "worstCenteredCosineStep": fixed_step_excerpt(
+            min(steps, key=lambda step: float(step["centeredLogitCosineSimilarity"]))
+        ),
+        "worstJensenShannonStep": fixed_step_excerpt(
+            max(steps, key=lambda step: float(step["jensenShannonDivergenceNats"]))
+        ),
+    }
+
+
 def evaluate_case(
     name: str,
     reference_path: Path,
@@ -491,6 +548,9 @@ def evaluate_campaign(
     ]
     natural_cases = [case for case in valid_cases if case.get("comparisonMode") == NATURAL_COMPARISON]
     fixed_cases = [case for case in valid_cases if case.get("comparisonMode") == FIXED_REFERENCE_COMPARISON]
+    for case in fixed_cases:
+        case_steps = [step for step in case.get("steps", []) if isinstance(step, dict)]
+        case["fixedTrajectorySummary"] = fixed_trajectory_summary(case_steps)
     fixed_steps = [
         step
         for case in fixed_cases
@@ -638,6 +698,10 @@ def percent(value: object) -> str:
 def markdown_report(report: dict[str, object]) -> str:
     summary = report["summary"]
     assert isinstance(summary, dict)
+    cases = report["cases"]
+    assert isinstance(cases, list)
+    fixed_only = int(summary.get("fixedTrajectoryCaseCount", 0)) == int(summary["validCaseCount"])
+    prefix_label = "Context trajectory agreement" if fixed_only else "Weighted prefix agreement"
     lines = [
         "# Natural Generation Quality Gate",
         "",
@@ -647,7 +711,7 @@ def markdown_report(report: dict[str, object]) -> str:
         "| --- | ---: |",
         f"| Cases | {summary['validCaseCount']} / {summary['caseCount']} valid |",
         f"| Reference tokens | {summary['totalReferenceGeneratedTokens']} |",
-        f"| Weighted prefix agreement | {percent(summary['weightedPrefixAgreement'])} |",
+        f"| {prefix_label} | {percent(summary['weightedPrefixAgreement'])} |",
         f"| Same-context top-k overlap | {percent(summary['sameContextTopKOverlapMean'])} |",
         f"| Trajectory top-k overlap | {percent(summary['trajectoryTopKOverlapMean'])} |",
         f"| Median first divergence | {summary['firstDivergenceDecisionStepMedian']} |",
@@ -679,16 +743,32 @@ def markdown_report(report: dict[str, object]) -> str:
                 f"{summary['fixedTrajectoryReferenceTokenCandidateRankMean']:.3f} "
                 f"| {summary['fixedTrajectoryReferenceTokenCandidateRankMaximum']:.0f} |",
                 "",
+                "| Case | Top-1 | Top-k mean / min | NRMSE mean / max | Cosine min | JS mean / max | TV max |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
+        for case in cases:
+            if not isinstance(case, dict) or case.get("fixedTrajectorySummary") is None:
+                continue
+            fixed = case["fixedTrajectorySummary"]
+            assert isinstance(fixed, dict)
+            lines.append(
+                f"| {case['name']} | {percent(fixed['top1Agreement'])} "
+                f"| {percent(fixed['topKOverlapMean'])} / {percent(fixed['topKOverlapMinimum'])} "
+                f"| {fixed['centeredLogitNormalizedRmsErrorMean']:.6g} / "
+                f"{fixed['centeredLogitNormalizedRmsErrorMaximum']:.6g} "
+                f"| {fixed['centeredLogitCosineSimilarityMinimum']:.9f} "
+                f"| {fixed['jensenShannonDivergenceNatsMean']:.6g} / "
+                f"{fixed['jensenShannonDivergenceNatsMaximum']:.6g} "
+                f"| {fixed['totalVariationDistanceMaximum']:.6g} |"
+            )
+        lines.append("")
     lines.extend(
         [
-            "| Case | Mode | Ref / candidate tokens | Prefix | First divergence | Same-context top-k | Trajectory top-k | Integrity |",
+            "| Case | Mode | Ref / candidate tokens | Context prefix | First divergence | Same-context top-k | Trajectory top-k | Integrity |",
             "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |",
         ]
     )
-    cases = report["cases"]
-    assert isinstance(cases, list)
     for case in cases:
         assert isinstance(case, dict)
         if case.get("passedIntegrity") is not True:
