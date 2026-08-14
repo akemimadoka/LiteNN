@@ -95,7 +95,9 @@ container a practical prerequisite for routine regression use, not merely a stor
 ## Next Gates
 
 1. Add a reproducible public text-slice manifest, tokenize it through the model tokenizer, and compare per-token and
-   per-sample NLL, aggregate cross-entropy, and perplexity under an identical teacher-forced trajectory.
+   per-sample NLL, aggregate cross-entropy, and perplexity under an identical teacher-forced trajectory. The existing
+   llama.cpp `decode-logits` path captures after feeding each supplied token, so the corpus path must expose an explicit
+   pre-target decision boundary and test the one-token shift rather than reusing those files by name alone.
 2. Preserve explicit absolute and relative regression thresholds, token coverage, finite values, cache-hit state, and
    fallback status in the corpus report.
 3. Investigate explanation step 33 with same-input layer/sub-layer checkpoints only if the corpus gate identifies a

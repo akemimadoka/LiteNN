@@ -203,6 +203,16 @@ P0 implementation order:
       - [ ] P0: measure corpus perplexity/cross-entropy delta on a fixed public evaluation slice and retain both aggregate
         and per-sample regressions. Use this gate, rather than centered-logit cosine alone, to decide whether explanation
         step 33 needs same-input projection/sub-layer attribution.
+        - [ ] Freeze a license-compatible public text-slice manifest with stable sample ids, provenance, byte hashes,
+          normalization rules, and token-budget tiers; token ids remain model-specific generated artifacts.
+        - [ ] Add a llama.cpp teacher-forced pre-target capture contract. Existing `decode-logits` files are emitted
+          after each supplied token is fed, so an independent one-token-shift fixture must lock score alignment.
+        - [ ] Run both runtimes with identical BOS/EOS, sample reset, prompt/target split, forced history, and token
+          coverage. Reject truncation, non-finite values, fallback, and unexpected AOT-cache behavior before scoring.
+        - [ ] Compute stable target-token log-sum-exp NLL, aggregate/per-sample cross-entropy and perplexity,
+          absolute/relative deltas, worst samples/tokens, and an evidence digest under predeclared thresholds.
+        - [ ] Add synthetic evaluator coverage and run the real public slice. Promote explanation step 33 to same-input
+          projection/sub-layer localization only if the corpus result establishes a material regression.
       - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the accepted variance gate.
       - [ ] P1: replace per-step full-vocabulary text logits with a compact indexed Float32 container. One 192-token
         paired campaign creates 384 files/1.07 GiB; the LiteNN fixed-trajectory half is `0.523 GiB`, and recomputing full

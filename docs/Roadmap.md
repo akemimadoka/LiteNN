@@ -3434,6 +3434,21 @@ Priority classes:
                               retain aggregate and per-sample regressions. This owns the decision to accept residual
                               quantized drift or localize explanation step 33; do not change model math from centered-
                               cosine evidence alone.
+                              - [ ] Freeze a license-compatible public text-slice manifest with stable sample ids,
+                                    source/provenance metadata, byte hashes, normalization policy, and token-budget
+                                    tiers. Keep model-specific token ids generated artifacts rather than source truth.
+                              - [ ] Add an explicit llama.cpp teacher-forced pre-target logit capture. The existing
+                                    `decode-logits` command captures after feeding each supplied token; lock the new
+                                    decision boundary with a short independently checked token-shift fixture.
+                              - [ ] Orchestrate identical BOS/EOS, prompt/target split, context reset, token coverage,
+                                    and forced target history for LiteNN and the reference. Reject truncated, shifted,
+                                    non-finite, fallback, or non-cache-hit cases before scoring.
+                              - [ ] Compute stable log-sum-exp NLL for the actual next token, per-token and per-sample
+                                    cross-entropy/perplexity, absolute/relative deltas, worst samples/tokens, and a
+                                    reproducible evidence digest. Declare thresholds before the real-model run.
+                              - [ ] Add synthetic evaluator tests and execute the real public slice. Only a material
+                                    corpus-loss failure promotes explanation step 33 to same-input projection/sub-layer
+                                    localization; otherwise retain the measured drift as an accepted residual.
                         - [ ] Add a small task-quality panel and require unchanged cache-hit throughput within the
                               accepted variance gate.
                         - [ ] P1: replace full-vocabulary text logits with a compact indexed Float32 container. One
