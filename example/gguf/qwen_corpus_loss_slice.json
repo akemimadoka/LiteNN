@@ -1,0 +1,29 @@
+{
+  "schema": "litenn.corpus_text_slice.v1",
+  "name": "litenn-qwen-corpus-loss-v1",
+  "version": 1,
+  "license": "MIT",
+  "provenance": "Original evaluation text authored for the LiteNN repository",
+  "normalization": "UTF-8 decoded JSON string bytes; no Unicode or whitespace normalization",
+  "defaultTargetTokensPerSample": 64,
+  "samples": [
+    {
+      "name": "systems-explanation",
+      "category": "technical-prose",
+      "sha256": "8d20780f09bb54d84a5756e5f12e94f1368b4ad1dcde0b993deb8f34b3ded4cb",
+      "text": "A reliable inference runtime separates graph semantics from execution policy. The graph records tensor shapes, data types, state transitions, and observable outputs. A compiler may then select kernels, schedule independent work, and package immutable weights without changing those semantics. Correctness tests should compare identical inputs at explicit boundaries, while performance tests should isolate compilation, cache loading, and steady-state execution. This separation makes regressions easier to localize and prevents a faster implementation from silently changing model behavior."
+    },
+    {
+      "name": "cpp-kernel",
+      "category": "source-code",
+      "sha256": "bf6f04d0c3c5340b16d70dc79fbb071c84eb193bba5001654abd27b7a45a94d0",
+      "text": "#include <algorithm>\n#include <cstddef>\n#include <span>\n\nfloat DotProduct(std::span<const float> lhs, std::span<const float> rhs)\n{\n    const std::size_t count = std::min(lhs.size(), rhs.size());\n    float sum = 0.0f;\n    for (std::size_t index = 0; index < count; ++index)\n    {\n        sum += lhs[index] * rhs[index];\n    }\n    return sum;\n}\n\nThe loop is intentionally simple: an optimizing compiler can vectorize it, while the size check keeps the public function well-defined for unequal spans."
+    },
+    {
+      "name": "reasoning-checklist",
+      "category": "structured-reasoning",
+      "sha256": "bb8ff57f5bc847170682536795132caf612fba399495d0bd3139b271ba8d156b",
+      "text": "To diagnose a numerical mismatch, begin with the earliest decision where both systems consumed the same history. First verify tokenization and position indexing. Next compare normalization outputs, projected query and key values, rotary embedding layout, attention scores, and the residual after each block. If a boundary matches, exclude everything before it. If an error appears, replay the exact captured input through independent reference kernels. Finally measure whether the remaining difference changes cross-entropy on a fixed corpus before rewriting production math. This order turns a broad suspicion into a sequence of falsifiable checks."
+    }
+  ]
+}
