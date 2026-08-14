@@ -398,4 +398,22 @@ the selected token-id or llama.cpp-capture path and writes
 The current backend policy is intentionally limited to `cpu-aot`; CUDA native
 and bridge decode policies are tracked as follow-up runtime integration work.
 
+Run the frozen teacher-forced corpus loss gate with matching LiteNN and llama.cpp
+pre-target logits:
+
+```powershell
+python311 example\gguf\qwen_corpus_loss_campaign.py `
+  --model model.gguf `
+  --litenn build-release\tools\gguf\litenn_gguf_convert.exe `
+  --llamacpp-adapter build-release\tools\llamacpp-adapter\litenn_llamacpp_adapter.exe `
+  --workdir build\qwen_corpus_loss
+```
+
+The checked-in MIT-licensed text slice is tokenized by the model at runtime. The
+campaign scores 64 targets in each of three reset samples and writes JSON and
+Markdown reports with aggregate/per-sample cross-entropy, perplexity, worst-token
+regressions, integrity checks, and a reproducible evidence digest. For an existing
+matching AOT cache, add `--aot-cache-dir <dir> --require-aot-cache-hit
+--no-aot-cache-write` to exclude compilation and cache publication.
+
 Current scope: decode graphs expose static-shape KV cache inputs and updated-cache outputs. Dynamic cache growth and llama.cpp golden-logit validation are still tracked in `docs/Roadmap.md`.
