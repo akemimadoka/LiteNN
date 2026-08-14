@@ -498,6 +498,11 @@ add_test(
 )
 
 add_test(
+    NAME GGUFCorpusLossGate.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/GGUFCorpusLossGateTest.py"
+)
+
+add_test(
     NAME QwenFirstDivergenceAttribution.PythonUnit
     COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/QwenFirstDivergenceAttributionTest.py"
 )
