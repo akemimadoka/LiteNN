@@ -632,6 +632,8 @@ def build_litenn_command(
         "--cpu-aot-ggml-prepacked-weight-layout",
         "field-interleaved-v4",
     ]
+    if args.litenn_max_cache_length is not None:
+        command.extend(("--max-cache-length", str(args.litenn_max_cache_length)))
     if args.litenn_affinity != "default":
         command.extend(("--cpu-aot-affinity", args.litenn_affinity))
     if forced_generated_token_ids is not None:
@@ -775,6 +777,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--context-size", default=256, type=positive_int)
     parser.add_argument("--repetitions", default=3, type=positive_int)
     parser.add_argument("--litenn-threads", default=8, type=positive_int)
+    parser.add_argument(
+        "--litenn-max-cache-length",
+        type=positive_int,
+        help="Use this explicit LiteNN KV-cache capacity so paired runs can reuse a shape-stable AOT artifact",
+    )
     parser.add_argument("--litenn-affinity", choices=["default", "none", "compact", "spread"], default="default")
     parser.add_argument(
         "--litenn-worker-wait", choices=["adaptive", "low-power", "latency"], default="adaptive"
@@ -847,6 +854,7 @@ def main() -> int:
             "prompt_tokens": None,
             "eval_tokens": None,
             "litenn_threads": args.litenn_threads,
+            "litenn_max_cache_length": args.litenn_max_cache_length,
             "litenn_affinity": args.litenn_affinity,
             "litenn_worker_wait": args.litenn_worker_wait,
             "llvm_opt_level": args.llvm_opt_level,

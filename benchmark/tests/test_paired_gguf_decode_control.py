@@ -3,11 +3,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from run_paired_gguf_decode_control import (  # noqa: E402
+    build_litenn_command,
     load_litenn_generated_token_ids,
     load_tokenizer_token_ids,
     normalize_completion_text,
@@ -74,6 +76,29 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertTrue(process_power_policy_stable(stable))
         self.assertFalse(process_power_policy_stable(changed))
         self.assertFalse(process_power_policy_stable({}))
+
+    def test_litenn_command_preserves_explicit_cache_capacity(self) -> None:
+        args = SimpleNamespace(
+            python="python311",
+            prompt="hello",
+            predict=128,
+            llvm_opt_level=0,
+            litenn_threads=8,
+            litenn_worker_wait="adaptive",
+            litenn_max_cache_length=256,
+            litenn_affinity="default",
+        )
+        command = build_litenn_command(
+            args,
+            Path("model.gguf"),
+            Path("litenn_gguf_convert"),
+            Path("litenn_llamacpp_adapter"),
+            Path("workdir"),
+            Path("cache"),
+        )
+
+        index = command.index("--max-cache-length")
+        self.assertEqual(command[index + 1], "256")
 
 
 if __name__ == "__main__":
