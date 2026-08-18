@@ -3335,11 +3335,18 @@ Priority classes:
                               production artifact can be reused instead of silently compiling `prompt+predict` shapes.
                         - [x] Reject power-policy drift both within a process and across the two runtimes in each pair;
                               the first rerun exposed real High Performance/Balanced transitions.
-                        - [ ] Add process-internal repeated decode windows after one mapping/thread warmup phase for both
-                              runtimes. Retain all windows and process-level medians to distinguish kernel variance from
-                              fresh-process residency effects before another five-pair acceptance attempt. Three stable-
-                              power batches remain rejected at `-9.10%/-9.83%/-11.64%` paired medians because one
-                              runtime exceeds 3% CV. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
+                        - [x] Add process-internal repeated decode windows after one mapping/thread warmup phase for both
+                              runtimes. The harness retains every raw window, validates reported statistics, freezes
+                              chat-template token ids once, and gates both within-process and process-level CVs.
+                        - [x] Run the preliminary three-pair 63-call control. Every implemented gate passes at
+                              `4.949/5.009 t/s` reference/LiteNN medians and `1.540%/1.148%` process CV, but the result is
+                              not the required five-pair acceptance evidence.
+                        - [ ] Close the five-pair in-process acceptance gate. The first attempt reports
+                              `4.966/5.106 t/s` medians and a directional `+2.983%` paired median, but pair 5 is retained
+                              and rejects the run at `4.546%/13.727%` reference/LiteNN window CV. Add time-aligned
+                              per-window frequency, utility, process CPU, residency, active-CPU-set, and host-load
+                              evidence before repeating; do not relax the 3% rule. Evidence:
+                              `docs/QwenInProcessDecodeControl_2026-08-18.md`.
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
@@ -3430,11 +3437,12 @@ Priority classes:
                                     remaining divergence is a top-2 near tie. Evidence:
                                     `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
                               - [ ] Run normal cache-hit throughput outside checkpoint builds and enforce the accepted
-                                    variance gate. A post-NeoX capacity-256 production artifact now runs with exact
-                                    fixed trajectory and no fallback, but three stable-power five-pair controls remain
-                                    rejected: the 128-token batches report `-9.10%/-9.83%` paired medians with one
-                                    runtime at `4.03%/3.98%` CV, and the 15-eval control reports `-11.64%` with LiteNN
-                                    at `4.80%` CV. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
+                                    variance gate. Process-internal windows remove the earlier directional 9%-12%
+                                    deficit: an accepted preliminary three-pair control is near parity, while the
+                                    five-pair median is directional `+2.983%` for LiteNN. Formal acceptance remains
+                                    open because the retained fifth pair reaches `4.546%/13.727%` reference/LiteNN
+                                    window CV. Add window-aligned telemetry and repeat without weakening 3%. Evidence:
+                                    `docs/QwenInProcessDecodeControl_2026-08-18.md`.
                         - [x] P0: replay the complete fixed reference trajectory and retain distribution distance,
                               top-k/rank, and selected-token margin at every position. Across 192 same-input decisions,
                               top-1 agreement is `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner

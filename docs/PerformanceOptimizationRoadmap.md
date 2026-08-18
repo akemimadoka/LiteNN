@@ -107,9 +107,14 @@ P0 implementation order:
       - [x] Add an explicit LiteNN max-cache-length axis to preserve production AOT cache identity.
       - [x] Reject in-process and cross-runtime power-policy drift immediately; the rejected post-NeoX campaign proved
         that checking each process independently is insufficient.
-      - [ ] Add repeated decode windows inside each mapped process, retain within-process and process-level CVs, and
-        rerun the five-pair acceptance gate. Current fresh-process batches move the failing variance owner between
-        runtimes even at stable measured frequency. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
+      - [x] Add repeated decode windows inside each mapped process, retain every raw window and both variance levels,
+        validate runtime summaries, and freeze chat-template token ids outside the alternating loop.
+      - [x] Run a preliminary three-pair 63-call control. All gates pass at `4.949/5.009 t/s` reference/LiteNN medians,
+        but three pairs do not satisfy the formal acceptance count.
+      - [ ] Close the five-pair in-process acceptance gate. The first attempt's `4.966/5.106 t/s` medians and
+        directional `+2.983%` paired median are rejected because pair 5 reaches `4.546%/13.727%` window CV. Add
+        timestamp-aligned frequency, utility, process CPU, residency, active-CPU-set, and host-load samples, then rerun
+        without relaxing 3%. Evidence: `docs/QwenInProcessDecodeControl_2026-08-18.md`.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
@@ -199,10 +204,10 @@ P0 implementation order:
           cases match 64/64 tokens, and fallback/non-finite counts remain zero. The remaining case is a top-2 near tie.
           Evidence: `docs/QwenNeoXRoPEFixEvidence_2026-08-13.md`.
         - [ ] Run normal cache-hit throughput outside checkpoint builds and require accepted variance against the
-          pre-fix performance baseline. A fresh post-NeoX capacity-256 production artifact passes cache-hit,
-          trajectory, natural-sampler, fallback, and power gates, but three stable-power five-pair controls fail the
-          3% dual-runtime CV rule. Their paired medians are `-9.10%`, `-9.83%`, and `-11.64%`; this is directional,
-          not accepted point evidence. Evidence: `docs/QwenPostNeoXThroughputControl_2026-08-14.md`.
+          pre-fix performance baseline. Process-internal windows remove the earlier directional 9%-12% deficit: the
+          three-pair 63-call control passes at near parity, while a five-pair attempt has a directional `+2.983%`
+          LiteNN median but is rejected by pair-5 window CV (`4.546%/13.727%`). Window-aligned telemetry and a strict
+          five-pair rerun remain required. Evidence: `docs/QwenInProcessDecodeControl_2026-08-18.md`.
       - [x] P0: replay the complete fixed reference trajectory and retain distribution-distance, top-k/rank, and
         selected-token margin evidence at every position. Across 192 same-input decisions, top-1 agreement is
         `98.9583%`, mean top-10 overlap is `99.0104%`, and the reference winner never falls below rank 2. The
