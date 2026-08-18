@@ -186,6 +186,33 @@ class FixedTokenReplayTest(unittest.TestCase):
         index = command.index("--max-cache-length")
         self.assertEqual(command[index + 1], "256")
 
+    def test_builds_unmeasured_cache_preparation_command(self) -> None:
+        args = SimpleNamespace(
+            python="python311",
+            prompt="hello",
+            predict=16,
+            llvm_opt_level=0,
+            litenn_threads=2,
+            litenn_worker_wait="adaptive",
+            litenn_max_cache_length=256,
+            litenn_affinity="compact",
+            in_process_warmup_windows=1,
+            in_process_windows=3,
+        )
+        command = build_litenn_command(
+            args,
+            Path("model.gguf"),
+            Path("litenn_gguf_convert"),
+            Path("litenn_llamacpp_adapter"),
+            Path("workdir"),
+            Path("cache"),
+            require_aot_cache_hit=False,
+            compile_only=True,
+        )
+        self.assertIn("--compile-only", command)
+        self.assertNotIn("--require-aot-cache-hit", command)
+        self.assertNotIn("--benchmark-windows", command)
+
     def test_validates_in_process_window_report_from_raw_windows(self) -> None:
         windows = [
             {

@@ -1121,6 +1121,8 @@ def build_litenn_command(
     forced_generated_token_ids: list[int] | None = None,
     prompt_token_ids: list[int] | None = None,
     benchmark_report_path: Path | None = None,
+    require_aot_cache_hit: bool = True,
+    compile_only: bool = False,
 ) -> list[str]:
     command = [
         args.python,
@@ -1136,7 +1138,6 @@ def build_litenn_command(
         str(workdir),
         "--aot-cache-dir",
         str(cache_dir),
-        "--require-aot-cache-hit",
         "--stream-stats",
         "--ignore-eos",
         "--llvm-opt-level",
@@ -1150,6 +1151,10 @@ def build_litenn_command(
         "--cpu-aot-ggml-prepacked-weight-layout",
         "field-interleaved-v4",
     ]
+    if require_aot_cache_hit:
+        command.append("--require-aot-cache-hit")
+    if compile_only:
+        command.append("--compile-only")
     if prompt_token_ids is None:
         command.extend(("--llamacpp-tokenizer-tool", str(tokenizer), "--prompt", args.prompt))
     else:
@@ -1163,7 +1168,7 @@ def build_litenn_command(
             ("--forced-generated-token-ids", ",".join(str(token_id) for token_id in forced_generated_token_ids))
         )
     in_process_windows = int(getattr(args, "in_process_windows", 0))
-    if in_process_windows:
+    if in_process_windows and not compile_only:
         if benchmark_report_path is None:
             raise ValueError("in-process LiteNN command requires a benchmark report path")
         command.extend(
@@ -1419,6 +1424,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--require-variance-gate", action="store_true")
     parser.add_argument(
+        "--prepare-aot-cache",
+        action="store_true",
+        help="Compile/load the current LiteNN thread-specific artifact before timed pairs; timed runs still require hits",
+    )
+    parser.add_argument(
         "--in-process-warmup-windows",
         default=1,
         type=non_negative_int,
@@ -1520,6 +1530,7 @@ def main() -> int:
             "window_minimum_frequency_ratio": args.window_minimum_frequency_ratio,
             "require_host_stability": args.require_host_stability,
             "variance_threshold_percent": args.variance_threshold_percent,
+            "prepare_aot_cache": args.prepare_aot_cache,
             "fixed_token_replay": args.fixed_token_replay,
             "in_process_warmup_windows": args.in_process_warmup_windows,
             "in_process_windows": args.in_process_windows,
@@ -1534,6 +1545,37 @@ def main() -> int:
         output_json.write_text(json.dumps(document, indent=2, allow_nan=False) + "\n", encoding="utf-8")
 
     checkpoint()
+    if args.prepare_aot_cache:
+        print("[paired decode] preparing LiteNN AOT cache outside timed pairs", file=sys.stderr, flush=True)
+        preparation_dir = output_dir / "litenn_cache_preparation"
+        command = build_litenn_command(
+            args,
+            model,
+            litenn,
+            tokenizer,
+            preparation_dir / "workdir",
+            cache_dir,
+            require_aot_cache_hit=False,
+            compile_only=True,
+        )
+        process_record, _, _ = run_monitored(
+            command,
+            preparation_dir / "litenn",
+            replacements,
+            args.monitor_interval,
+            args.process_cpu_set,
+        )
+        document["cache_preparation"] = {"enabled": True, "process": process_record}
+        checkpoint()
+        if process_record["returncode"] != 0:
+            document["status"] = "failed"
+            document["failure"] = "LiteNN AOT cache preparation failed"
+            checkpoint()
+            raise SystemExit(document["failure"])
+        print("[paired decode] LiteNN AOT cache ready", file=sys.stderr, flush=True)
+    else:
+        document["cache_preparation"] = {"enabled": False}
+        checkpoint()
     forced_generated_token_ids: list[int] | None = None
     prompt_token_ids: list[int] | None = None
     if args.fixed_token_replay:
