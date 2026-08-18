@@ -2,77 +2,92 @@
 
 ## Scope
 
-This report evaluates the CPU work efficiency hidden by the earlier throughput-optimized T8 LiteNN versus T2
-reference control. It uses the same Qwen2.5-Coder 14B Q4_K_M fixed trajectory, CPU AOT artifact policy, strict
-correctness gates, and mapped in-process windows, but assigns both runtimes the same thread count and the same OS
-process-affinity domain. No private model, executable, or cache path is retained.
+This report separates CPU core efficiency from parallel scaling for Qwen2.5-Coder 14B Q4_K_M decode. LiteNN and the
+Clang/no-OpenMP reference use the same thread count, the same logical CPU 0-7 process-affinity domain, the same fixed
+trajectory, and equivalent CPU-only runtime settings. Private model, executable, cache, and output paths are omitted.
 
-The first real campaign is intentionally a short infrastructure control, not an acceptance result:
+The formal campaign uses T1/T2/T4/T8, five alternating process pairs, one warmup plus three measured 63-call windows,
+a 3% process and in-process CV limit, exact token trajectory, zero fallback, a stable power policy, complete telemetry,
+and pre-generated thread-specific AOT caches. Compilation and first cache publication are outside timed windows.
 
-- thread counts: T1 and T2;
-- shared process CPU set: logical CPUs 0-7;
-- three alternating process pairs per thread count;
-- one warmup and two measured windows per process;
-- 15 post-prefill decode calls per window;
-- 3% process and in-process CV thresholds;
-- exact fixed trajectory, zero fallback, stable power policy, complete window telemetry, and verified process affinity;
-- host admission at three consecutive activity samples no greater than 35, with two monitor warmup samples;
-- 2-second runtime and 5-second pair cooldowns.
+## Formal Results
 
-Thread count participates in the LiteNN AOT cache identity. The controller therefore performs an explicit unmeasured
-cache-preparation phase for each thread count. Every timed LiteNN process still requires an AOT cache hit. Compilation
-or first publication cannot enter the measured windows.
-
-## Results
-
-| Runtime | Threads | Process median | Process CV | Window wall | Process CPU | Tokens/CPU-s | T1 speedup | Parallel efficiency |
+| Runtime | Threads | Median | Process CV | Wall ms/token | CPU ms/token | Tokens/CPU-s | T1 speedup | Parallel efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Reference | 1 | 3.225 t/s | 3.082% | 307.555 ms/token | 290.104 ms/token | 3.447 | 1.000x | 100.0% |
-| LiteNN | 1 | 2.537 t/s | 7.081% | 388.555 ms/token | 372.396 ms/token | 2.685 | 1.000x | 100.0% |
-| Reference | 2 | 4.328 t/s | 0.612% | 232.158 ms/token | 341.146 ms/token | 2.931 | 1.342x | 67.10% |
-| LiteNN | 2 | 4.209 t/s | 1.072% | 237.592 ms/token | 407.813 ms/token | 2.452 | 1.659x | 82.97% |
+| Reference | 1 | 3.761 t/s | 4.00% | 260.791 | 253.472 | 3.945 | 1.000x | 100.0% |
+| LiteNN | 1 | 3.107 t/s | 1.74% | 320.217 | 312.004 | 3.205 | 1.000x | 100.0% |
+| Reference | 2 | 5.360 t/s | 0.59% | 186.843 | 338.046 | 2.958 | 1.425x | 71.2% |
+| LiteNN | 2 | 4.499 t/s | 1.46% | 222.035 | 386.905 | 2.585 | 1.448x | 72.4% |
+| Reference | 4 | 5.332 t/s | 0.86% | 187.543 | 612.351 | 1.633 | 1.418x | 35.4% |
+| LiteNN | 4 | 4.947 t/s | 0.86% | 201.652 | 712.054 | 1.404 | 1.592x | 39.8% |
+| Reference | 8 | 4.849 t/s | 2.81% | 208.266 | 1164.931 | 0.858 | 1.289x | 16.1% |
+| LiteNN | 8 | 4.901 t/s | 5.87% | 204.042 | 1532.738 | 0.652 | 1.578x | 19.7% |
 
-| Threads | LiteNN wall-throughput difference | LiteNN/reference process CPU-time ratio |
-| ---: | ---: | ---: |
-| 1 | -21.35% | 1.284x |
-| 2 | -2.75% | 1.195x |
+| Threads | LiteNN wall-throughput difference | LiteNN/reference CPU-time ratio | Formal child accepted |
+| ---: | ---: | ---: | --- |
+| 1 | -17.41% | 1.231x | No |
+| 2 | -16.05% | 1.145x | No |
+| 4 | -7.22% | 1.163x | No |
+| 8 | +1.06% | 1.316x | No |
 
-The top-level equal-thread, shared-affinity, and CPU-telemetry gates pass. Both child controls are rejected by the
-unchanged variance rule:
+All correctness, fixed-trajectory, natural-sampler, no-fallback, power-policy, and telemetry-coverage gates pass at
+every thread count. The campaign is nevertheless rejected rather than selectively filtered:
 
-- T1 process CV is `3.082%/7.081%` for reference/LiteNN. Pair 2 reference window CV is `7.356%`; pair 3 reaches
-  `3.511%/4.003%`.
-- T2 process CV passes at `0.612%/1.072%`, but pair 3 reference window CV is `13.345%` across the two short windows.
-- Every correctness, no-fallback, power-policy, host-stability, telemetry-coverage, and process-affinity gate passes.
+- T1 fails the reference process CV at `4.00%`, one reference in-process CV at `7.62%`, and one host-stability gate.
+- T2 passes every process and in-process variance gate (`0.59%/1.46%` process CV) but fails the then host-wide
+  stability gate.
+- T4 passes process CV (`0.86%/0.86%`) but three reference in-process controls and host-wide stability fail.
+- T8 fails LiteNN process CV (`5.87%`), four in-process controls, host stability, and process affinity.
 
-Host admission was active rather than ceremonial. Most processes admitted after approximately 1 second. Three T2
-processes observed transient activity around 116-117 and waited about 3.0-8.5 seconds for the required quiet streak
-before launch. No timed process started during those excursions.
+The T8 affinity failure was deterministic: every reference window remained on logical CPUs 0-7, while every LiteNN
+window reported CPUs 0-31. The Windows runtime enumerated the machine topology and applied per-thread group affinity
+without intersecting it with the externally restricted process mask. T1/T2/T4 did not reach enough compact targets to
+expose the defect. Host stability was also evaluated over all 32 logical CPUs even though both processes were confined
+to CPUs 0-7, so unrelated work outside the benchmark domain could reject an otherwise stable run.
 
-The raw top-level report SHA-256 is
-`15c3965e632c19913d01e9a9e25283c39f7f6a1bedff1c3bea96f70c8a938d33`. Raw child reports remain in ignored local
-build artifacts.
+The raw formal scaling report SHA-256 is
+`72b94bb61fc6630c06e76a1acb9e0c7219161c96eadbcefb0138c43c9bc06f9e`. Raw reports remain in ignored local build
+artifacts.
+
+## Control Repairs
+
+Two measurement defects were fixed before drawing an implementation priority from the formal sweep:
+
+1. CPU AOT affinity now intersects Compact/Spread targets with an externally restricted process or thread affinity
+   domain. An unrestricted Windows process retains the existing multi-processor-group behavior.
+2. Windows PDH telemetry retains processor group and logical CPU identity. Admission and post-window stability prefer
+   affinity-domain utilization and weighted frequency, with the previous host-wide metrics retained as a fallback.
+
+A short post-fix T8 validation used three alternating pairs and two measured 31-call windows. Every LiteNN and
+reference window reported exactly CPUs 0-7; all admission and window checks used
+`affinityDomainUtilityPercentMean`; correctness, process CV, host stability, telemetry, and affinity gates passed.
+The medians were `4.413 t/s` reference and `4.607 t/s` LiteNN (`+4.39%` paired median). The run remains rejected because
+two-window in-process CV exceeds 3%, including `13.46%` in one LiteNN process and `8.72%` in one reference process.
+This validates the repairs but is not accepted performance evidence. Its raw report SHA-256 is
+`5600229b66d4c3e7959a1d07b5316626581180df0aedeb86671a84fa52fedfd5`.
 
 ## Conclusions
 
-1. LiteNN has a material single-thread core-efficiency deficit on this workload. At T1 it is `21.35%` slower in wall
-   throughput and consumes `28.4%` more process CPU time per token.
-2. LiteNN scales better from T1 to T2: `1.659x` versus `1.342x`. This closes most of the wall-time difference at T2,
-   but does not close work efficiency; LiteNN still consumes `19.5%` more CPU time per token.
-3. The earlier T8 LiteNN versus T2 reference direction primarily demonstrates successful parallel scaling. It does
-   not establish equal-resource kernel efficiency.
-4. Adding more workers is no longer the first optimization choice. The highest-value CPU performance question is the
-   accepted T1/T2 stage owner for extra work, cache misses, vector utilization, or generated-code overhead.
-5. The short campaign proves the control path and reveals a strong direction, but cannot be quoted as an accepted
-   performance result. Fifteen-call/two-window controls remain too sensitive for the 3% gate.
+1. LiteNN has a real core-efficiency deficit at low thread counts. The formal T1/T2 directions are `17.41%/16.05%`
+   slower and consume `23.1%/14.5%` more process CPU time per token. T2 has especially low process and window variance,
+   but must be rerun because the original host gate observed the wrong CPU domain.
+2. Parallel scaling closes wall time without closing work efficiency. LiteNN reaches wall parity around T8 while using
+   `31.6%` more process CPU time, so adding workers is not a substitute for reducing instructions, cache traffic, or
+   projection/activation work.
+3. T4 is the best observed LiteNN throughput point in the formal sweep (`4.947 t/s`) and T2 is the best reference point
+   (`5.360 t/s`). Both runtimes lose efficiency beyond two threads; a production default must be selected from an
+   accepted latency-versus-CPU-cost curve, not maximum hardware concurrency.
+4. The next implementation owner should come from accepted T1 and T2 matched-stage evidence. QKV, attention output,
+   Gate/Up, activation, Down, logits, dispatch, and residual stages must be compared under equal resource controls;
+   T1 PMU cycles, instructions, IPC, cache misses, and memory bandwidth should decide whether the owner is arithmetic,
+   generated-code overhead, or memory traffic.
+5. No new kernel or scheduler rewrite is justified by the rejected T8 lead. The immediate P0 is one corrected formal
+   rerun, followed by profiling the largest accepted low-thread stage deficit.
 
 ## Next Gate
 
-1. Run T1/T2/T4/T8 with five alternating pairs and three measured 63-call windows, retaining the same host admission,
-   cooldown, affinity, correctness, and 3% gates.
-2. Report speedup, parallel efficiency, process CPU ms/token, and tokens/CPU-second at every thread count. Select the
-   production default from both latency and CPU-cost curves.
-3. At the first accepted equal-thread point with a material deficit, capture matched QKV, attention output, Gate/Up,
-   activation, Down, logits, dispatch, and residual stages.
-4. Add PMU evidence for cycles, instructions, IPC, cache misses, and memory bandwidth at T1 before selecting a kernel
-   rewrite. Optimize the largest accepted cross-runtime stage and instruction-level deficit.
+1. Rerun the complete T1/T2/T4/T8 five-pair, three-window, 63-call campaign with the affinity repair and domain-scoped
+   host telemetry. Require all existing 3% variance, correctness, host, telemetry, and affinity gates.
+2. Select the production CPU thread default from accepted wall latency and process CPU ms/token curves.
+3. Capture matched stage and PMU evidence at the first accepted low-thread point with a material deficit, then promote
+   only the largest measured cross-runtime owner to implementation P0.

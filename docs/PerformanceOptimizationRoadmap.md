@@ -132,8 +132,17 @@ P0 implementation order:
           process CPU time at T1 to `-2.75%` and `1.195x` at T2; its `1.659x` scaling exceeds the reference `1.342x`.
           The result is directional only because 15-call window variance fails. Evidence:
           `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
-        - [ ] P0: run the formal T1/T2/T4/T8 control with five alternating pairs and three 63-call windows. Require
-          every existing 3%/correctness/host/affinity gate before selecting the accepted single-thread stage deficit.
+        - [x] P0: run the first formal T1/T2/T4/T8 control with five alternating pairs and three 63-call windows.
+          Retain it as rejected: T1/T2/T4 show LiteNN wall deficits of `17.41%/16.05%/7.22%`; T8 reaches a directional
+          `+1.06%` while consuming `1.316x` process CPU time, but exposes a deterministic LiteNN affinity escape from
+          CPUs 0-7 to 0-31. T1/T4/T8 also fail variance gates, and the host-wide activity gate rejects otherwise stable
+          T2. Evidence: `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
+          - [x] Fix CPU AOT Compact/Spread placement to intersect externally restricted Windows process affinity and
+            current Linux thread affinity. A focused Windows regression preserves a strict process mask through T8.
+          - [x] Retain per-logical-CPU Windows PDH observations and evaluate admission/window stability over the shared
+            process CPU domain. A real post-fix T8 control keeps every window on CPUs 0-7 and passes host/affinity gates.
+          - [ ] Rerun the formal T1/T2/T4/T8 campaign with both repairs and require every existing
+            3%/correctness/host/telemetry/affinity gate before selecting the accepted low-thread stage deficit.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same

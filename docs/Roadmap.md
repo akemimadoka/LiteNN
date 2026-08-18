@@ -3363,9 +3363,20 @@ Priority classes:
                                     wall throughput and `1.284x` process CPU time at T1 to `-2.75%` and `1.195x` at T2;
                                     its `1.659x` scaling exceeds the reference `1.342x`. Short-window variance rejects
                                     the result. Evidence: `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
-                              - [ ] Run the formal five-pair, three-window, 63-call T1/T2/T4/T8 control and require all
-                                    3% variance, correctness, host-stability, telemetry, and affinity gates before
-                                    selecting a single-thread implementation owner.
+                              - [x] Run the first formal five-pair, three-window, 63-call T1/T2/T4/T8 control. Retain
+                                    it as rejected: LiteNN trails by `17.41%/16.05%/7.22%` at T1/T2/T4 and reaches a
+                                    directional `+1.06%` at T8 with `1.316x` process CPU time, where its affinity
+                                    deterministically escapes from CPUs 0-7 to 0-31. T1/T4/T8 also fail variance gates,
+                                    while host-wide activity rejects the otherwise low-variance T2. Evidence:
+                                    `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
+                                    - [x] Intersect CPU AOT Compact/Spread targets with external Windows process and
+                                          Linux thread affinity restrictions; preserve unrestricted processor groups.
+                                    - [x] Retain per-CPU Windows PDH identity and scope admission/window stability to
+                                          the shared affinity domain. A real post-fix T8 control keeps all windows on
+                                          CPUs 0-7 and passes host/affinity gates.
+                                    - [ ] Rerun corrected formal T1/T2/T4/T8 controls and require all 3% variance,
+                                          correctness, host, telemetry, and affinity gates before selecting the
+                                          low-thread implementation owner.
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
