@@ -1,5 +1,10 @@
 import os
+import sys
 import unittest
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from benchmark.process_memory import parse_linux_status, sample_current_process, summarize_samples
 

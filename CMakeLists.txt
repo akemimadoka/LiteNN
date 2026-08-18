@@ -520,6 +520,22 @@ set_tests_properties(PairedGGUFDecodeControl.PythonUnit PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
+add_test(
+    NAME GGUFDecodeScalingControl.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/tests/test_gguf_decode_scaling_control.py"
+)
+set_tests_properties(GGUFDecodeScalingControl.PythonUnit PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
+add_test(
+    NAME ProcessMemory.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/tests/test_process_memory.py"
+)
+set_tests_properties(ProcessMemory.PythonUnit PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 if(LITENN_ENABLE_MLIR)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler
