@@ -48,6 +48,7 @@ namespace
 		    << "Usage:\n"
 		    << "  " << executable << " tokenize <model.gguf> <text> <tokens.json>\n"
 		    << "  " << executable << " tokenize-file <model.gguf> <text.bin> <tokens.json>\n"
+		    << "  " << executable << " tokenize-chat-template <model.gguf> <user-text> <tokens.json>\n"
 		    << "  " << executable << " detokenize <model.gguf> <comma-token-ids> <text.bin>\n"
 		    << "  " << executable << " chat-template <model.gguf> <user-text> <prompt.bin>\n"
 		    << "  " << executable << " chat-template-file <model.gguf> <user-text.bin> <prompt.bin>\n"
@@ -109,6 +110,12 @@ try
 	{
 		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
 		LiteNN::LlamaCppAdapter::WriteTokensJson(model.Tokenize(ReadBinary(argv[3])), argv[4]);
+		return 0;
+	}
+	if (command == "tokenize-chat-template" && argc == 5)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		LiteNN::LlamaCppAdapter::WriteTokensJson(model.Tokenize(model.ApplyChatTemplate(argv[3])), argv[4]);
 		return 0;
 	}
 	if (command == "detokenize" && argc == 5)
