@@ -3374,12 +3374,36 @@ Priority classes:
                                     - [x] Retain per-CPU Windows PDH identity and scope admission/window stability to
                                           the shared affinity domain. A real post-fix T8 control keeps all windows on
                                           CPUs 0-7 and passes host/affinity gates.
-                                    - [ ] Rerun corrected formal T1/T2/T4/T8 controls and require all 3% variance,
-                                          correctness, host, telemetry, and affinity gates before selecting the
-                                          low-thread implementation owner.
-                  - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
-                        another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
-                        `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.
+                                    - [ ] Complete corrected formal T1/T2/T4/T8 controls and require all 3% variance,
+                                          correctness, host, telemetry, and affinity gates before selecting a
+                                          production thread default. T1/T2/T4 have completed five pairs and 15 windows
+                                          per runtime; T8 remains unmeasured after one external interruption and one
+                                          correct host-admission rejection under sustained unrelated all-core load.
+                                          Evidence: `docs/QwenEqualThreadScalingCorrectedFormal_2026-08-18.md`.
+                                          - [x] Archive the corrected T1/T2/T4 evidence. LiteNN trails by
+                                                `19.14%/14.91%/7.98%`, while its process CPU-time ratio worsens from
+                                                `1.223x` to `1.298x/1.348x`; correctness, telemetry, and affinity pass,
+                                                but concentrated variance rejects all three children.
+                                          - [ ] P0: run a fresh five-pair T8 child after affinity-domain host admission
+                                                succeeds and aggregate the full curve without partial T8 adoption.
+                                          - [ ] P0: compare matched T1 QKV, RoPE/KV append, attention,
+                                                attention-output, FFN norm, Gate/Up, activation, Down, logits,
+                                                residual/dispatch, and unclassified-overhead stages under every formal
+                                                correctness and stability gate.
+                                          - [ ] P0: collect matched T1/T4 cycles, instructions, IPC, cache misses,
+                                                stalls, and effective bandwidth. Attribute the measured
+                                                `56.052 -> 231.647 ms/token` extra CPU-cost growth before choosing an
+                                                implementation owner.
+                                          - [ ] P0: optimize only the largest measured cross-runtime owner and require
+                                                at least 5% whole-token gain without trajectory, fallback, peak-memory,
+                                                or variance regression.
+                                          - [ ] P1: rerun the complete formal curve after optimization and select the
+                                                production default from accepted wall latency, CPU cost, throughput per
+                                                CPU-second, and parallel efficiency.
+                  - [ ] If the corrected formal P0 stage/PMU evidence attributes the deficit to projections, run
+                        matched cache-cold streams to separate arithmetic from weight/cache traffic before choosing a
+                        kernel. QKV, attention output, Gate/Up, Down, and logits aggregate to `163.473 ms/token`
+                        (`80.71%`), but local share alone is not proof of a cross-runtime deficit.
                   - [x] Continuously measure first-cache peak residency and remove the avoidable gradient copy. Frozen
                         GGUF inference variables reduce the real 14B fresh-build peak from the earlier
                         `27.37/27.49 GB` working set/private observation to `18.566/18.679 GB` continuous RSS/private

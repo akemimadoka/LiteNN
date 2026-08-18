@@ -141,8 +141,28 @@ P0 implementation order:
             current Linux thread affinity. A focused Windows regression preserves a strict process mask through T8.
           - [x] Retain per-logical-CPU Windows PDH observations and evaluate admission/window stability over the shared
             process CPU domain. A real post-fix T8 control keeps every window on CPUs 0-7 and passes host/affinity gates.
-          - [ ] Rerun the formal T1/T2/T4/T8 campaign with both repairs and require every existing
-            3%/correctness/host/telemetry/affinity gate before selecting the accepted low-thread stage deficit.
+          - [ ] Complete the corrected formal T1/T2/T4/T8 campaign with both repairs and require every existing
+            3%/correctness/host/telemetry/affinity gate before selecting a production thread default. T1/T2/T4 have
+            completed five pairs and 15 measured windows per runtime; T8 remains unmeasured because the first attempt
+            was externally interrupted and the clean retry correctly rejected sustained unrelated all-core load at
+            host admission. Evidence: `docs/QwenEqualThreadScalingCorrectedFormal_2026-08-18.md`.
+            - [x] Archive the corrected T1/T2/T4 data and gate audit. LiteNN trails by `19.14%/14.91%/7.98%` while its
+              process CPU-time ratio worsens from `1.223x` to `1.298x/1.348x`; all correctness, telemetry, and affinity
+              gates pass, but concentrated variance rejects every completed child.
+            - [ ] P0: run a fresh five-pair T8 child after affinity-domain host admission succeeds, then aggregate the
+              full curve without adopting either partial T8 artifact.
+            - [ ] P0: capture matched T1 stages for both runtimes over the complete token: QKV, RoPE/KV append,
+              attention score/softmax/value, attention output, FFN norm, Gate/Up, activation, Down, logits,
+              residual/dispatch, and unclassified overhead. Preserve exact replay, cache-hit, no-fallback, affinity,
+              host, telemetry, and 3% variance gates.
+            - [ ] P0: collect matched T1 and T4 cycles, instructions, IPC, cache-miss, stall, and effective-bandwidth
+              evidence. Use T1 to localize the `56.052 ms/token` excess and T4 to explain why it grows to
+              `231.647 ms/token` instead of assuming a scheduler or kernel owner.
+            - [ ] P0: optimize only the largest measured cross-runtime owner. Require it to explain a material share of
+              the T1 excess and deliver at least 5% whole-token improvement with exact trajectory, no fallback, no peak
+              memory regression, and no worse process/window variance.
+            - [ ] P1: rerun the complete formal curve after the selected optimization and choose the production CPU
+              thread default from accepted wall latency, CPU ms/token, tokens/CPU-second, and parallel efficiency.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
@@ -152,9 +172,10 @@ P0 implementation order:
     - [ ] P1: mmap or stream source GGUF payloads and incrementally publish prepared external weights so first-build
       peak private bytes fall below `1.5x` the combined required payload. Preserve cache-key identity, atomic failure
       behavior, exact decode parity, and bounded temporary object/metadata memory.
-    - [ ] P1: use matched cross-runtime stages and cache-cold projection streams to attribute the post-attention
-      projection budget. QKV, attention output, Gate/Up, Down, and logits currently aggregate to `163.473 ms/token`
-      (`80.71%` of LiteNN module time), but local share alone must not select a kernel rewrite.
+    - [ ] P1: if the corrected formal P0 stage/PMU evidence attributes the deficit to projections, use matched
+      cache-cold projection streams to separate arithmetic from weight/cache traffic. QKV, attention output, Gate/Up,
+      Down, and logits currently aggregate to `163.473 ms/token` (`80.71%` of LiteNN module time), but local share alone
+      must not select a kernel rewrite.
     - [ ] P1: A/B shape-aware worker subsets and signal masks for medium projection/attention work. Require lower
       dispatch/barrier time and whole-model gain; do not trade reduced wakeups for compute under-utilization.
   - [ ] Localize natural logit drift independently of performance. The first argmax mismatch is reproducible at
