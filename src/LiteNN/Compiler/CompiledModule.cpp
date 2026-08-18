@@ -113,6 +113,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -10742,6 +10743,69 @@ namespace
 		                        target.offset);
 	}
 
+	class ScopedCPURuntimeAllocations
+	{
+	public:
+		ScopedCPURuntimeAllocations() : previous_(current_)
+		{
+			current_ = this;
+		}
+
+		~ScopedCPURuntimeAllocations()
+		{
+			current_ = previous_;
+			for (void* allocation : allocations_)
+			{
+				std::free(allocation);
+			}
+		}
+
+		ScopedCPURuntimeAllocations(const ScopedCPURuntimeAllocations&) = delete;
+		ScopedCPURuntimeAllocations& operator=(const ScopedCPURuntimeAllocations&) = delete;
+
+		static void* Allocate(std::size_t byteSize)
+		{
+			void* allocation = std::malloc(byteSize);
+			if (allocation != nullptr && current_ != nullptr)
+			{
+				current_->allocations_.insert(allocation);
+			}
+			return allocation;
+		}
+
+		static void Free(void* allocation)
+		{
+			if (allocation == nullptr)
+			{
+				return;
+			}
+			for (auto* scope = current_; scope != nullptr; scope = scope->previous_)
+			{
+				if (scope->allocations_.erase(allocation) != 0)
+				{
+					std::free(allocation);
+					return;
+				}
+			}
+			std::free(allocation);
+		}
+
+	private:
+		inline static thread_local ScopedCPURuntimeAllocations* current_{};
+		ScopedCPURuntimeAllocations* previous_{};
+		std::unordered_set<void*> allocations_;
+	};
+
+	void* LiteNNRuntimeMalloc(std::size_t byteSize)
+	{
+		return ScopedCPURuntimeAllocations::Allocate(byteSize);
+	}
+
+	void LiteNNRuntimeFree(void* allocation)
+	{
+		ScopedCPURuntimeAllocations::Free(allocation);
+	}
+
 	void RegisterJITRuntimeSymbol(std::string_view name, void* address)
 	{
 		const auto symbolName = std::string(name);
@@ -10808,8 +10872,8 @@ namespace
 	LoadedJIT LoadJIT(std::span<const std::byte> instructions)
 	{
 		InitializeNativeLLVM();
-		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(static_cast<void* (*) (std::size_t)>(&std::malloc)));
-		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(static_cast<void (*)(void*)>(&std::free)));
+		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(&LiteNNRuntimeMalloc));
+		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(&LiteNNRuntimeFree));
 		RegisterJITRuntimeSymbol(
 		    "memcpy", reinterpret_cast<void*>(static_cast<void* (*) (void*, const void*, std::size_t)>(&std::memcpy)));
 		RegisterJITRuntimeSymbol(
@@ -20770,6 +20834,7 @@ void CompiledModule<CPU>::RunIntoBindings(std::span<const CompiledTensorBinding>
 	}
 
 	ScopedCPUExternalRegions scopedRegions(impl_->ExternalConstantsData(), impl_->ExternalWeightsData());
+	ScopedCPURuntimeAllocations scopedAllocations;
 	impl_->entry(inputPtrs.data(), outputPtrs.data());
 }
 
