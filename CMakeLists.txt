@@ -536,6 +536,14 @@ set_tests_properties(ProcessMemory.PythonUnit PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
 )
 
+add_test(
+    NAME BuildArtifactManager.PythonUnit
+    COMMAND ${LITENN_PYTHON_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/BuildArtifactManagerTest.py"
+)
+set_tests_properties(BuildArtifactManager.PythonUnit PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 if(LITENN_ENABLE_MLIR)
     install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/LiteNN/Compiler/
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/LiteNN/Compiler

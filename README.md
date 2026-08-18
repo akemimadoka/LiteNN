@@ -65,6 +65,23 @@ cmake -S . -B build -DLITENN_ENABLE_MLIR=ON -DCMAKE_PREFIX_PATH="<llvm-cmake-dir
 cmake --build build
 ```
 
+## 临时产物管理
+
+性能测试和 GGUF AOT 实验应复用 `build/.litenn-cache/gguf-shared-weights` 中的共享权重，避免每个实验目录复制一份多 GiB 的 `weights.bin`。可以先盘点 `build` 中最大的直接子项：
+
+```powershell
+python311 scripts/manage_build_artifacts.py --root build
+```
+
+按容量和目录数生成清理计划时默认只预览，并自动保护 `.litenn-cache`。确认列表后才添加 `--apply`：
+
+```powershell
+python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --keep qwen_speed_cache
+python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --keep qwen_speed_cache --apply
+```
+
+脚本只把 `build` 的直接子项作为清理单元，不跟随符号链接；默认拒绝仓库根目录和 CMake 构建树。真正的 CMake 输出建议继续放在 `build-release` 等独立目录，不与实验产物混放。
+
 ## 安装
 
 当前包版本为 `0.1.0`，安装后会导出 `LiteNNConfig.cmake` 和 `LiteNNConfigVersion.cmake`：

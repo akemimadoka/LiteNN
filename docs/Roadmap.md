@@ -3817,6 +3817,17 @@ Priority classes:
             2026-08-02: physical payload identity now uses sorted offset/size/checksum tuples and total bytes, decoupling
             harmless tensor names, alignment declarations, and metadata order while retaining strict artifact ABI
             validation. Unique staging directories plus atomic rename make concurrent population corruption-safe.
+      - [x] Share prepared weights across experiment-specific AOT cache roots. Completed on 2026-08-19:
+            `qwen_smoke.py` routes caches under repository `build/**` to
+            `build/.litenn-cache/gguf-shared-weights` by default, while
+            `--shared-weights-cache-dir` and `LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR` provide explicit application/CLI
+            configuration. Instruction variants keep independent small cache entries but reuse the same content- and
+            layout-addressed prepared payload.
+      - [x] Add auditable retention controls for scratch artifacts. Completed on 2026-08-19:
+            `scripts/manage_build_artifacts.py` inventories direct children, protects the shared cache, supports age,
+            capacity, and entry-count policies, and remains dry-run unless `--apply` is supplied. Repository-root,
+            CMake-tree, path-boundary, and symlink guards prevent an experiment cleanup from becoming a source/build
+            deletion.
       - [x] Add metadata-only, cache-first stateful startup and an explicit trusted-cache validation boundary.
             Completed on 2026-08-01: cache hits no longer import tensor payloads or rebuild the decode graph, and the
             compiled module ABI drives state/input allocation directly. Default separated-artifact loading remains
