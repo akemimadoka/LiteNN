@@ -437,6 +437,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Compile the LiteNN decode artifact with this KV-cache capacity instead of prompt_tokens + max_tokens",
     )
     parser.add_argument(
+        "--benchmark-warmup-windows",
+        type=int,
+        default=0,
+        help="Replay this many unmeasured fixed-trajectory windows inside the mapped LiteNN process",
+    )
+    parser.add_argument(
+        "--benchmark-windows",
+        type=int,
+        default=0,
+        help="Measure this many fixed-trajectory decode windows inside the mapped LiteNN process",
+    )
+    parser.add_argument(
+        "--benchmark-window-report",
+        type=Path,
+        help="Write the structured in-process decode-window report",
+    )
+    parser.add_argument(
         "--until-eos",
         action="store_true",
         help="Keep decoding until EOS is generated, using --steps/--max-tokens as the safety cap",
@@ -635,6 +652,28 @@ def main() -> int:
             raise SystemExit("--forced-generated-token-ids requires --ignore-eos")
         if len(args.forced_generated_token_ids) != args.steps:
             raise SystemExit("--forced-generated-token-ids must contain exactly --max-tokens token ids")
+    benchmark_requested = (
+        args.benchmark_warmup_windows != 0
+        or args.benchmark_windows != 0
+        or args.benchmark_window_report is not None
+    )
+    if args.benchmark_warmup_windows < 0:
+        raise SystemExit("--benchmark-warmup-windows must be non-negative")
+    if benchmark_requested and args.benchmark_windows <= 0:
+        raise SystemExit("in-process decode benchmarking requires positive --benchmark-windows")
+    if args.benchmark_windows > 0 and args.benchmark_window_report is None:
+        raise SystemExit("--benchmark-windows requires --benchmark-window-report")
+    if args.benchmark_windows > 0 and (
+        not args.stateful
+        or args.forced_generated_token_ids is None
+        or len(args.forced_generated_token_ids) < 2
+        or not args.ignore_eos
+        or args.compile_only
+    ):
+        raise SystemExit(
+            "in-process decode benchmarking requires stateful forced replay with at least two tokens, "
+            "--ignore-eos, and execution enabled"
+        )
     if args.layer_checkpoint_generated_indices is not None and args.layer_checkpoint_dir is None:
         raise SystemExit("--layer-checkpoint-generated-indices requires --layer-checkpoint-dir")
     if args.layer_checkpoint_dir is not None and not args.stateful:
@@ -958,6 +997,19 @@ def main() -> int:
             decode_cmd.extend(["--paged-resident-pages", str(args.paged_resident_pages)])
         if args.max_cache_length is not None:
             decode_cmd.extend(["--max-cache-length", str(args.max_cache_length)])
+        if args.benchmark_windows > 0:
+            assert args.benchmark_window_report is not None
+            args.benchmark_window_report.parent.mkdir(parents=True, exist_ok=True)
+            decode_cmd.extend(
+                [
+                    "--benchmark-warmup-windows",
+                    str(args.benchmark_warmup_windows),
+                    "--benchmark-windows",
+                    str(args.benchmark_windows),
+                    "--benchmark-window-report",
+                    str(args.benchmark_window_report),
+                ]
+            )
         decode_cmd.extend(["--cpu-aot-llvm-opt-level", str(args.llvm_opt_level)])
         decode_cmd.extend(["--cpu-aot-activation-math", args.cpu_aot_activation_math])
         if args.cpu_aot_threads is not None:
@@ -1111,6 +1163,12 @@ def main() -> int:
             ),
         },
         "max_cache_length": args.max_cache_length,
+        "in_process_benchmark": {
+            "enabled": args.benchmark_windows > 0,
+            "warmup_windows": args.benchmark_warmup_windows,
+            "measured_windows": args.benchmark_windows,
+            "report": str(args.benchmark_window_report) if args.benchmark_window_report is not None else None,
+        },
         "forced_replay": (
             {
                 "enabled": True,
