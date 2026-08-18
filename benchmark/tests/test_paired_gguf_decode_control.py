@@ -11,8 +11,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from run_paired_gguf_decode_control import (  # noqa: E402
     assess_window_host_stability,
+    assess_window_process_affinity,
     build_llama_in_process_command,
     build_litenn_command,
+    cpu_set,
     load_in_process_decode_report,
     load_litenn_generated_token_ids,
     load_tokenizer_token_ids,
@@ -26,6 +28,27 @@ from run_paired_gguf_decode_control import (  # noqa: E402
 
 
 class FixedTokenReplayTest(unittest.TestCase):
+    def test_parses_shared_process_cpu_set(self) -> None:
+        self.assertEqual(cpu_set("0-3,6,8-9"), [0, 1, 2, 3, 6, 8, 9])
+        with self.assertRaisesRegex(Exception, "CPU set"):
+            cpu_set("3-1")
+
+    def test_validates_observed_window_process_affinity(self) -> None:
+        report = {
+            "windows": [
+                {
+                    "phase": "measured",
+                    "telemetry": {"allowedCPUIntersection": [0, 1, 2, 3]},
+                },
+                {
+                    "phase": "measured",
+                    "telemetry": {"allowedCPUIntersection": [0, 1, 2, 3]},
+                },
+            ]
+        }
+        self.assertTrue(assess_window_process_affinity(report, [0, 1, 2, 3])["passed"])
+        self.assertFalse(assess_window_process_affinity(report, [0, 1])["passed"])
+
     def test_waits_for_consecutive_quiet_host_samples(self) -> None:
         class Monitor:
             def __init__(self) -> None:

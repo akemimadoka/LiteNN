@@ -85,6 +85,25 @@ def poll_level(raw: str) -> int:
     return value
 
 
+def cpu_set(raw: str) -> list[int]:
+    result: set[int] = set()
+    try:
+        for part in raw.split(","):
+            lower, separator, upper = part.strip().partition("-")
+            if not lower:
+                raise ValueError
+            first = int(lower)
+            last = int(upper) if separator else first
+            if first < 0 or last < first:
+                raise ValueError
+            result.update(range(first, last + 1))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("CPU set must use non-negative comma-separated ids or ranges") from error
+    if not result:
+        raise argparse.ArgumentTypeError("CPU set must not be empty")
+    return sorted(result)
+
+
 def is_absolute_path(value: str) -> bool:
     return Path(value).is_absolute() or PurePosixPath(value).is_absolute() or PureWindowsPath(value).is_absolute()
 
@@ -456,6 +475,36 @@ def cooldown_record(seconds: float, kind: str) -> dict[str, object]:
     }
 
 
+def apply_process_affinity(pid: int, cpu_ids: list[int] | None) -> dict[str, object]:
+    if not cpu_ids:
+        return {"schema": "litenn.process_affinity.v1", "requested_cpu_ids": [], "applied": False}
+    if sys.platform == "win32":
+        bit_count = ctypes.sizeof(ctypes.c_size_t) * 8
+        if cpu_ids[-1] >= bit_count:
+            raise RuntimeError(f"Windows process CPU id {cpu_ids[-1]} exceeds the {bit_count}-bit affinity mask")
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+        kernel32.SetProcessAffinityMask.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x0200 | 0x1000, False, pid)
+        if not handle:
+            raise OSError(ctypes.get_last_error(), f"OpenProcess({pid}) for affinity failed")
+        try:
+            mask = sum(1 << cpu_id for cpu_id in cpu_ids)
+            if not kernel32.SetProcessAffinityMask(handle, mask):
+                raise OSError(ctypes.get_last_error(), f"SetProcessAffinityMask({pid}) failed")
+        finally:
+            kernel32.CloseHandle(handle)
+    elif sys.platform.startswith("linux") and hasattr(os, "sched_setaffinity"):
+        os.sched_setaffinity(pid, set(cpu_ids))
+    else:
+        raise RuntimeError(f"process affinity control is unsupported on {sys.platform}")
+    return {"schema": "litenn.process_affinity.v1", "requested_cpu_ids": cpu_ids, "applied": True}
+
+
 def power_policy() -> dict[str, object]:
     if sys.platform == "win32":
         try:
@@ -529,6 +578,7 @@ def run_monitored(
     artifact_prefix: Path,
     replacements: dict[str, str],
     monitor_interval_seconds: float,
+    process_cpu_ids: list[int] | None = None,
 ) -> tuple[dict[str, object], str, str]:
     artifact_prefix.parent.mkdir(parents=True, exist_ok=True)
     raw_stdout = artifact_prefix.with_suffix(".raw.stdout.txt")
@@ -540,9 +590,20 @@ def run_monitored(
     resource_document: dict[str, object] | None = None
     resource_sampler: ProcessMemorySampler | None = None
     final_sample: dict[str, object] | None = None
+    affinity: dict[str, object] = {
+        "schema": "litenn.process_affinity.v1",
+        "requested_cpu_ids": process_cpu_ids or [],
+        "applied": False,
+    }
     try:
         with raw_stdout.open("wb") as stdout_stream, raw_stderr.open("wb") as stderr_stream:
             process = subprocess.Popen(command, stdout=stdout_stream, stderr=stderr_stream)
+            try:
+                affinity = apply_process_affinity(process.pid, process_cpu_ids)
+            except BaseException:
+                process.terminate()
+                process.wait(timeout=10.0)
+                raise
             resource_sampler = ProcessMemorySampler(
                 process.pid, max(10, round(monitor_interval_seconds * 1000.0)), lambda: "paired_runtime"
             )
@@ -580,6 +641,7 @@ def run_monitored(
             "returncode": process.returncode,
             "wall_seconds": wall_seconds,
             "frequency": summarize_frequency(samples),
+            "affinity": affinity,
             "telemetry": {
                 "schema": "litenn.paired_process_monitor.v1",
                 "sample_interval_seconds": monitor_interval_seconds,
@@ -788,6 +850,33 @@ def assess_window_host_stability(
         "activity_passed": activity_passed,
         "frequency_passed": frequency_passed,
         "passed": activity_passed and frequency_passed,
+    }
+
+
+def assess_window_process_affinity(
+    report: dict[str, object], requested_cpu_ids: list[int] | None
+) -> dict[str, object]:
+    requested = requested_cpu_ids or []
+    if not requested:
+        return {
+            "schema": "litenn.decode_window_process_affinity.v1",
+            "requested_cpu_ids": [],
+            "available": True,
+            "passed": True,
+        }
+    observed = [
+        window["telemetry"]["allowedCPUIntersection"]  # type: ignore[index]
+        for window in report["windows"]  # type: ignore[index]
+        if window["phase"] == "measured"  # type: ignore[index]
+    ]
+    available = bool(observed) and all(bool(value) for value in observed)
+    passed = available and all(value == requested for value in observed)
+    return {
+        "schema": "litenn.decode_window_process_affinity.v1",
+        "requested_cpu_ids": requested,
+        "observed_window_intersections": observed,
+        "available": available,
+        "passed": passed,
     }
 
 
@@ -1201,6 +1290,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"{document['configuration']['host_admission_max_activity_percent']}`",  # type: ignore[index]
         f"- Runtime/pair cooldown: `{document['configuration']['cooldown_between_runtimes_seconds']}/"
         f"{document['configuration']['cooldown_between_pairs_seconds']} s`",  # type: ignore[index]
+        f"- Shared process CPU set: `{document['configuration']['process_cpu_set']}`",  # type: ignore[index]
         f"- Trajectory mode: `{'fixed reference replay' if document['configuration']['fixed_token_replay'] else 'natural greedy'}`",  # type: ignore[index]
         "",
         "| Pair | Order | llama ms/token | llama t/s | LiteNN ms/token | LiteNN t/s | LiteNN delta | "
@@ -1247,6 +1337,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"- In-process window variance gate: `{gate['in_process_variance']}`",  # type: ignore[index]
             f"- Window telemetry coverage gate: `{gate['window_telemetry']}`",  # type: ignore[index]
             f"- Host-stability gate: `{gate['host_stability']}`",  # type: ignore[index]
+            f"- Process-affinity gate: `{gate['process_affinity']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
@@ -1302,6 +1393,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llama-cpu-strict", choices=["0", "1"], default="0")
     parser.add_argument("--llama-poll", default=50, type=poll_level)
     parser.add_argument("--llama-priority", default=0, type=priority)
+    parser.add_argument(
+        "--process-cpu-set",
+        type=cpu_set,
+        help="Apply the same OS process-affinity CPU set (for example 0-7) to both timed runtimes",
+    )
     parser.add_argument("--monitor-interval", default=0.25, type=positive_float)
     parser.add_argument(
         "--host-admission-max-activity-percent",
@@ -1412,6 +1508,7 @@ def main() -> int:
             "llama_cpu_strict": args.llama_cpu_strict,
             "llama_poll": args.llama_poll,
             "llama_priority": args.llama_priority,
+            "process_cpu_set": args.process_cpu_set,
             "monitor_interval_seconds": args.monitor_interval,
             "host_admission_max_activity_percent": args.host_admission_max_activity_percent,
             "host_admission_consecutive_samples": args.host_admission_consecutive_samples,
@@ -1539,7 +1636,11 @@ def main() -> int:
                 else:
                     command = build_llama_command(args, model, completion)
                 process_record, stdout_text, stderr_text = run_monitored(
-                    command, pair_dir / "llama_cpp", replacements, args.monitor_interval
+                    command,
+                    pair_dir / "llama_cpp",
+                    replacements,
+                    args.monitor_interval,
+                    args.process_cpu_set,
                 )
                 if process_record["returncode"] != 0:
                     document["status"] = "failed"
@@ -1597,7 +1698,11 @@ def main() -> int:
                     in_process_report_path if args.in_process_windows else None,
                 )
                 process_record, _, _ = run_monitored(
-                    command, pair_dir / "litenn", replacements, args.monitor_interval
+                    command,
+                    pair_dir / "litenn",
+                    replacements,
+                    args.monitor_interval,
+                    args.process_cpu_set,
                 )
                 if process_record["returncode"] != 0:
                     document["status"] = "failed"
@@ -1725,6 +1830,17 @@ def main() -> int:
                 "available": bool(llama_host_stability["available"] and litenn_host_stability["available"]),
                 "passed": bool(llama_host_stability["passed"] and litenn_host_stability["passed"]),
             }
+            llama_affinity = assess_window_process_affinity(
+                llama["in_process"], args.process_cpu_set  # type: ignore[index]
+            )
+            litenn_affinity = assess_window_process_affinity(
+                litenn_result["in_process"], args.process_cpu_set  # type: ignore[index]
+            )
+            pair["process_affinity"] = {
+                "llama_cpp": llama_affinity,
+                "litenn": litenn_affinity,
+                "passed": bool(llama_affinity["passed"] and litenn_affinity["passed"]),
+            }
         pair["power_policy_stable"] = paired_power_policy_stable(  # type: ignore[index]
             llama["process"], litenn_result["process"]  # type: ignore[index]
         )
@@ -1817,6 +1933,14 @@ def main() -> int:
         )
         for pair in pairs
     )
+    process_affinity_passed = not args.process_cpu_set or all(
+        all(
+            bool(pair[runtime]["process"]["affinity"]["applied"])  # type: ignore[index]
+            for runtime in ("llama_cpp", "litenn")
+        )
+        and (not args.in_process_windows or bool(pair["process_affinity"]["passed"]))  # type: ignore[index]
+        for pair in pairs
+    )
     gate = {
         "text_parity": all(bool(pair["text_match"]) for pair in pairs),  # type: ignore[index]
         "text_parity_kind": "fixed_reference_trajectory" if args.fixed_token_replay else "natural_greedy",
@@ -1835,6 +1959,7 @@ def main() -> int:
         "in_process_variance": in_process_variance_passed,
         "window_telemetry": window_telemetry_passed,
         "host_stability": host_stability_passed,
+        "process_affinity": process_affinity_passed,
         "variance": process_variance_passed and in_process_variance_passed,
     }
     gate["accepted"] = bool(
@@ -1843,6 +1968,7 @@ def main() -> int:
         and gate["power_policy_stability"]
         and gate["window_telemetry"]
         and gate["host_stability"]
+        and gate["process_affinity"]
         and gate["variance"]
     )
     document["summary"] = summary
