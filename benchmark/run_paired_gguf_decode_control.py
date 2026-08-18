@@ -71,6 +71,13 @@ def positive_float(raw: str) -> float:
     return value
 
 
+def non_negative_float(raw: str) -> float:
+    value = float(raw)
+    if not math.isfinite(value) or value < 0.0:
+        raise argparse.ArgumentTypeError("value must be finite and non-negative")
+    return value
+
+
 def poll_level(raw: str) -> int:
     value = int(raw)
     if value < 0 or value > 100:
@@ -358,6 +365,97 @@ def frequency_sample() -> dict[str, object] | None:
     return sample
 
 
+def host_activity_percent(sample: dict[str, object], logical_cpus: int | None = None) -> tuple[str, float] | None:
+    utility = sample.get("host_utility_percent_mean")
+    if isinstance(utility, (int, float)) and not isinstance(utility, bool) and math.isfinite(float(utility)):
+        return "processor_utility_mean", float(utility)
+    load = sample.get("host_load_1m")
+    cpu_count = logical_cpus or os.cpu_count() or 1
+    if isinstance(load, (int, float)) and not isinstance(load, bool) and math.isfinite(float(load)):
+        return "load_1m_per_logical_cpu", float(load) * 100.0 / cpu_count
+    return None
+
+
+def wait_for_host_admission(
+    maximum_activity_percent: float | None,
+    consecutive_samples: int,
+    warmup_samples: int,
+    timeout_seconds: float,
+    sample_interval_seconds: float,
+) -> dict[str, object]:
+    if maximum_activity_percent is None:
+        return {"schema": "litenn.host_admission.v1", "enabled": False, "passed": True}
+
+    started_ns = time.monotonic_ns()
+    deadline = time.monotonic() + timeout_seconds
+    samples: list[dict[str, object]] = []
+    accepted_streak = 0
+    activity_source: str | None = None
+    monitor = create_frequency_monitor()
+    try:
+        attempt = 0
+        while True:
+            sample = monitor.sample()
+            if sample is not None:
+                sample = dict(sample)
+                sample["admission_warmup"] = attempt < warmup_samples
+                samples.append(sample)
+                activity = host_activity_percent(sample)
+                if attempt >= warmup_samples and activity is not None:
+                    activity_source, activity_value = activity
+                    accepted_streak = accepted_streak + 1 if activity_value <= maximum_activity_percent else 0
+                    if accepted_streak >= consecutive_samples:
+                        break
+                elif attempt >= warmup_samples:
+                    accepted_streak = 0
+            attempt += 1
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            time.sleep(min(sample_interval_seconds, remaining))
+    finally:
+        monitor.close()
+
+    observations = [
+        activity[1]
+        for sample in samples
+        if not bool(sample.get("admission_warmup"))
+        and (activity := host_activity_percent(sample)) is not None
+    ]
+    passed = accepted_streak >= consecutive_samples
+    return {
+        "schema": "litenn.host_admission.v1",
+        "enabled": True,
+        "passed": passed,
+        "activity_source": activity_source,
+        "maximum_activity_percent": maximum_activity_percent,
+        "required_consecutive_samples": consecutive_samples,
+        "warmup_samples": warmup_samples,
+        "accepted_streak": accepted_streak,
+        "waited_ms": (time.monotonic_ns() - started_ns) / 1_000_000.0,
+        "sample_count": len(samples),
+        "activity_percent": {
+            "minimum": min(observations) if observations else None,
+            "median": statistics.median(observations) if observations else None,
+            "maximum": max(observations) if observations else None,
+        },
+        "samples": samples,
+    }
+
+
+def cooldown_record(seconds: float, kind: str) -> dict[str, object]:
+    started_ns = time.monotonic_ns()
+    if seconds > 0.0:
+        time.sleep(seconds)
+    ended_ns = time.monotonic_ns()
+    return {
+        "schema": "litenn.benchmark_cooldown.v1",
+        "kind": kind,
+        "requested_seconds": seconds,
+        "actual_ms": (ended_ns - started_ns) / 1_000_000.0,
+    }
+
+
 def power_policy() -> dict[str, object]:
     if sys.platform == "win32":
         try:
@@ -631,6 +729,65 @@ def summarize_window_telemetry(
         "privateBytes": range_summary("private_bytes"),
         "allowedCPUUnion": sorted(set().union(*allowed_sets)) if allowed_sets else [],
         "allowedCPUIntersection": sorted(set.intersection(*allowed_sets)) if allowed_sets else [],
+    }
+
+
+def assess_window_host_stability(
+    report: dict[str, object], maximum_activity_excursion_ratio: float, minimum_frequency_ratio: float
+) -> dict[str, object]:
+    measured = [window for window in report["windows"] if window["phase"] == "measured"]  # type: ignore[index]
+    activity_values: list[float] = []
+    activity_metric: str | None = None
+    frequency_values: list[float] = []
+    for window in measured:
+        telemetry = window["telemetry"]
+        utility = telemetry["hostUtilityPercentMean"]["median"]
+        load = telemetry["hostLoad1m"]["median"]
+        frequency = telemetry["weightedActualMHz"]["median"]
+        if isinstance(utility, (int, float)) and not isinstance(utility, bool):
+            activity_metric = "hostUtilityPercentMean"
+            activity_values.append(float(utility))
+        elif isinstance(load, (int, float)) and not isinstance(load, bool):
+            activity_metric = "hostLoad1m"
+            activity_values.append(float(load))
+        if isinstance(frequency, (int, float)) and not isinstance(frequency, bool):
+            frequency_values.append(float(frequency))
+
+    activity_available = len(activity_values) == len(measured) and bool(activity_values)
+    frequency_available = len(frequency_values) == len(measured) and bool(frequency_values)
+    activity_baseline = statistics.median(activity_values) if activity_available else None
+    maximum_activity = max(activity_values) if activity_available else None
+    activity_excursion_ratio = (
+        maximum_activity / activity_baseline
+        if activity_baseline is not None and activity_baseline > 0.0 and maximum_activity is not None
+        else 1.0 if activity_available else None
+    )
+    frequency_baseline = statistics.median(frequency_values) if frequency_available else None
+    minimum_frequency = min(frequency_values) if frequency_available else None
+    frequency_ratio = (
+        minimum_frequency / frequency_baseline
+        if frequency_baseline is not None and frequency_baseline > 0.0 and minimum_frequency is not None
+        else None
+    )
+    activity_passed = (
+        activity_excursion_ratio is None or activity_excursion_ratio <= maximum_activity_excursion_ratio
+    )
+    frequency_passed = frequency_ratio is None or frequency_ratio >= minimum_frequency_ratio
+    return {
+        "schema": "litenn.decode_window_host_stability.v1",
+        "available": activity_available and frequency_available,
+        "activity_metric": activity_metric,
+        "activity_baseline": activity_baseline,
+        "maximum_activity": maximum_activity,
+        "activity_excursion_ratio": activity_excursion_ratio,
+        "maximum_activity_excursion_ratio": maximum_activity_excursion_ratio,
+        "frequency_baseline_mhz": frequency_baseline,
+        "minimum_frequency_mhz": minimum_frequency,
+        "minimum_frequency_ratio_observed": frequency_ratio,
+        "minimum_frequency_ratio_required": minimum_frequency_ratio,
+        "activity_passed": activity_passed,
+        "frequency_passed": frequency_passed,
+        "passed": activity_passed and frequency_passed,
     }
 
 
@@ -1040,6 +1197,10 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Prompt/eval tokens: `{document['configuration']['prompt_tokens']}/"  # type: ignore[index]
         f"{document['configuration']['eval_tokens']}`",  # type: ignore[index]
         f"- Variance threshold: `{document['configuration']['variance_threshold_percent']}%`",  # type: ignore[index]
+        f"- Host admission maximum activity: `"
+        f"{document['configuration']['host_admission_max_activity_percent']}`",  # type: ignore[index]
+        f"- Runtime/pair cooldown: `{document['configuration']['cooldown_between_runtimes_seconds']}/"
+        f"{document['configuration']['cooldown_between_pairs_seconds']} s`",  # type: ignore[index]
         f"- Trajectory mode: `{'fixed reference replay' if document['configuration']['fixed_token_replay'] else 'natural greedy'}`",  # type: ignore[index]
         "",
         "| Pair | Order | llama ms/token | llama t/s | LiteNN ms/token | LiteNN t/s | LiteNN delta | "
@@ -1085,6 +1246,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"- Process-level variance gate: `{gate['process_variance']}`",  # type: ignore[index]
             f"- In-process window variance gate: `{gate['in_process_variance']}`",  # type: ignore[index]
             f"- Window telemetry coverage gate: `{gate['window_telemetry']}`",  # type: ignore[index]
+            f"- Host-stability gate: `{gate['host_stability']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
@@ -1141,6 +1303,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llama-poll", default=50, type=poll_level)
     parser.add_argument("--llama-priority", default=0, type=priority)
     parser.add_argument("--monitor-interval", default=0.25, type=positive_float)
+    parser.add_argument(
+        "--host-admission-max-activity-percent",
+        type=positive_float,
+        help="Wait before each runtime until consecutive host activity samples do not exceed this value",
+    )
+    parser.add_argument("--host-admission-consecutive-samples", default=3, type=positive_int)
+    parser.add_argument("--host-admission-warmup-samples", default=2, type=non_negative_int)
+    parser.add_argument("--host-admission-timeout-seconds", default=60.0, type=positive_float)
+    parser.add_argument("--cooldown-between-runtimes-seconds", default=0.0, type=non_negative_float)
+    parser.add_argument("--cooldown-between-pairs-seconds", default=0.0, type=non_negative_float)
+    parser.add_argument("--window-host-activity-excursion-ratio", default=2.0, type=positive_float)
+    parser.add_argument("--window-minimum-frequency-ratio", default=0.95, type=positive_float)
+    parser.add_argument(
+        "--require-host-stability",
+        action="store_true",
+        help="Require pre-runtime admission and complete window activity/frequency evidence",
+    )
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--require-variance-gate", action="store_true")
     parser.add_argument(
@@ -1179,6 +1358,12 @@ def main() -> int:
         raise SystemExit("--in-process-windows requires --fixed-token-replay")
     if args.in_process_windows and args.predict < 2:
         raise SystemExit("--in-process-windows requires --predict of at least two")
+    if args.require_host_stability and not args.in_process_windows:
+        raise SystemExit("--require-host-stability requires --in-process-windows")
+    if args.require_host_stability and args.host_admission_max_activity_percent is None:
+        raise SystemExit("--require-host-stability requires --host-admission-max-activity-percent")
+    if args.window_minimum_frequency_ratio > 1.0:
+        raise SystemExit("--window-minimum-frequency-ratio must not exceed 1")
     model = resolve_file(args.model, "model")
     litenn = resolve_file(args.litenn, "LiteNN GGUF tool")
     tokenizer = resolve_file(args.llamacpp_tokenizer_tool, "llama.cpp tokenizer tool")
@@ -1228,6 +1413,15 @@ def main() -> int:
             "llama_poll": args.llama_poll,
             "llama_priority": args.llama_priority,
             "monitor_interval_seconds": args.monitor_interval,
+            "host_admission_max_activity_percent": args.host_admission_max_activity_percent,
+            "host_admission_consecutive_samples": args.host_admission_consecutive_samples,
+            "host_admission_warmup_samples": args.host_admission_warmup_samples,
+            "host_admission_timeout_seconds": args.host_admission_timeout_seconds,
+            "cooldown_between_runtimes_seconds": args.cooldown_between_runtimes_seconds,
+            "cooldown_between_pairs_seconds": args.cooldown_between_pairs_seconds,
+            "window_host_activity_excursion_ratio": args.window_host_activity_excursion_ratio,
+            "window_minimum_frequency_ratio": args.window_minimum_frequency_ratio,
+            "require_host_stability": args.require_host_stability,
             "variance_threshold_percent": args.variance_threshold_percent,
             "fixed_token_replay": args.fixed_token_replay,
             "in_process_warmup_windows": args.in_process_warmup_windows,
@@ -1283,11 +1477,47 @@ def main() -> int:
     assert isinstance(pairs_document, list)
     for repetition in range(1, args.repetitions + 1):
         order = ["llama_cpp", "litenn"] if repetition % 2 == 1 else ["litenn", "llama_cpp"]
-        pair: dict[str, object] = {"repetition": repetition, "order": order}
+        pair: dict[str, object] = {
+            "repetition": repetition,
+            "order": order,
+            "cooldowns": [],
+            "host_admissions": {},
+        }
         pairs_document.append(pair)
         pair_dir = output_dir / f"pair_{repetition:02d}"
         pair_dir.mkdir(parents=True, exist_ok=True)
-        for runtime in order:
+        if repetition > 1:
+            pair["cooldowns"].append(  # type: ignore[union-attr]
+                cooldown_record(args.cooldown_between_pairs_seconds, "between_pairs")
+            )
+        for runtime_index, runtime in enumerate(order):
+            if runtime_index > 0:
+                pair["cooldowns"].append(  # type: ignore[union-attr]
+                    cooldown_record(args.cooldown_between_runtimes_seconds, "between_runtimes")
+                )
+            if args.host_admission_max_activity_percent is not None:
+                print(
+                    f"[paired decode] pair {repetition}/{args.repetitions} {runtime} waiting for host admission",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            admission = wait_for_host_admission(
+                args.host_admission_max_activity_percent,
+                args.host_admission_consecutive_samples,
+                args.host_admission_warmup_samples,
+                args.host_admission_timeout_seconds,
+                args.monitor_interval,
+            )
+            pair["host_admissions"][runtime] = admission  # type: ignore[index]
+            checkpoint()
+            if not bool(admission["passed"]):
+                document["status"] = "failed"
+                document["failure"] = (
+                    f"host admission timed out before pair {repetition} {runtime}; "
+                    "raw admission samples were retained"
+                )
+                checkpoint()
+                raise SystemExit(document["failure"])
             print(
                 f"[paired decode] pair {repetition}/{args.repetitions} {runtime} starting",
                 file=sys.stderr,
@@ -1479,6 +1709,22 @@ def main() -> int:
                 "litenn_covered": litenn_telemetry_covered,
                 "passed": llama_telemetry_covered and litenn_telemetry_covered,
             }
+            llama_host_stability = assess_window_host_stability(
+                llama["in_process"],  # type: ignore[index]
+                args.window_host_activity_excursion_ratio,
+                args.window_minimum_frequency_ratio,
+            )
+            litenn_host_stability = assess_window_host_stability(
+                litenn_result["in_process"],  # type: ignore[index]
+                args.window_host_activity_excursion_ratio,
+                args.window_minimum_frequency_ratio,
+            )
+            pair["host_stability"] = {
+                "llama_cpp": llama_host_stability,
+                "litenn": litenn_host_stability,
+                "available": bool(llama_host_stability["available"] and litenn_host_stability["available"]),
+                "passed": bool(llama_host_stability["passed"] and litenn_host_stability["passed"]),
+            }
         pair["power_policy_stable"] = paired_power_policy_stable(  # type: ignore[index]
             llama["process"], litenn_result["process"]  # type: ignore[index]
         )
@@ -1557,6 +1803,20 @@ def main() -> int:
     window_telemetry_passed = not args.in_process_windows or all(
         bool(pair["window_telemetry"]["passed"]) for pair in pairs  # type: ignore[index]
     )
+    host_stability_passed = not args.in_process_windows or all(
+        bool(pair["host_stability"]["passed"])  # type: ignore[index]
+        and (
+            not args.require_host_stability
+            or (
+                bool(pair["host_stability"]["available"])  # type: ignore[index]
+                and all(
+                    bool(admission["enabled"] and admission["passed"])
+                    for admission in pair["host_admissions"].values()  # type: ignore[union-attr]
+                )
+            )
+        )
+        for pair in pairs
+    )
     gate = {
         "text_parity": all(bool(pair["text_match"]) for pair in pairs),  # type: ignore[index]
         "text_parity_kind": "fixed_reference_trajectory" if args.fixed_token_replay else "natural_greedy",
@@ -1574,6 +1834,7 @@ def main() -> int:
         "process_variance": process_variance_passed,
         "in_process_variance": in_process_variance_passed,
         "window_telemetry": window_telemetry_passed,
+        "host_stability": host_stability_passed,
         "variance": process_variance_passed and in_process_variance_passed,
     }
     gate["accepted"] = bool(
@@ -1581,6 +1842,7 @@ def main() -> int:
         and gate["no_fallback"]
         and gate["power_policy_stability"]
         and gate["window_telemetry"]
+        and gate["host_stability"]
         and gate["variance"]
     )
     document["summary"] = summary

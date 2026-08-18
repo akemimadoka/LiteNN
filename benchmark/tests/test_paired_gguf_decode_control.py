@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from run_paired_gguf_decode_control import (  # noqa: E402
+    assess_window_host_stability,
     build_llama_in_process_command,
     build_litenn_command,
     load_in_process_decode_report,
@@ -19,10 +21,56 @@ from run_paired_gguf_decode_control import (  # noqa: E402
     parse_forced_replay_metrics,
     process_power_policy_stable,
     token_ids_identity,
+    wait_for_host_admission,
 )
 
 
 class FixedTokenReplayTest(unittest.TestCase):
+    def test_waits_for_consecutive_quiet_host_samples(self) -> None:
+        class Monitor:
+            def __init__(self) -> None:
+                self.values = iter([100.0, 55.0, 22.0, 21.0])
+                self.closed = False
+
+            def sample(self) -> dict[str, object]:
+                return {
+                    "monotonic_ns": 1,
+                    "host_utility_percent_mean": next(self.values),
+                    "weighted_actual_mhz": 5000.0,
+                }
+
+            def close(self) -> None:
+                self.closed = True
+
+        monitor = Monitor()
+        with patch("run_paired_gguf_decode_control.create_frequency_monitor", return_value=monitor), patch(
+            "run_paired_gguf_decode_control.time.sleep"
+        ):
+            result = wait_for_host_admission(25.0, 2, 1, 1.0, 0.01)
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["accepted_streak"], 2)
+        self.assertEqual(result["sample_count"], 4)
+        self.assertTrue(monitor.closed)
+
+    def test_rejects_decode_window_host_activity_excursion(self) -> None:
+        def window(index: int, utility: float, frequency: float) -> dict[str, object]:
+            return {
+                "phase": "measured",
+                "index": index,
+                "telemetry": {
+                    "hostUtilityPercentMean": {"median": utility},
+                    "hostLoad1m": {"median": None},
+                    "weightedActualMHz": {"median": frequency},
+                },
+            }
+
+        report = {"windows": [window(0, 20.0, 5000.0), window(1, 21.0, 4980.0), window(2, 60.0, 4900.0)]}
+        stability = assess_window_host_stability(report, 2.0, 0.95)
+        self.assertTrue(stability["available"])
+        self.assertFalse(stability["activity_passed"])
+        self.assertTrue(stability["frequency_passed"])
+        self.assertFalse(stability["passed"])
+
     def test_loads_valid_tokenizer_manifest(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             path = Path(directory) / "tokens.json"
