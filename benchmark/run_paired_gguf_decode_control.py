@@ -316,6 +316,25 @@ class WindowsPDHFrequencyMonitor:
             if total_utility > 0.0
             else None
         )
+        processor_observations = []
+        for name in valid_names:
+            components = name.split(",")
+            if len(components) != 2:
+                continue
+            try:
+                group = int(components[0])
+                processor = int(components[1])
+            except ValueError:
+                continue
+            processor_observations.append(
+                {
+                    "name": name,
+                    "group": group,
+                    "processor": processor,
+                    "actual_mhz": frequencies[name],
+                    "utility_percent": max(0.0, utilities[name]),
+                }
+            )
         return {
             "source": "windows-pdh-processor-information",
             "current_mhz": current,
@@ -324,6 +343,7 @@ class WindowsPDHFrequencyMonitor:
             "host_utility_percent_mean": sum(utility) / len(utility) if utility else None,
             "active_logical_cpus": active_names,
             "weighted_actual_mhz": weighted,
+            "processor_observations": processor_observations,
             "monotonic_ns": time.monotonic_ns(),
         }
 
@@ -384,7 +404,39 @@ def frequency_sample() -> dict[str, object] | None:
     return sample
 
 
-def host_activity_percent(sample: dict[str, object], logical_cpus: int | None = None) -> tuple[str, float] | None:
+def affinity_domain_metrics(
+    sample: dict[str, object], cpu_ids: list[int] | None
+) -> tuple[float, float | None] | None:
+    if not cpu_ids or not isinstance((observations := sample.get("processor_observations")), list):
+        return None
+    selected = [
+        observation
+        for observation in observations
+        if isinstance(observation, dict)
+        and observation.get("group") == 0
+        and observation.get("processor") in cpu_ids
+        and isinstance(observation.get("utility_percent"), (int, float))
+        and isinstance(observation.get("actual_mhz"), (int, float))
+    ]
+    if len(selected) != len(set(cpu_ids)):
+        return None
+    utilities = [max(0.0, float(observation["utility_percent"])) for observation in selected]
+    utility_mean = sum(utilities) / len(utilities)
+    total_utility = sum(utilities)
+    weighted_frequency = (
+        sum(float(observation["actual_mhz"]) * utility for observation, utility in zip(selected, utilities))
+        / total_utility
+        if total_utility > 0.0
+        else statistics.mean(float(observation["actual_mhz"]) for observation in selected)
+    )
+    return utility_mean, weighted_frequency
+
+
+def host_activity_percent(
+    sample: dict[str, object], logical_cpus: int | None = None, cpu_ids: list[int] | None = None
+) -> tuple[str, float] | None:
+    if (domain := affinity_domain_metrics(sample, cpu_ids)) is not None:
+        return "affinity_domain_utility_mean", domain[0]
     utility = sample.get("host_utility_percent_mean")
     if isinstance(utility, (int, float)) and not isinstance(utility, bool) and math.isfinite(float(utility)):
         return "processor_utility_mean", float(utility)
@@ -401,6 +453,7 @@ def wait_for_host_admission(
     warmup_samples: int,
     timeout_seconds: float,
     sample_interval_seconds: float,
+    cpu_ids: list[int] | None = None,
 ) -> dict[str, object]:
     if maximum_activity_percent is None:
         return {"schema": "litenn.host_admission.v1", "enabled": False, "passed": True}
@@ -419,7 +472,7 @@ def wait_for_host_admission(
                 sample = dict(sample)
                 sample["admission_warmup"] = attempt < warmup_samples
                 samples.append(sample)
-                activity = host_activity_percent(sample)
+                activity = host_activity_percent(sample, cpu_ids=cpu_ids)
                 if attempt >= warmup_samples and activity is not None:
                     activity_source, activity_value = activity
                     accepted_streak = accepted_streak + 1 if activity_value <= maximum_activity_percent else 0
@@ -439,7 +492,7 @@ def wait_for_host_admission(
         activity[1]
         for sample in samples
         if not bool(sample.get("admission_warmup"))
-        and (activity := host_activity_percent(sample)) is not None
+        and (activity := host_activity_percent(sample, cpu_ids=cpu_ids)) is not None
     ]
     passed = accepted_streak >= consecutive_samples
     return {
@@ -750,6 +803,14 @@ def summarize_window_telemetry(
         if isinstance((value := sample.get("allowed_cpu_ids")), list)
         and all(isinstance(cpu, int) and not isinstance(cpu, bool) for cpu in value)
     ]
+    allowed_intersection = sorted(set.intersection(*allowed_sets)) if allowed_sets else []
+    domain_metrics = [
+        metrics
+        for sample in host
+        if (metrics := affinity_domain_metrics(sample, allowed_intersection)) is not None
+    ]
+    domain_utility = [metrics[0] for metrics in domain_metrics]
+    domain_frequency = [metrics[1] for metrics in domain_metrics if metrics[1] is not None]
     cpu_user = _numeric_values(process, "cpu_user_ms")
     cpu_system = _numeric_values(process, "cpu_system_ms")
     cpu_delta_ms = None
@@ -779,6 +840,16 @@ def summarize_window_telemetry(
             "median": statistics.median(host_utility) if host_utility else None,
             "maximum": max(host_utility) if host_utility else None,
         },
+        "affinityDomainUtilityPercentMean": {
+            "minimum": min(domain_utility) if domain_utility else None,
+            "median": statistics.median(domain_utility) if domain_utility else None,
+            "maximum": max(domain_utility) if domain_utility else None,
+        },
+        "affinityDomainWeightedActualMHz": {
+            "minimum": min(domain_frequency) if domain_frequency else None,
+            "median": statistics.median(domain_frequency) if domain_frequency else None,
+            "maximum": max(domain_frequency) if domain_frequency else None,
+        },
         "hostLoad1m": {
             "minimum": min(host_load) if host_load else None,
             "median": statistics.median(host_load) if host_load else None,
@@ -790,7 +861,7 @@ def summarize_window_telemetry(
         "rssBytes": range_summary("rss_bytes"),
         "privateBytes": range_summary("private_bytes"),
         "allowedCPUUnion": sorted(set().union(*allowed_sets)) if allowed_sets else [],
-        "allowedCPUIntersection": sorted(set.intersection(*allowed_sets)) if allowed_sets else [],
+        "allowedCPUIntersection": allowed_intersection,
     }
 
 
@@ -803,16 +874,23 @@ def assess_window_host_stability(
     frequency_values: list[float] = []
     for window in measured:
         telemetry = window["telemetry"]
+        domain_utility = telemetry.get("affinityDomainUtilityPercentMean", {}).get("median")
+        domain_frequency = telemetry.get("affinityDomainWeightedActualMHz", {}).get("median")
         utility = telemetry["hostUtilityPercentMean"]["median"]
         load = telemetry["hostLoad1m"]["median"]
         frequency = telemetry["weightedActualMHz"]["median"]
-        if isinstance(utility, (int, float)) and not isinstance(utility, bool):
+        if isinstance(domain_utility, (int, float)) and not isinstance(domain_utility, bool):
+            activity_metric = "affinityDomainUtilityPercentMean"
+            activity_values.append(float(domain_utility))
+        elif isinstance(utility, (int, float)) and not isinstance(utility, bool):
             activity_metric = "hostUtilityPercentMean"
             activity_values.append(float(utility))
         elif isinstance(load, (int, float)) and not isinstance(load, bool):
             activity_metric = "hostLoad1m"
             activity_values.append(float(load))
-        if isinstance(frequency, (int, float)) and not isinstance(frequency, bool):
+        if isinstance(domain_frequency, (int, float)) and not isinstance(domain_frequency, bool):
+            frequency_values.append(float(domain_frequency))
+        elif isinstance(frequency, (int, float)) and not isinstance(frequency, bool):
             frequency_values.append(float(frequency))
 
     activity_available = len(activity_values) == len(measured) and bool(activity_values)
@@ -1646,6 +1724,7 @@ def main() -> int:
                 args.host_admission_warmup_samples,
                 args.host_admission_timeout_seconds,
                 args.monitor_interval,
+                args.process_cpu_set,
             )
             pair["host_admissions"][runtime] = admission  # type: ignore[index]
             checkpoint()

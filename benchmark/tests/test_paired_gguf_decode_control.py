@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from run_paired_gguf_decode_control import (  # noqa: E402
     assess_window_host_stability,
     assess_window_process_affinity,
+    affinity_domain_metrics,
     build_llama_in_process_command,
     build_litenn_command,
     cpu_set,
@@ -75,6 +76,48 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertEqual(result["sample_count"], 4)
         self.assertTrue(monitor.closed)
 
+    def test_host_admission_uses_requested_affinity_domain(self) -> None:
+        class Monitor:
+            def __init__(self) -> None:
+                self.closed = False
+
+            def sample(self) -> dict[str, object]:
+                return {
+                    "monotonic_ns": 1,
+                    "host_utility_percent_mean": 90.0,
+                    "processor_observations": [
+                        {
+                            "group": 0,
+                            "processor": processor,
+                            "actual_mhz": 5000.0,
+                            "utility_percent": 10.0 if processor < 2 else 100.0,
+                        }
+                        for processor in range(4)
+                    ],
+                }
+
+            def close(self) -> None:
+                self.closed = True
+
+        monitor = Monitor()
+        with patch("run_paired_gguf_decode_control.create_frequency_monitor", return_value=monitor), patch(
+            "run_paired_gguf_decode_control.time.sleep"
+        ):
+            result = wait_for_host_admission(25.0, 2, 0, 1.0, 0.01, [0, 1])
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["activity_source"], "affinity_domain_utility_mean")
+
+    def test_computes_affinity_domain_metrics(self) -> None:
+        sample = {
+            "processor_observations": [
+                {"group": 0, "processor": 0, "actual_mhz": 4000.0, "utility_percent": 25.0},
+                {"group": 0, "processor": 1, "actual_mhz": 5000.0, "utility_percent": 75.0},
+                {"group": 0, "processor": 2, "actual_mhz": 3000.0, "utility_percent": 100.0},
+            ]
+        }
+        self.assertEqual(affinity_domain_metrics(sample, [0, 1]), (50.0, 4750.0))
+        self.assertIsNone(affinity_domain_metrics(sample, [0, 3]))
+
     def test_rejects_decode_window_host_activity_excursion(self) -> None:
         def window(index: int, utility: float, frequency: float) -> dict[str, object]:
             return {
@@ -93,6 +136,26 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertFalse(stability["activity_passed"])
         self.assertTrue(stability["frequency_passed"])
         self.assertFalse(stability["passed"])
+
+    def test_window_stability_prefers_affinity_domain_metrics(self) -> None:
+        def window(index: int, domain_utility: float) -> dict[str, object]:
+            return {
+                "phase": "measured",
+                "index": index,
+                "telemetry": {
+                    "affinityDomainUtilityPercentMean": {"median": domain_utility},
+                    "affinityDomainWeightedActualMHz": {"median": 5000.0},
+                    "hostUtilityPercentMean": {"median": 100.0 if index == 2 else 10.0},
+                    "hostLoad1m": {"median": None},
+                    "weightedActualMHz": {"median": 3000.0 if index == 2 else 5000.0},
+                },
+            }
+
+        stability = assess_window_host_stability(
+            {"windows": [window(0, 20.0), window(1, 21.0), window(2, 22.0)]}, 2.0, 0.95
+        )
+        self.assertEqual(stability["activity_metric"], "affinityDomainUtilityPercentMean")
+        self.assertTrue(stability["passed"])
 
     def test_loads_valid_tokenizer_manifest(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
