@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <format>
 #include <functional>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
@@ -59,6 +60,21 @@ namespace LiteNN::GGUF::Tooling
 			identity += std::format("|{}:{}:{}", tensor->byteOffset, tensor->byteSize, tensor->checksum);
 		}
 		return std::format("{:016x}", FNV1a(identity));
+	}
+
+	inline std::optional<std::filesystem::path>
+	ResolveDecodeAOTSharedWeightsRoot(const std::optional<std::filesystem::path>& artifactCacheRoot,
+	                                  const std::optional<std::filesystem::path>& configuredSharedWeightsRoot)
+	{
+		if (configuredSharedWeightsRoot && !configuredSharedWeightsRoot->empty())
+		{
+			return *configuredSharedWeightsRoot;
+		}
+		if (!artifactCacheRoot || artifactCacheRoot->empty())
+		{
+			return std::nullopt;
+		}
+		return *artifactCacheRoot / "_weights";
 	}
 
 	SharedWeightsPublishResult PublishDecodeAOTSharedWeightsAtomically(const std::filesystem::path& weightsPath,

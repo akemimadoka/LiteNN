@@ -4,10 +4,28 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from example.gguf.qwen_smoke import build_parser, run_step, write_profile_artifacts
+from example.gguf.qwen_smoke import (
+    ROOT,
+    build_parser,
+    resolve_shared_weights_cache_dir,
+    run_step,
+    write_profile_artifacts,
+)
 
 
 class QwenSmokeMemoryTest(unittest.TestCase):
+    def test_reuses_one_repository_shared_weight_store(self) -> None:
+        first = resolve_shared_weights_cache_dir(ROOT / "build" / "experiment-a" / "cache", None)
+        second = resolve_shared_weights_cache_dir(ROOT / "build" / "experiment-b" / "nested" / "cache", None)
+        self.assertEqual(first, (ROOT / "build" / ".litenn-cache" / "gguf-shared-weights").resolve())
+        self.assertEqual(second, first)
+
+    def test_explicit_shared_weight_store_overrides_default(self) -> None:
+        configured = Path("configured-shared-store")
+        self.assertEqual(
+            resolve_shared_weights_cache_dir(ROOT / "build" / "cache", configured), configured.resolve()
+        )
+
     def test_parses_selected_layer_checkpoints(self) -> None:
         args = build_parser().parse_args(
             [

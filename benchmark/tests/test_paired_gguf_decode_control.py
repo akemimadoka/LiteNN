@@ -236,6 +236,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             litenn_worker_wait="adaptive",
             litenn_max_cache_length=256,
             litenn_affinity="default",
+            shared_weights_cache_dir=Path("shared-weights"),
         )
         command = build_litenn_command(
             args,
@@ -248,6 +249,8 @@ class FixedTokenReplayTest(unittest.TestCase):
 
         index = command.index("--max-cache-length")
         self.assertEqual(command[index + 1], "256")
+        shared_index = command.index("--shared-weights-cache-dir")
+        self.assertEqual(command[shared_index + 1], "shared-weights")
 
     def test_builds_unmeasured_cache_preparation_command(self) -> None:
         args = SimpleNamespace(
@@ -259,6 +262,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             litenn_worker_wait="adaptive",
             litenn_max_cache_length=256,
             litenn_affinity="compact",
+            shared_weights_cache_dir=None,
             in_process_warmup_windows=1,
             in_process_windows=3,
         )

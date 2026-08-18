@@ -61,6 +61,21 @@ def relative_or_absolute(path: Path, base: Path) -> str:
         return str(path.resolve())
 
 
+def resolve_shared_weights_cache_dir(aot_cache_dir: Path | None, configured: Path | None) -> Path | None:
+    if configured is not None:
+        return configured.resolve()
+    if aot_cache_dir is None:
+        return None
+
+    resolved_cache = aot_cache_dir.resolve()
+    repository_build = (ROOT / "build").resolve()
+    try:
+        resolved_cache.relative_to(repository_build)
+    except ValueError:
+        return resolved_cache.parent / ".litenn-shared-weights"
+    return repository_build / ".litenn-cache" / "gguf-shared-weights"
+
+
 def parse_direct_token_output(path: Path) -> list[int]:
     lines = path.read_text(encoding="utf-8").splitlines()
     token_ids = json.loads(lines[0]) if lines else None
@@ -566,6 +581,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional LiteNN GGUF decode AOT artifact cache directory; disabled by default until large-object cache cost is reduced",
     )
     parser.add_argument(
+        "--shared-weights-cache-dir",
+        type=Path,
+        help="Shared prepared-weight store reused by independent AOT cache roots; defaults to one repository build store",
+    )
+    parser.add_argument(
         "--require-aot-cache-hit",
         action="store_true",
         help="Fail instead of compiling when the separated AOT cache is missing or invalid",
@@ -741,8 +761,11 @@ def main() -> int:
         require_ok(step, steps, workdir)
 
     litenn_decode_env = os.environ.copy()
+    shared_weights_cache_dir = resolve_shared_weights_cache_dir(args.aot_cache_dir, args.shared_weights_cache_dir)
     if args.aot_cache_dir is not None:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_DIR"] = str(args.aot_cache_dir)
+    if shared_weights_cache_dir is not None:
+        litenn_decode_env["LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR"] = str(shared_weights_cache_dir)
     if args.require_aot_cache_hit:
         litenn_decode_env["LITENN_GGUF_AOT_CACHE_REQUIRE_HIT"] = "1"
     if args.no_aot_cache_write:
@@ -1194,6 +1217,10 @@ def main() -> int:
             "compile_diagnostics": not args.no_compile_diagnostics,
             "profile_helpers": args.profile_helpers,
             "profile_nodes": args.profile_nodes,
+            "artifact_cache_dir": str(args.aot_cache_dir.resolve()) if args.aot_cache_dir is not None else None,
+            "shared_weights_cache_dir": (
+                str(shared_weights_cache_dir) if shared_weights_cache_dir is not None else None
+            ),
         },
         "prompt_mode": "token_ids" if args.llamacpp_tokenizer_tool is None else ("raw" if args.raw_prompt else "chat_template"),
         "fallback_used": False,

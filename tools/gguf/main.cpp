@@ -61,6 +61,7 @@ namespace
 	using LiteNN::GGUF::Tooling::DecodeAOTSharedWeightsIdentity;
 	using LiteNN::GGUF::Tooling::FNV1a;
 	using LiteNN::GGUF::Tooling::PublishDecodeAOTSharedWeightsAtomically;
+	using LiteNN::GGUF::Tooling::ResolveDecodeAOTSharedWeightsRoot;
 	using LiteNN::GGUF::Tooling::SharedWeightsPublishResult;
 #endif
 
@@ -1711,8 +1712,17 @@ namespace
 	std::optional<std::filesystem::path> DecodeAOTSharedWeightsPath(std::string_view modelPath,
 	                                                                const LiteNN::CompilerOptions& options)
 	{
-		const char* root = std::getenv("LITENN_GGUF_AOT_CACHE_DIR");
-		if (root == nullptr || std::string_view(root).empty())
+		const auto EnvironmentPath = [](const char* name) -> std::optional<std::filesystem::path> {
+			const char* value = std::getenv(name);
+			if (value == nullptr || std::string_view(value).empty())
+			{
+				return std::nullopt;
+			}
+			return std::filesystem::path(value);
+		};
+		const auto root = ResolveDecodeAOTSharedWeightsRoot(EnvironmentPath("LITENN_GGUF_AOT_CACHE_DIR"),
+		                                                    EnvironmentPath("LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR"));
+		if (!root)
 		{
 			return std::nullopt;
 		}
@@ -1726,7 +1736,7 @@ namespace
 		                                 options.enableCPUAOTGGMLPrepackedWeights ? 1 : 0,
 		                                 static_cast<std::uint32_t>(options.cpuAOTGGMLPrepackedWeightPolicy),
 		                                 CPUAOTGGMLPrepackedWeightLayoutName(options.cpuAOTGGMLPrepackedWeightLayout));
-		return std::filesystem::path(root) / "_weights" / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
+		return *root / std::format("{:016x}", FNV1a(keyText)) / "weights.bin";
 	}
 
 	struct DecodeAOTCacheFiles

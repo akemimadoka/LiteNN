@@ -1229,6 +1229,9 @@ def build_litenn_command(
         "--cpu-aot-ggml-prepacked-weight-layout",
         "field-interleaved-v4",
     ]
+    shared_weights_cache_dir = getattr(args, "shared_weights_cache_dir", None)
+    if shared_weights_cache_dir is not None:
+        command.extend(("--shared-weights-cache-dir", str(shared_weights_cache_dir)))
     if require_aot_cache_hit:
         command.append("--require-aot-cache-hit")
     if compile_only:
@@ -1454,6 +1457,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--llamacpp-tokenizer-tool", required=True, type=Path)
     parser.add_argument("--llama-completion", required=True, type=Path)
     parser.add_argument("--aot-cache-dir", required=True, type=Path)
+    parser.add_argument(
+        "--shared-weights-cache-dir",
+        type=Path,
+        help="Prepared-weight store shared across independent paired/scaling AOT cache roots",
+    )
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument("--prompt", default="hello")

@@ -344,6 +344,15 @@ An experimental separated-artifact cache can be enabled with
 the current 14B CPU AOT instruction object is large enough that first-run cache
 population is not yet a good default user experience.
 
+Prepared weights are shared independently from instruction/metadata caches. For
+any AOT cache below the repository `build` directory, `qwen_smoke.py` defaults to
+`build/.litenn-cache/gguf-shared-weights`, so thread, profile, and experiment
+directories reuse one model/layout payload instead of copying another multi-GB
+`weights.bin`. Use `--shared-weights-cache-dir <dir>` to select another shared
+store. The runtime-level equivalent is `LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR`;
+applications should prefer the CLI option and configure the child process rather
+than setting library behavior globally.
+
 Prepared Q4_K/Q6_K experiments can select `--cpu-aot-ggml-prepacked-weight-policy all`
 with `--cpu-aot-ggml-prepacked-weight-layout expanded-v1`, `compact-v3`, or `field-interleaved-v4`.
 The layout is part of both the decode artifact key and shared-weight key, so the

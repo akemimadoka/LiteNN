@@ -72,6 +72,16 @@ TEST(GGUFAOTCache, SharedWeightIdentityTracksExternalTensorLayoutAndContent)
 	EXPECT_NE(GGUF::Tooling::DecodeAOTSharedWeightsIdentity(97, tensors), identity);
 }
 
+TEST(GGUFAOTCache, SharedWeightRootCanBeIndependentFromArtifactCache)
+{
+	const auto artifactRoot = std::filesystem::path("artifact-cache");
+	const auto sharedRoot = std::filesystem::path("shared-weight-cache");
+	EXPECT_EQ(GGUF::Tooling::ResolveDecodeAOTSharedWeightsRoot(artifactRoot, std::nullopt), artifactRoot / "_weights");
+	EXPECT_EQ(GGUF::Tooling::ResolveDecodeAOTSharedWeightsRoot(artifactRoot, sharedRoot), sharedRoot);
+	EXPECT_EQ(GGUF::Tooling::ResolveDecodeAOTSharedWeightsRoot(std::nullopt, sharedRoot), sharedRoot);
+	EXPECT_FALSE(GGUF::Tooling::ResolveDecodeAOTSharedWeightsRoot(std::nullopt, std::nullopt));
+}
+
 TEST(GGUFAOTCache, ConcurrentSharedWeightPopulationPublishesOneCompletePayload)
 {
 	const auto root =
