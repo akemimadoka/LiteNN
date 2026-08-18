@@ -3341,12 +3341,25 @@ Priority classes:
                         - [x] Run the preliminary three-pair 63-call control. Every implemented gate passes at
                               `4.949/5.009 t/s` reference/LiteNN medians and `1.540%/1.148%` process CV, but the result is
                               not the required five-pair acceptance evidence.
-                        - [ ] Close the five-pair in-process acceptance gate. The first attempt reports
-                              `4.966/5.106 t/s` medians and a directional `+2.983%` paired median, but pair 5 is retained
-                              and rejects the run at `4.546%/13.727%` reference/LiteNN window CV. Add time-aligned
-                              per-window frequency, utility, process CPU, residency, active-CPU-set, and host-load
-                              evidence before repeating; do not relax the 3% rule. Evidence:
+                        - [x] Add time-aligned per-window frequency, utility, process CPU, residency, active-CPU-set,
+                              host-load, coverage, and temporal-drift evidence with strict native timestamp validation.
+                        - [x] Repair generated CPU AOT allocation ownership for repeated mapped entry calls. Outstanding
+                              generated result allocations are reclaimed after outputs/state aliases are copied; the
+                              real 14B measured windows now remain at `8.585-8.586 GiB` RSS and `0.559 GiB` private
+                              instead of retaining about `1.7 GiB` per window.
+                        - [ ] Close the five-pair in-process acceptance gate. The post-fix rerun reports
+                              `4.651/4.998 t/s` reference/LiteNN medians and a directional `+9.350%` paired median, but
+                              is retained as rejected: reference process CV is `3.723%`, and a host-utility excursion
+                              raises one LiteNN process to `6.729%` window CV. Do not relax the 3% rule. Evidence:
                               `docs/QwenInProcessDecodeControl_2026-08-18.md`.
+                              - [ ] Add rolling host-state admission before each process/window. Reject and retain
+                                    externally disturbed windows instead of silently retrying them.
+                              - [ ] Add a configurable, reported cooldown between runtimes and outer pairs; require two
+                                    accepted five-pair batches under one stable power policy.
+                              - [ ] Run adjacent T1/T2/T4/T8 controls for both runtimes on the same affinity domain and
+                                    report process CPU ms/token, speedup, parallel efficiency, and throughput per
+                                    CPU-second. Current T8 LiteNN consumes `3.603x` the CPU time of the T2 reference,
+                                    so a wall-throughput comparison does not establish CPU-efficiency parity.
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.

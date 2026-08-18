@@ -35,6 +35,7 @@ removes repeated tokenizer model mappings from the alternating loop without plac
 | Short-window control | 3 | 15 | 4.956 t/s / 0.628% | 5.220 t/s / 0.802% | +5.476% | 2.814% / 4.533% | REJECT |
 | 63-call preliminary | 3 | 63 | 4.949 t/s / 1.540% | 5.009 t/s / 1.148% | +1.626% | 1.265% / 1.750% | PASS, insufficient pair count |
 | 63-call acceptance attempt | 5 | 63 | 4.966 t/s / 2.601% | 5.106 t/s / 0.745% | +2.983% | 4.546% / 13.727% | REJECT |
+| 63-call allocation/telemetry rerun | 5 | 63 | 4.651 t/s / 3.723% | 4.998 t/s / 2.316% | +9.350% | 1.663% / 6.729% | REJECT |
 
 The short-window control proves that 15 decode calls are too sensitive to one slow window for the 3% rule. The
 three-pair 63-call campaign passes every implemented gate and places the two runtimes near parity, but it is only a
@@ -70,26 +71,103 @@ SHA-256 digests are retained for local evidence verification:
 - three-pair 63-call control: `6b7e0c7f0031327e37d28d63fcb17771bf6f690670ae7cfc9064dc8d47338c98`;
 - five-pair 63-call attempt: `b8476b79959e7158d761396d00d8b341e58e58992ed871f41b2e64f3df4312ea`.
 
+## Allocation Lifecycle Finding
+
+The first timestamp-instrumented LiteNN smoke exposed a separate correctness-of-ownership problem before another
+acceptance run was meaningful. Generated CPU AOT entries allocate result memrefs through the JIT-registered `malloc`.
+The uniform wrapper copies those results into caller-owned output and state-alias buffers, but allocations left live by
+the generated entry were not reclaimed when the wrapper returned. Replaying windows in one mapped process therefore
+retained approximately `1.7 GiB` per window. A short pre-fix run grew to about `16.03 GiB` RSS and `7.43 GiB` private
+bytes, and the earlier five-pair attempt's final process exceeded `25 GiB` during repeated windows.
+
+Commit `86f02ab` scopes generated allocations to one CPU entry invocation. Generated `free` calls still release their
+own allocations immediately; scope exit releases only outstanding allocations created through that invocation, and
+never borrowed inputs, external weights, caller-owned outputs, or state aliases. Focused compiled-module/stateful/GGUF
+tests, a full parallel build, and all `636` CTest cases pass after the change.
+
+The post-fix smoke remains within about `9.12-9.22 GiB` RSS and `0.50-0.60 GiB` private bytes. In the formal rerun, all
+15 LiteNN measured windows report `8.585-8.586 GiB` RSS and `0.559 GiB` private bytes. There is no per-window residency
+growth, so retained generated return allocations are closed as the owner of the former memory and late-window drift.
+
+## Timestamp-Aligned Rerun
+
+The rerun uses the same fixed 63-call trajectory, one warmup plus three measured windows, five alternating process
+pairs, Balanced power policy, exact trajectory, no fallback, and the unchanged 3% gate. It additionally joins every
+native decode interval to raw host-frequency and process-resource samples. `host utility` below is the mean of the
+Windows PDH per-logical-processor utility counters; it is useful for relative interference detection and may exceed
+100 under boost, so it is not a conventional whole-machine utilization percentage.
+
+| Pair | Order | Reference median | LiteNN median | Paired delta | Within-process CV (reference / LiteNN) |
+| ---: | --- | ---: | ---: | ---: | ---: |
+| 1 | Reference -> LiteNN | 4.933 t/s | 4.877 t/s | -1.135% | 1.075% / 6.729% |
+| 2 | LiteNN -> Reference | 4.696 t/s | 4.809 t/s | +2.410% | 1.470% / 1.315% |
+| 3 | Reference -> LiteNN | 4.651 t/s | 5.086 t/s | +9.350% | 0.423% / 1.275% |
+| 4 | LiteNN -> Reference | 4.470 t/s | 5.037 t/s | +12.676% | 1.663% / 0.924% |
+| 5 | Reference -> LiteNN | 4.567 t/s | 4.998 t/s | +9.423% | 1.451% / 0.519% |
+
+Every correctness, trajectory, fallback, power-policy, and telemetry-coverage gate passes. The run is rejected by two
+variance owners: reference process medians have `3.723%` CV, and pair 1 LiteNN windows have `6.729%` CV. LiteNN process
+medians have `2.316%` CV; the other four LiteNN processes have at most `1.315%` within-process CV.
+
+Pair 1 localizes its LiteNN failure to the third measured window:
+
+| Window | Throughput | Weighted frequency | Host utility | LiteNN process CPU | RSS / private |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 4.905 t/s | 5179 MHz | 38.6 | 662.4% | 8.59 / 0.56 GiB |
+| 2 | 4.877 t/s | 5172 MHz | 38.9 | 674.8% | 8.59 / 0.56 GiB |
+| 3 | 4.343 t/s | 5040 MHz | 116.6 | 654.2% | 8.59 / 0.56 GiB |
+
+The `-11.46%` first-to-last throughput movement accompanies only a `-2.55%` frequency movement, stable LiteNN CPU
+consumption, stable residency, and a threefold host-utility excursion. This is direct evidence of a host interference
+interval; it is not evidence of an accumulating LiteNN allocation or progressively idle worker pool. The other four
+LiteNN processes show first-to-last movement between `-2.48%` and `+2.14%`.
+
+### Throughput Versus CPU Work
+
+The two runtimes intentionally use their previously selected local throughput configurations: LiteNN T8 and the
+reference T2. The wall-time result must therefore be separated from CPU-efficiency claims:
+
+| Measured-window median | Reference T2 | LiteNN T8 | LiteNN / reference |
+| --- | ---: | ---: | ---: |
+| Wall time | 216.291 ms/token | 200.197 ms/token | 0.926x |
+| Process CPU time | 353.919 ms/token | 1275.298 ms/token | 3.603x |
+| Process CPU utilization | 168.7% | 646.5% | 3.832x |
+| Weighted actual frequency | 4979 MHz | 5102 MHz | 1.025x |
+| Measured-window RSS | 14.031 GiB | 8.586 GiB | 0.612x |
+| Measured-window private bytes | 6.339 GiB | 0.559 GiB | 0.088x |
+
+The directional wall-throughput lead is purchased with roughly four times the configured worker budget and `3.60x`
+the measured process CPU time. This campaign therefore supports neither an accepted LiteNN throughput lead nor CPU
+efficiency parity. It does show that the mapped LiteNN artifact has lower measured residency on this Windows control
+and that allocation growth no longer contaminates the timing series.
+
+The post-fix raw report SHA-256 is
+`e15c3d46f75dee76437a05959d75210a6a30b5cc223348daf4cabdf6bd64cc57`. The report remains in ignored local build
+artifacts; no machine-specific model or executable path is retained here.
+
 ## Conclusions
 
 1. The earlier `-9.10%` to `-11.64%` fresh-process direction is not representative of mapped steady-state decode.
    Reusing one mapped runtime removes that deficit in every campaign median.
-2. The accepted three-pair control supports CPU decode parity under this configuration, not a stable LiteNN lead. Its
-   paired range crosses zero (`-2.507%` to `+2.197%`).
-3. The five-pair median favors LiteNN by `2.983%`, but the result is rejected. It must not be used as an accepted point
-   estimate because pair 5 violates both in-process variance gates.
-4. Correctness, cache identity, fallback, and power-policy gates are closed for this experiment. The remaining owner is
-   temporal host/runtime drift inside a mapped process, now localized to individual windows.
-5. The next kernel must be selected from matched stage evidence after the window-level stability gate passes. The
-   projection-heavy LiteNN budget remains a profiling priority, not proof of a cross-runtime deficit.
+2. Generated CPU AOT return allocations were a real process-lifetime defect. The scoped-allocation repair removes the
+   repeated-window memory growth and the prior residency-driven late-window degradation.
+3. The post-fix five-pair median direction favors LiteNN by `9.350%`, but the result remains rejected. Reference
+   process CV is `3.723%`, and one externally disturbed LiteNN window raises its process CV to `6.729%`.
+4. Correctness, cache identity, fallback, power policy, and telemetry coverage are closed. The immediate measurement
+   owner is host-state admission and isolation, not another speculative kernel rewrite.
+5. T8 LiteNN consumes `3.60x` the process CPU time of the T2 reference. CPU efficiency and scaling are the largest
+   unclosed performance questions even if a later wall-throughput campaign passes.
+6. Existing matched-stage evidence does not currently select a projection rewrite. New implementation work must be
+   chosen from accepted same-budget scaling data or a fresh matched-stage deficit.
 
 ## Next Gate
 
-1. Timestamp each decode window and join it to per-window CPU frequency, utility, process CPU time, working/private
-   bytes, active CPU set, and system-load samples. Preserve raw samples, not only process-wide aggregates.
-2. Add a temporal drift report for monotonic window trends and reject a pair when host load or runtime telemetry cannot
-   account for a threshold breach. Keep the existing 3% CV rule unchanged.
-3. Repeat at least five alternating 63-call pairs under the same fixed trajectory and stable power policy. Acceptance
-   requires every in-process CV and both process-level CVs to pass.
-4. After acceptance, capture matched QKV, attention-output, Gate/Up, Down, and logits stages in the same window design
-   and optimize the largest measured cross-runtime deficit.
+1. Add an explicit pre-process and pre-window host-state admission gate. Require a quiet rolling utility baseline,
+   bounded frequency drift, and no external-load excursion; retain rejected windows without silently retrying them.
+2. Add a fixed configurable cooldown between runtimes and pairs, report admission wait/cooldown time, and repeat the
+   five-pair campaign without changing the 3% variance threshold.
+3. Run adjacent T1/T2/T4/T8 sweeps for both runtimes with the same affinity domain. Report wall time, process CPU
+   ms/token, speedup, parallel efficiency, and throughput per CPU-second; choose production defaults from that curve.
+4. Require two accepted five-pair batches before claiming wall-throughput parity or a lead.
+5. Only then capture matched QKV, attention-output, Gate/Up, Down, logits, dispatch, and residual stages at the selected
+   equal-budget point and optimize the largest accepted cross-runtime deficit.

@@ -111,10 +111,24 @@ P0 implementation order:
         validate runtime summaries, and freeze chat-template token ids outside the alternating loop.
       - [x] Run a preliminary three-pair 63-call control. All gates pass at `4.949/5.009 t/s` reference/LiteNN medians,
         but three pairs do not satisfy the formal acceptance count.
-      - [ ] Close the five-pair in-process acceptance gate. The first attempt's `4.966/5.106 t/s` medians and
-        directional `+2.983%` paired median are rejected because pair 5 reaches `4.546%/13.727%` window CV. Add
-        timestamp-aligned frequency, utility, process CPU, residency, active-CPU-set, and host-load samples, then rerun
-        without relaxing 3%. Evidence: `docs/QwenInProcessDecodeControl_2026-08-18.md`.
+      - [x] Add timestamp-aligned frequency, utility, process CPU, residency, active-CPU-set, and host-load samples to
+        every native decode window. Raw samples, coverage, temporal drift, and strict timestamp validation are retained.
+      - [x] Fix generated CPU AOT allocation ownership across repeated entry calls. Outstanding generated result
+        allocations are reclaimed after the uniform wrapper copies into caller-owned outputs/state aliases; the real
+        14B measured windows are stable at `8.585-8.586 GiB` RSS and `0.559 GiB` private instead of growing by about
+        `1.7 GiB` per window.
+      - [ ] Close the five-pair in-process acceptance gate. The post-fix rerun measures `4.651/4.998 t/s`
+        reference/LiteNN medians and a directional `+9.350%` paired median, but remains rejected: reference process CV
+        is `3.723%`, and one LiteNN process reaches `6.729%` window CV during a host-utility excursion. Keep the 3%
+        threshold and every outlier. Evidence: `docs/QwenInProcessDecodeControl_2026-08-18.md`.
+        - [ ] P0: add pre-process and pre-window host-state admission from rolling utility/frequency samples. Reject and
+          retain externally disturbed windows; do not silently retry until a pass appears.
+        - [ ] P0: add a configurable, reported cooldown between runtimes and outer pairs, then obtain two accepted
+          five-pair batches under one stable power policy.
+        - [ ] P0: run adjacent T1/T2/T4/T8 controls for both runtimes on the same affinity domain. Report wall time,
+          process CPU ms/token, speedup, parallel efficiency, and throughput per CPU-second. Current T8 LiteNN uses
+          `1275.298 ms` process CPU/token versus `353.919 ms` for the T2 reference (`3.603x`), so wall-throughput parity
+          is not CPU-efficiency parity.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
