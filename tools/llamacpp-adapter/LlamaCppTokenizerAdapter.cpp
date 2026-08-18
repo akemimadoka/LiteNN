@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
@@ -17,6 +18,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -950,6 +952,162 @@ namespace LiteNN::LlamaCppAdapter
 					                         std::to_string(decisionStep));
 				}
 			}
+		}
+	}
+
+	void Model::BenchmarkFixedDecode(std::span<const std::int32_t> promptTokenIds,
+	                                 std::span<const std::int32_t> generatedTokenIds, std::size_t warmupWindowCount,
+	                                 std::size_t measuredWindowCount, std::size_t contextLength,
+	                                 std::size_t threadCount, const std::filesystem::path& reportPath) const
+	{
+		if (promptTokenIds.empty() || generatedTokenIds.size() < 2 || measuredWindowCount == 0)
+		{
+			throw std::runtime_error("benchmark-fixed-decode requires a non-empty prompt, at least two generated "
+			                         "tokens, and measured windows");
+		}
+		if (contextLength < promptTokenIds.size() + generatedTokenIds.size())
+		{
+			throw std::runtime_error("benchmark-fixed-decode context is shorter than prompt plus generated tokens");
+		}
+		if (contextLength > std::numeric_limits<std::uint32_t>::max() ||
+		    threadCount > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max()))
+		{
+			throw std::runtime_error("benchmark-fixed-decode context or thread count exceeds llama.cpp limits");
+		}
+
+		auto contextParams = llama_context_default_params();
+		contextParams.n_ctx = static_cast<std::uint32_t>(contextLength);
+		contextParams.n_batch = 2048;
+		contextParams.n_ubatch = 512;
+		contextParams.n_threads = static_cast<std::int32_t>(threadCount);
+		contextParams.n_threads_batch = static_cast<std::int32_t>(threadCount);
+		contextParams.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+		contextParams.no_perf = true;
+		auto* rawContext = llama_init_from_model(impl_->model, contextParams);
+		if (rawContext == nullptr)
+		{
+			throw std::runtime_error("failed to create llama.cpp fixed-decode benchmark context");
+		}
+		const std::unique_ptr<llama_context, decltype(&llama_free)> context(rawContext, llama_free);
+		auto prompt = ToLlamaTokens(promptTokenIds);
+		const auto generated = ToLlamaTokens(generatedTokenIds);
+
+		struct Window
+		{
+			bool warmup{};
+			std::size_t index{};
+			double stateResetMs{};
+			double prefillMs{};
+			double decodeWallMs{};
+			std::size_t decodeTokens{};
+		};
+		std::vector<Window> windows;
+		windows.reserve(warmupWindowCount + measuredWindowCount);
+		for (std::size_t windowIndex = 0; windowIndex < warmupWindowCount + measuredWindowCount; ++windowIndex)
+		{
+			const auto resetStart = std::chrono::steady_clock::now();
+			llama_memory_clear(llama_get_memory(context.get()), false);
+			const auto resetEnd = std::chrono::steady_clock::now();
+
+			const auto prefillStart = std::chrono::steady_clock::now();
+			if (llama_decode(context.get(),
+			                 llama_batch_get_one(prompt.data(), static_cast<std::int32_t>(prompt.size()))) != 0)
+			{
+				throw std::runtime_error("llama.cpp fixed-decode benchmark prompt decode failed");
+			}
+			const auto prefillEnd = std::chrono::steady_clock::now();
+
+			const auto decodeStart = std::chrono::steady_clock::now();
+			for (std::size_t tokenIndex = 0; tokenIndex + 1 < generated.size(); ++tokenIndex)
+			{
+				auto token = generated[tokenIndex];
+				if (llama_decode(context.get(), llama_batch_get_one(&token, 1)) != 0)
+				{
+					throw std::runtime_error("llama.cpp fixed-decode benchmark failed at token " +
+					                         std::to_string(tokenIndex));
+				}
+			}
+			const auto decodeEnd = std::chrono::steady_clock::now();
+			windows.push_back(
+			    { .warmup = windowIndex < warmupWindowCount,
+			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
+			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
+			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
+			      .decodeTokens = generated.size() - 1 });
+		}
+
+		std::vector<double> measuredThroughputs;
+		std::vector<double> measuredLatencies;
+		for (const auto& window : windows)
+		{
+			if (!window.warmup)
+			{
+				measuredLatencies.push_back(window.decodeWallMs / static_cast<double>(window.decodeTokens));
+				measuredThroughputs.push_back(static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs);
+			}
+		}
+		const auto median = [](std::vector<double> values) {
+			std::ranges::sort(values);
+			const auto middle = values.size() / 2;
+			return values.size() % 2 == 0 ? (values[middle - 1] + values[middle]) / 2.0 : values[middle];
+		};
+		const auto meanThroughput = std::reduce(measuredThroughputs.begin(), measuredThroughputs.end()) /
+		                            static_cast<double>(measuredThroughputs.size());
+		double throughputSquaredDeviation = 0.0;
+		for (const auto throughput : measuredThroughputs)
+		{
+			throughputSquaredDeviation += (throughput - meanThroughput) * (throughput - meanThroughput);
+		}
+		const auto throughputStandardDeviation =
+		    measuredThroughputs.size() < 2
+		        ? 0.0
+		        : std::sqrt(throughputSquaredDeviation / static_cast<double>(measuredThroughputs.size() - 1));
+
+		if (!reportPath.parent_path().empty())
+		{
+			std::filesystem::create_directories(reportPath.parent_path());
+		}
+		std::ofstream output(reportPath, std::ios::binary | std::ios::trunc);
+		if (!output)
+		{
+			throw std::runtime_error("failed to open llama.cpp fixed-decode benchmark report: " + reportPath.string());
+		}
+		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v1\",\n"
+		       << "  \"producer\": \"llama.cpp\",\n  \"runtime\": \"cpu\",\n"
+		       << "  \"stateReset\": \"llama_memory_clear_metadata\",\n"
+		       << "  \"modelMappedOnce\": true,\n  \"contextCreatedOnce\": true,\n"
+		       << "  \"warmupWindows\": " << warmupWindowCount << ",\n  \"measuredWindows\": " << measuredWindowCount
+		       << ",\n  \"promptTokens\": " << promptTokenIds.size()
+		       << ",\n  \"decodeTokensPerWindow\": " << generatedTokenIds.size() - 1
+		       << ",\n  \"threadCount\": " << threadCount << ",\n  \"requestedContextLength\": " << contextLength
+		       << ",\n  \"contextLength\": " << llama_n_ctx(context.get()) << ",\n  \"windows\": [\n";
+		for (std::size_t index = 0; index < windows.size(); ++index)
+		{
+			const auto& window = windows[index];
+			const auto millisecondsPerToken = window.decodeWallMs / static_cast<double>(window.decodeTokens);
+			const auto tokensPerSecond = static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs;
+			output << "    {\"phase\": \"" << (window.warmup ? "warmup" : "measured")
+			       << "\", \"index\": " << window.index << ", \"stateResetMs\": " << window.stateResetMs
+			       << ", \"prefillMs\": " << window.prefillMs << ", \"decodeWallMs\": " << window.decodeWallMs
+			       << ", \"moduleRunMs\": " << window.decodeWallMs << ", \"decodeTokens\": " << window.decodeTokens
+			       << ", \"msPerToken\": " << millisecondsPerToken << ", \"tokensPerSecond\": " << tokensPerSecond
+			       << '}';
+			if (index + 1 != windows.size())
+			{
+				output << ',';
+			}
+			output << '\n';
+		}
+		output << "  ],\n  \"summary\": {\"tokensPerSecondMean\": " << meanThroughput
+		       << ", \"tokensPerSecondMedian\": " << median(measuredThroughputs)
+		       << ", \"tokensPerSecondStandardDeviation\": " << throughputStandardDeviation
+		       << ", \"tokensPerSecondCVPercent\": "
+		       << (meanThroughput == 0.0 ? 0.0 : throughputStandardDeviation * 100.0 / meanThroughput)
+		       << ", \"msPerTokenMedian\": " << median(measuredLatencies) << "}\n}\n";
+		if (!output)
+		{
+			throw std::runtime_error("failed to write llama.cpp fixed-decode benchmark report: " + reportPath.string());
 		}
 	}
 

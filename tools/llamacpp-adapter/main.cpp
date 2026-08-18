@@ -22,6 +22,17 @@ namespace
 		return value;
 	}
 
+	std::size_t ParseNonNegativeSize(std::string_view text, std::string_view label)
+	{
+		std::size_t value{};
+		const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+		if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+		{
+			throw std::runtime_error(std::string(label) + " must be a non-negative integer");
+		}
+		return value;
+	}
+
 	std::vector<std::int32_t> ParseGeneratedPrefix(std::string_view text)
 	{
 		if (text == "-")
@@ -44,6 +55,9 @@ namespace
 		    << " decode-logits <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> <output-dir>\n"
 		    << "  " << executable
 		    << " teacher-forced-logits <model.gguf> <comma-prompt-token-ids> <comma-target-token-ids> <output-dir>\n"
+		    << "  " << executable
+		    << " benchmark-fixed-decode <model.gguf> <comma-prompt-token-ids> <comma-generated-token-ids> "
+		       "<warmup-windows> <measured-windows> <context-size> <threads> <output.json>\n"
 		    << "  " << executable
 		    << " generate-greedy-logits <model.gguf> <comma-prompt-token-ids> <max-generated-tokens> <output-dir>\n"
 		    << "  " << executable
@@ -135,6 +149,20 @@ try
 		LiteNN::LlamaCppAdapter::WriteTeacherForcedManifest(promptTokens, targetTokens, outputDirectory);
 		std::cout << "Captured " << targetTokens.size() << " llama.cpp teacher-forced pre-target steps in "
 		          << outputDirectory << '\n';
+		return 0;
+	}
+	if (command == "benchmark-fixed-decode" && argc == 10)
+	{
+		const LiteNN::LlamaCppAdapter::Model model(argv[2]);
+		const auto promptTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[3], "prompt token ids");
+		const auto generatedTokens = LiteNN::LlamaCppAdapter::ParseCommaTokenIds(argv[4], "generated token ids");
+		const auto warmupWindows = ParseNonNegativeSize(argv[5], "warmup-windows");
+		const auto measuredWindows = ParsePositiveSize(argv[6], "measured-windows");
+		const auto contextSize = ParsePositiveSize(argv[7], "context-size");
+		const auto threads = ParsePositiveSize(argv[8], "threads");
+		model.BenchmarkFixedDecode(promptTokens, generatedTokens, warmupWindows, measuredWindows, contextSize, threads,
+		                           argv[9]);
+		std::cout << "Benchmarked " << measuredWindows << " llama.cpp fixed-decode windows in " << argv[9] << '\n';
 		return 0;
 	}
 	if (command == "generate-greedy-logits" && argc == 6)

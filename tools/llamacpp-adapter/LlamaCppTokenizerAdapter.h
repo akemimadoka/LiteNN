@@ -46,6 +46,10 @@ namespace LiteNN::LlamaCppAdapter
 		void CaptureTeacherForcedLogits(std::span<const std::int32_t> promptTokenIds,
 		                                std::span<const std::int32_t> targetTokenIds,
 		                                const std::filesystem::path& logitsOutputDirectory) const;
+		void BenchmarkFixedDecode(std::span<const std::int32_t> promptTokenIds,
+		                          std::span<const std::int32_t> generatedTokenIds, std::size_t warmupWindowCount,
+		                          std::size_t measuredWindowCount, std::size_t contextLength, std::size_t threadCount,
+		                          const std::filesystem::path& reportPath) const;
 		void CaptureDecodeLogits(std::span<const std::int32_t> promptTokenIds,
 		                         std::span<const std::int32_t> generatedTokenIds,
 		                         const std::filesystem::path& outputDirectory) const;
