@@ -107,6 +107,7 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--benchmark-warmup-windows N] [--benchmark-windows N] [--benchmark-window-report path] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-activation-math strict|bounded] "
@@ -123,6 +124,7 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--benchmark-warmup-windows N] [--benchmark-windows N] [--benchmark-window-report path] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-activation-math strict|bounded] "
@@ -139,6 +141,7 @@ namespace
 		       "[--stateful|--functional] [--stream-tokens] [--stream-stats] [--profile-helpers] [--profile-nodes] "
 		       "[--compile-only] "
 		       "[--max-cache-length N] [--paged-reference-decode] [--paged-resident-pages N] "
+		       "[--benchmark-warmup-windows N] [--benchmark-windows N] [--benchmark-window-report path] "
 		       "[--cpu-aot-threads N] [--cpu-aot-affinity none|compact|spread] "
 		       "[--cpu-aot-worker-wait adaptive|low-power|latency] [--cpu-aot-llvm-opt-level 0|1|2|3] "
 		       "[--cpu-aot-activation-math strict|bounded] "
@@ -389,6 +392,9 @@ namespace
 		std::optional<std::string> cpuAOTWorkerWaitPolicy;
 		std::optional<bool> enableCompileDiagnostics;
 		std::optional<std::size_t> maxCacheLength;
+		std::size_t benchmarkWarmupWindows{};
+		std::size_t benchmarkWindows{};
+		std::optional<std::string> benchmarkWindowReportPath;
 	};
 
 	void ParseDecodeLoopTrailingOptions(int argc, char** argv, int firstOptionIndex, DecodeLoopCommandOptions& options)
@@ -576,6 +582,18 @@ namespace
 			else if (arg == "--max-cache-length")
 			{
 				options.maxCacheLength = ParseSize(requireValue(arg), "max-cache-length");
+			}
+			else if (arg == "--benchmark-warmup-windows")
+			{
+				options.benchmarkWarmupWindows = ParseSize(requireValue(arg), "benchmark-warmup-windows", true);
+			}
+			else if (arg == "--benchmark-windows")
+			{
+				options.benchmarkWindows = ParseSize(requireValue(arg), "benchmark-windows");
+			}
+			else if (arg == "--benchmark-window-report")
+			{
+				options.benchmarkWindowReportPath = std::string(requireValue(arg));
 			}
 			else if (arg == "--chat-template")
 			{
@@ -2205,6 +2223,152 @@ namespace
 
 		std::vector<CheckpointGroup> groups_;
 	};
+
+	struct DecodeBenchmarkWindow
+	{
+		bool warmup{};
+		std::size_t index{};
+		double stateResetMs{};
+		double prefillMs{};
+		double decodeWallMs{};
+		double moduleRunMs{};
+		std::size_t decodeTokens{};
+	};
+
+	double Median(std::vector<double> values)
+	{
+		std::ranges::sort(values);
+		const auto middle = values.size() / 2;
+		return values.size() % 2 == 0 ? (values[middle - 1] + values[middle]) / 2.0 : values[middle];
+	}
+
+	void WriteDecodeBenchmarkWindows(const std::filesystem::path& path,
+	                                 const LiteNN::CompiledModule<LiteNN::CPU>& module,
+	                                 std::span<const std::int32_t> promptTokenIds,
+	                                 std::span<const std::int32_t> forcedGeneratedTokenIds,
+	                                 std::size_t emitLogitsInputIndex, std::size_t warmupWindowCount,
+	                                 std::size_t measuredWindowCount)
+	{
+		if (forcedGeneratedTokenIds.size() < 2)
+		{
+			throw std::runtime_error("in-process decode benchmark requires at least two forced generated tokens");
+		}
+
+		std::vector<LiteNN::Tensor<LiteNN::CPU>> outputs;
+		outputs.reserve(module.OutputSpecs().size());
+		for (const auto& spec : module.OutputSpecs())
+		{
+			if (!spec.type.IsFullyStatic())
+			{
+				throw std::runtime_error("in-process decode benchmark output must have a static shape");
+			}
+			outputs.emplace_back(LiteNN::Uninitialized, LiteNN::ShapeView{ spec.type.StaticShape() }, spec.type.dtype,
+			                     LiteNN::CPU{});
+		}
+
+		std::vector<DecodeBenchmarkWindow> windows;
+		windows.reserve(warmupWindowCount + measuredWindowCount);
+		const auto totalWindowCount = warmupWindowCount + measuredWindowCount;
+		for (std::size_t windowIndex = 0; windowIndex < totalWindowCount; ++windowIndex)
+		{
+			const auto resetStart = std::chrono::steady_clock::now();
+			auto inputs = MakeZeroStateInputs(module.InputSpecs(),
+			                                  MakeTokenIdTensorForModule(promptTokenIds.front(), module.InputSpecs()));
+			const auto resetEnd = std::chrono::steady_clock::now();
+
+			const auto prefillStart = std::chrono::steady_clock::now();
+			for (std::size_t promptIndex = 0; promptIndex < promptTokenIds.size(); ++promptIndex)
+			{
+				StoreScalarTokenId(inputs.front(), promptTokenIds[promptIndex]);
+				StoreScalarBool(inputs[emitLogitsInputIndex], promptIndex + 1 == promptTokenIds.size());
+				module.RunTensorsInto(inputs, outputs);
+			}
+			const auto prefillEnd = std::chrono::steady_clock::now();
+
+			double moduleRunMs = 0.0;
+			const auto decodeStart = std::chrono::steady_clock::now();
+			for (std::size_t tokenIndex = 0; tokenIndex + 1 < forcedGeneratedTokenIds.size(); ++tokenIndex)
+			{
+				StoreScalarTokenId(inputs.front(), forcedGeneratedTokenIds[tokenIndex]);
+				StoreScalarBool(inputs[emitLogitsInputIndex], true);
+				const auto moduleStart = std::chrono::steady_clock::now();
+				module.RunTensorsInto(inputs, outputs);
+				const auto moduleEnd = std::chrono::steady_clock::now();
+				moduleRunMs += std::chrono::duration<double, std::milli>(moduleEnd - moduleStart).count();
+			}
+			const auto decodeEnd = std::chrono::steady_clock::now();
+			windows.push_back(
+			    { .warmup = windowIndex < warmupWindowCount,
+			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
+			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
+			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
+			      .moduleRunMs = moduleRunMs,
+			      .decodeTokens = forcedGeneratedTokenIds.size() - 1 });
+		}
+
+		std::vector<double> measuredThroughputs;
+		std::vector<double> measuredLatencies;
+		for (const auto& window : windows)
+		{
+			if (!window.warmup)
+			{
+				measuredLatencies.push_back(window.decodeWallMs / static_cast<double>(window.decodeTokens));
+				measuredThroughputs.push_back(static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs);
+			}
+		}
+		const auto meanThroughput = std::reduce(measuredThroughputs.begin(), measuredThroughputs.end()) /
+		                            static_cast<double>(measuredThroughputs.size());
+		double throughputSquaredDeviation = 0.0;
+		for (const auto throughput : measuredThroughputs)
+		{
+			throughputSquaredDeviation += (throughput - meanThroughput) * (throughput - meanThroughput);
+		}
+		const auto throughputStandardDeviation =
+		    measuredThroughputs.size() < 2
+		        ? 0.0
+		        : std::sqrt(throughputSquaredDeviation / static_cast<double>(measuredThroughputs.size() - 1));
+
+		EnsureParentDirectory(path);
+		std::ofstream output(path, std::ios::binary | std::ios::trunc);
+		if (!output)
+		{
+			throw std::runtime_error("failed to open in-process decode benchmark report: " + path.string());
+		}
+		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v1\",\n"
+		       << "  \"producer\": \"LiteNN\",\n  \"runtime\": \"cpu_aot\",\n"
+		       << "  \"stateReset\": \"fresh_zero_inputs\",\n  \"moduleMappedOnce\": true,\n"
+		       << "  \"warmupWindows\": " << warmupWindowCount << ",\n  \"measuredWindows\": " << measuredWindowCount
+		       << ",\n  \"promptTokens\": " << promptTokenIds.size()
+		       << ",\n  \"decodeTokensPerWindow\": " << forcedGeneratedTokenIds.size() - 1 << ",\n  \"windows\": [\n";
+		for (std::size_t index = 0; index < windows.size(); ++index)
+		{
+			const auto& window = windows[index];
+			const auto millisecondsPerToken = window.decodeWallMs / static_cast<double>(window.decodeTokens);
+			const auto tokensPerSecond = static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs;
+			output << "    {\"phase\": \"" << (window.warmup ? "warmup" : "measured")
+			       << "\", \"index\": " << window.index << ", \"stateResetMs\": " << window.stateResetMs
+			       << ", \"prefillMs\": " << window.prefillMs << ", \"decodeWallMs\": " << window.decodeWallMs
+			       << ", \"moduleRunMs\": " << window.moduleRunMs << ", \"decodeTokens\": " << window.decodeTokens
+			       << ", \"msPerToken\": " << millisecondsPerToken << ", \"tokensPerSecond\": " << tokensPerSecond
+			       << '}';
+			if (index + 1 != windows.size())
+			{
+				output << ',';
+			}
+			output << '\n';
+		}
+		output << "  ],\n  \"summary\": {\"tokensPerSecondMean\": " << meanThroughput
+		       << ", \"tokensPerSecondMedian\": " << Median(measuredThroughputs)
+		       << ", \"tokensPerSecondStandardDeviation\": " << throughputStandardDeviation
+		       << ", \"tokensPerSecondCVPercent\": "
+		       << (meanThroughput == 0.0 ? 0.0 : throughputStandardDeviation * 100.0 / meanThroughput)
+		       << ", \"msPerTokenMedian\": " << Median(measuredLatencies) << "}\n}\n";
+		if (!output)
+		{
+			throw std::runtime_error("failed to write in-process decode benchmark report: " + path.string());
+		}
+	}
 #endif
 
 	void RunDecodeLoopFromGGUF(const DecodeLoopCommandOptions& options)
@@ -2217,6 +2381,23 @@ namespace
 		if (options.steps == 0)
 		{
 			throw std::runtime_error("decode-loop steps must be positive");
+		}
+		const bool benchmarkWindowsRequested = options.benchmarkWindows != 0 || options.benchmarkWarmupWindows != 0 ||
+		                                       options.benchmarkWindowReportPath.has_value();
+		if (benchmarkWindowsRequested && options.benchmarkWindows == 0)
+		{
+			throw std::runtime_error("in-process decode benchmark requires --benchmark-windows");
+		}
+		if (options.benchmarkWindows != 0 && !options.benchmarkWindowReportPath)
+		{
+			throw std::runtime_error("--benchmark-windows requires --benchmark-window-report");
+		}
+		if (options.benchmarkWindows != 0 && (!options.statefulDecode || options.forcedGeneratedTokenIds.size() < 2 ||
+		                                      options.stopAtEos || options.compileOnly))
+		{
+			throw std::runtime_error(
+			    "in-process decode benchmark requires stateful forced replay with at least two tokens, --ignore-eos, "
+			    "and execution enabled");
 		}
 		if (!options.layerCheckpointGeneratedIndices.empty() && !options.layerCheckpointDirectory)
 		{
@@ -2762,6 +2943,16 @@ namespace
 			}
 		}
 		const auto runEnd = std::chrono::steady_clock::now();
+		if (options.benchmarkWindows != 0)
+		{
+			WriteDecodeBenchmarkWindows(*options.benchmarkWindowReportPath, decodeModule, initialTokenIds,
+			                            options.forcedGeneratedTokenIds, *emitLogitsInputIndex,
+			                            options.benchmarkWarmupWindows, options.benchmarkWindows);
+			std::cout << "Wrote in-process decode benchmark windows=" << options.benchmarkWindows
+			          << " warmup_windows=" << options.benchmarkWarmupWindows
+			          << " decode_tokens_per_window=" << options.forcedGeneratedTokenIds.size() - 1
+			          << " report=" << *options.benchmarkWindowReportPath << '\n';
+		}
 
 		const auto buildMs = std::chrono::duration<double, std::milli>(buildEnd - buildStart).count();
 		const auto runMs = std::chrono::duration<double, std::milli>(runEnd - runStart).count();
