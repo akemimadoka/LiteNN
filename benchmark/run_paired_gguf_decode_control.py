@@ -55,6 +55,13 @@ def positive_int(raw: str) -> int:
     return value
 
 
+def non_negative_int(raw: str) -> int:
+    value = int(raw)
+    if value < 0:
+        raise argparse.ArgumentTypeError("value must be non-negative")
+    return value
+
+
 def positive_float(raw: str) -> float:
     value = float(raw)
     if not math.isfinite(value) or value <= 0.0:
@@ -513,6 +520,71 @@ def load_tokenizer_token_ids(path: Path) -> list[int]:
     return values
 
 
+def load_in_process_decode_report(
+    path: Path,
+    *,
+    producer: str,
+    warmup_windows: int,
+    measured_windows: int,
+    prompt_tokens: int,
+    decode_tokens: int,
+) -> dict[str, object]:
+    document = json.loads(path.read_text(encoding="utf-8"))
+    expected = {
+        "schema": "litenn.in_process_decode_windows.v1",
+        "producer": producer,
+        "warmupWindows": warmup_windows,
+        "measuredWindows": measured_windows,
+        "promptTokens": prompt_tokens,
+        "decodeTokensPerWindow": decode_tokens,
+    }
+    for name, value in expected.items():
+        if document.get(name) != value:
+            raise RuntimeError(f"in-process decode report {name} mismatch: expected {value!r}, got {document.get(name)!r}")
+    windows = document.get("windows")
+    if not isinstance(windows, list) or len(windows) != warmup_windows + measured_windows:
+        raise RuntimeError("in-process decode report has an invalid window count")
+    measured_throughputs: list[float] = []
+    measured_latencies: list[float] = []
+    phase_counts = {"warmup": 0, "measured": 0}
+    for window in windows:
+        if not isinstance(window, dict) or window.get("phase") not in phase_counts:
+            raise RuntimeError("in-process decode report contains an invalid window")
+        phase = str(window["phase"])
+        expected_index = phase_counts[phase]
+        if window.get("index") != expected_index or window.get("decodeTokens") != decode_tokens:
+            raise RuntimeError("in-process decode report window order or token count is invalid")
+        phase_counts[phase] += 1
+        for name in ("stateResetMs", "prefillMs", "decodeWallMs", "moduleRunMs", "msPerToken", "tokensPerSecond"):
+            value = window.get(name)
+            if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
+                raise RuntimeError(f"in-process decode report contains invalid {name}")
+            if name in ("decodeWallMs", "moduleRunMs", "msPerToken", "tokensPerSecond") and value <= 0.0:
+                raise RuntimeError(f"in-process decode report contains non-positive {name}")
+        if phase == "measured":
+            measured_throughputs.append(float(window["tokensPerSecond"]))
+            measured_latencies.append(float(window["msPerToken"]))
+    if phase_counts != {"warmup": warmup_windows, "measured": measured_windows}:
+        raise RuntimeError("in-process decode report phase coverage is invalid")
+    throughput = series_statistics(measured_throughputs)
+    latency = series_statistics(measured_latencies)
+    summary = document.get("summary")
+    if not isinstance(summary, dict):
+        raise RuntimeError("in-process decode report is missing its summary")
+    reported_median = summary.get("tokensPerSecondMedian")
+    reported_cv = summary.get("tokensPerSecondCVPercent")
+    if not isinstance(reported_median, (int, float)) or not math.isclose(
+        float(reported_median), float(throughput["median"]), rel_tol=1e-9, abs_tol=1e-9
+    ):
+        raise RuntimeError("in-process decode report throughput median does not match its windows")
+    if not isinstance(reported_cv, (int, float)) or not math.isclose(
+        float(reported_cv), float(throughput["coefficient_of_variation_percent"]), rel_tol=1e-9, abs_tol=1e-9
+    ):
+        raise RuntimeError("in-process decode report throughput CV does not match its windows")
+    document["validated_statistics"] = {"tokens_per_second": throughput, "ms_per_token": latency}
+    return document
+
+
 def parse_forced_replay_metrics(path: Path) -> dict[str, object]:
     lines = path.read_text(encoding="utf-8").splitlines()
     if len(lines) < 3:
@@ -605,6 +677,8 @@ def build_litenn_command(
     workdir: Path,
     cache_dir: Path,
     forced_generated_token_ids: list[int] | None = None,
+    prompt_token_ids: list[int] | None = None,
+    benchmark_report_path: Path | None = None,
 ) -> list[str]:
     command = [
         args.python,
@@ -613,10 +687,6 @@ def build_litenn_command(
         str(model),
         "--litenn",
         str(litenn),
-        "--llamacpp-tokenizer-tool",
-        str(tokenizer),
-        "--prompt",
-        args.prompt,
         "--stateful",
         "--max-tokens",
         str(args.predict),
@@ -638,6 +708,10 @@ def build_litenn_command(
         "--cpu-aot-ggml-prepacked-weight-layout",
         "field-interleaved-v4",
     ]
+    if prompt_token_ids is None:
+        command.extend(("--llamacpp-tokenizer-tool", str(tokenizer), "--prompt", args.prompt))
+    else:
+        command.extend(("--token-ids", ",".join(str(token_id) for token_id in prompt_token_ids)))
     if args.litenn_max_cache_length is not None:
         command.extend(("--max-cache-length", str(args.litenn_max_cache_length)))
     if args.litenn_affinity != "default":
@@ -646,7 +720,65 @@ def build_litenn_command(
         command.extend(
             ("--forced-generated-token-ids", ",".join(str(token_id) for token_id in forced_generated_token_ids))
         )
+    in_process_windows = int(getattr(args, "in_process_windows", 0))
+    if in_process_windows:
+        if benchmark_report_path is None:
+            raise ValueError("in-process LiteNN command requires a benchmark report path")
+        command.extend(
+            (
+                "--benchmark-warmup-windows",
+                str(getattr(args, "in_process_warmup_windows", 1)),
+                "--benchmark-windows",
+                str(in_process_windows),
+                "--benchmark-window-report",
+                str(benchmark_report_path),
+            )
+        )
     return command
+
+
+def build_llama_in_process_command(
+    args: argparse.Namespace,
+    model: Path,
+    adapter: Path,
+    prompt_token_ids: list[int],
+    generated_token_ids: list[int],
+    report_path: Path,
+) -> list[str]:
+    return [
+        str(adapter),
+        "benchmark-fixed-decode",
+        str(model),
+        ",".join(str(token_id) for token_id in prompt_token_ids),
+        ",".join(str(token_id) for token_id in generated_token_ids),
+        str(args.in_process_warmup_windows),
+        str(args.in_process_windows),
+        str(args.context_size),
+        str(args.llama_threads),
+        str(report_path),
+    ]
+
+
+def capture_chat_prompt_token_ids(
+    args: argparse.Namespace,
+    model: Path,
+    adapter: Path,
+    output_dir: Path,
+    replacements: dict[str, str],
+) -> tuple[list[int], dict[str, object]]:
+    capture_dir = output_dir / "fixed_replay_prompt"
+    capture_dir.mkdir(parents=True, exist_ok=True)
+    token_output = capture_dir / "prompt_tokens.json"
+    process, _, _ = run_monitored(
+        [str(adapter), "tokenize-chat-template", str(model), args.prompt, str(token_output)],
+        capture_dir / "tokenize_chat_template",
+        replacements,
+        args.monitor_interval,
+    )
+    if process["returncode"] != 0:
+        raise RuntimeError("fixed-trajectory chat prompt tokenization failed")
+    token_ids = load_tokenizer_token_ids(token_output)
+    return token_ids, {"process": process, "tokens": token_ids_identity(token_ids)}
 
 
 def capture_fixed_reference_trajectory(
@@ -754,6 +886,8 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"- Natural sampler parity: `{gate['natural_sampler_parity']}`",  # type: ignore[index]
             f"- No fallback: `{gate['no_fallback']}`",  # type: ignore[index]
             f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
+            f"- Process-level variance gate: `{gate['process_variance']}`",  # type: ignore[index]
+            f"- In-process window variance gate: `{gate['in_process_variance']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
@@ -764,6 +898,14 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             [
                 f"- LiteNN natural mismatch count median: `{mismatch_summary['median']:.0f}`",  # type: ignore[index]
                 f"- First natural mismatch indices: `{summary['first_natural_mismatch_indices']}`",  # type: ignore[index]
+            ]
+        )
+    if document["configuration"]["in_process_windows"]:  # type: ignore[index]
+        window_cv = summary["in_process_window_cv_percent"]
+        lines.extend(
+            [
+                f"- llama.cpp median within-process CV: `{window_cv['llama_cpp']['median']:.2f}%`",  # type: ignore[index]
+                f"- LiteNN median within-process CV: `{window_cv['litenn']['median']:.2f}%`",  # type: ignore[index]
             ]
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -802,6 +944,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--require-variance-gate", action="store_true")
     parser.add_argument(
+        "--in-process-warmup-windows",
+        default=1,
+        type=non_negative_int,
+        help="Discard this many fixed-trajectory windows after mapping each runtime",
+    )
+    parser.add_argument(
+        "--in-process-windows",
+        default=0,
+        type=non_negative_int,
+        help="Measure this many fixed-trajectory windows inside each runtime process",
+    )
+    parser.add_argument(
         "--fixed-token-replay",
         action="store_true",
         help="Capture one llama.cpp trajectory, force LiteNN to replay it, and report natural sampler divergences",
@@ -821,6 +975,10 @@ def main() -> int:
     args = build_parser().parse_args()
     if args.repetitions < 3:
         raise SystemExit("paired control requires at least three repetitions")
+    if args.in_process_windows and not args.fixed_token_replay:
+        raise SystemExit("--in-process-windows requires --fixed-token-replay")
+    if args.in_process_windows and args.predict < 2:
+        raise SystemExit("--in-process-windows requires --predict of at least two")
     model = resolve_file(args.model, "model")
     litenn = resolve_file(args.litenn, "LiteNN GGUF tool")
     tokenizer = resolve_file(args.llamacpp_tokenizer_tool, "llama.cpp tokenizer tool")
@@ -872,6 +1030,8 @@ def main() -> int:
             "monitor_interval_seconds": args.monitor_interval,
             "variance_threshold_percent": args.variance_threshold_percent,
             "fixed_token_replay": args.fixed_token_replay,
+            "in_process_warmup_windows": args.in_process_warmup_windows,
+            "in_process_windows": args.in_process_windows,
             "run_order": "odd=llama_cpp_then_litenn,even=litenn_then_llama_cpp",
         },
         "pairs": [],
@@ -884,6 +1044,7 @@ def main() -> int:
 
     checkpoint()
     forced_generated_token_ids: list[int] | None = None
+    prompt_token_ids: list[int] | None = None
     if args.fixed_token_replay:
         print("[paired decode] capturing fixed reference trajectory", file=sys.stderr, flush=True)
         try:
@@ -897,6 +1058,26 @@ def main() -> int:
             raise SystemExit(str(error)) from error
         document["fixed_replay_reference"] = fixed_reference
         print("[paired decode] fixed reference trajectory ready", file=sys.stderr, flush=True)
+        checkpoint()
+    if args.in_process_windows:
+        print("[paired decode] capturing fixed chat prompt tokens", file=sys.stderr, flush=True)
+        try:
+            prompt_token_ids, prompt_capture = capture_chat_prompt_token_ids(
+                args, model, tokenizer, output_dir, replacements
+            )
+        except RuntimeError as error:
+            document["status"] = "failed"
+            document["failure"] = str(error)
+            checkpoint()
+            raise SystemExit(str(error)) from error
+        fixed_reference = document["fixed_replay_reference"]
+        if len(prompt_token_ids) != int(fixed_reference["prompt_tokens"]):  # type: ignore[index]
+            document["status"] = "failed"
+            document["failure"] = "fixed chat prompt token count differs from llama.cpp completion"
+            checkpoint()
+            raise SystemExit(document["failure"])
+        document["fixed_replay_prompt"] = prompt_capture
+        print("[paired decode] fixed chat prompt tokens ready", file=sys.stderr, flush=True)
         checkpoint()
     pairs_document = document["pairs"]
     assert isinstance(pairs_document, list)
@@ -913,7 +1094,20 @@ def main() -> int:
                 flush=True,
             )
             if runtime == "llama_cpp":
-                command = build_llama_command(args, model, completion)
+                in_process_report_path = pair_dir / "llama_cpp_in_process_windows.json"
+                if args.in_process_windows:
+                    assert prompt_token_ids is not None
+                    assert forced_generated_token_ids is not None
+                    command = build_llama_in_process_command(
+                        args,
+                        model,
+                        tokenizer,
+                        prompt_token_ids,
+                        forced_generated_token_ids,
+                        in_process_report_path,
+                    )
+                else:
+                    command = build_llama_command(args, model, completion)
                 process_record, stdout_text, stderr_text = run_monitored(
                     command, pair_dir / "llama_cpp", replacements, args.monitor_interval
                 )
@@ -922,20 +1116,51 @@ def main() -> int:
                     document["failure"] = f"llama.cpp failed in pair {repetition}"
                     checkpoint()
                     raise SystemExit(document["failure"])
-                metrics = parse_perf_output(f"{stdout_text}\n{stderr_text}")
-                generated_text = normalize_completion_text(stdout_text)
-                pair["llama_cpp"] = {
-                    "process": process_record,
-                    "prompt_tokens": metrics["prompt_count"],
-                    "eval_tokens": metrics["eval_count"],
-                    "ms_per_token": metrics["eval_ms_per_token"],
-                    "tokens_per_second": metrics["eval_tokens_per_second"],
-                    "text": text_identity(generated_text),
-                }
+                if args.in_process_windows:
+                    assert prompt_token_ids is not None
+                    fixed_reference = document["fixed_replay_reference"]
+                    window_report = load_in_process_decode_report(
+                        in_process_report_path,
+                        producer="llama.cpp",
+                        warmup_windows=args.in_process_warmup_windows,
+                        measured_windows=args.in_process_windows,
+                        prompt_tokens=len(prompt_token_ids),
+                        decode_tokens=args.predict - 1,
+                    )
+                    window_statistics = window_report["validated_statistics"]
+                    pair["llama_cpp"] = {
+                        "process": process_record,
+                        "prompt_tokens": len(prompt_token_ids),
+                        "eval_tokens": args.predict - 1,
+                        "ms_per_token": window_statistics["ms_per_token"]["median"],
+                        "tokens_per_second": window_statistics["tokens_per_second"]["median"],
+                        "text": fixed_reference["text"],
+                        "in_process": window_report,
+                    }
+                else:
+                    metrics = parse_perf_output(f"{stdout_text}\n{stderr_text}")
+                    generated_text = normalize_completion_text(stdout_text)
+                    pair["llama_cpp"] = {
+                        "process": process_record,
+                        "prompt_tokens": metrics["prompt_count"],
+                        "eval_tokens": metrics["eval_count"],
+                        "ms_per_token": metrics["eval_ms_per_token"],
+                        "tokens_per_second": metrics["eval_tokens_per_second"],
+                        "text": text_identity(generated_text),
+                    }
             else:
                 workdir = pair_dir / "litenn_workdir"
+                in_process_report_path = pair_dir / "litenn_in_process_windows.json"
                 command = build_litenn_command(
-                    args, model, litenn, tokenizer, workdir, cache_dir, forced_generated_token_ids
+                    args,
+                    model,
+                    litenn,
+                    tokenizer,
+                    workdir,
+                    cache_dir,
+                    forced_generated_token_ids,
+                    prompt_token_ids if args.in_process_windows else None,
+                    in_process_report_path if args.in_process_windows else None,
                 )
                 process_record, _, _ = run_monitored(
                     command, pair_dir / "litenn", replacements, args.monitor_interval
@@ -947,25 +1172,49 @@ def main() -> int:
                     raise SystemExit(document["failure"])
                 report_path = workdir / "qwen_smoke_report.json"
                 base = litenn_row(report_path)
-                steady = litenn_steady_generation_row(report_path, base)
-                generated_text = (workdir / "generated_text.bin").read_text(encoding="utf-8").strip()
+                steady = litenn_steady_generation_row(report_path, base) if not args.in_process_windows else None
                 token_output = workdir / "litenn_decode_tokens.txt"
                 replay = parse_forced_replay_metrics(token_output)
                 generated_token_ids = load_litenn_generated_token_ids(token_output, int(base["promptTokens"]))
+                if args.in_process_windows:
+                    assert prompt_token_ids is not None
+                    fixed_reference = document["fixed_replay_reference"]
+                    window_report = load_in_process_decode_report(
+                        in_process_report_path,
+                        producer="LiteNN",
+                        warmup_windows=args.in_process_warmup_windows,
+                        measured_windows=args.in_process_windows,
+                        prompt_tokens=len(prompt_token_ids),
+                        decode_tokens=args.predict - 1,
+                    )
+                    window_statistics = window_report["validated_statistics"]
+                    ms_per_token = window_statistics["ms_per_token"]["median"]
+                    tokens_per_second = window_statistics["tokens_per_second"]["median"]
+                    eval_tokens = args.predict - 1
+                    generated_text_identity = fixed_reference["text"]
+                else:
+                    assert steady is not None
+                    ms_per_token = steady["msPerToken"]
+                    tokens_per_second = steady["tokensPerSecond"]
+                    eval_tokens = steady["tokens"]
+                    generated_text = (workdir / "generated_text.bin").read_text(encoding="utf-8").strip()
+                    generated_text_identity = text_identity(generated_text)
                 pair["litenn"] = {
                     "process": process_record,
                     "prompt_tokens": base["promptTokens"],
-                    "eval_tokens": steady["tokens"],
-                    "ms_per_token": steady["msPerToken"],
-                    "tokens_per_second": steady["tokensPerSecond"],
+                    "eval_tokens": eval_tokens,
+                    "ms_per_token": ms_per_token,
+                    "tokens_per_second": tokens_per_second,
                     "full_generation_ms_per_token": base["msPerToken"],
                     "full_generation_tokens_per_second": base["tokensPerSecond"],
                     "fallback_used": base["fallbackUsed"],
                     "fallback_count": base["fallbackCount"],
-                    "text": text_identity(generated_text),
+                    "text": generated_text_identity,
                     "tokens": token_ids_identity(generated_token_ids),
                     "fixed_replay": replay,
                 }
+                if args.in_process_windows:
+                    pair["litenn"]["in_process"] = window_report
             print(
                 f"[paired decode] pair {repetition}/{args.repetitions} {runtime} finished",
                 file=sys.stderr,
@@ -988,6 +1237,25 @@ def main() -> int:
         pair["litenn_vs_llama_percent"] = (
             float(litenn_result["tokens_per_second"]) / float(llama["tokens_per_second"]) - 1.0  # type: ignore[index]
         ) * 100.0
+        if args.in_process_windows:
+            llama_window_cv = float(
+                llama["in_process"]["validated_statistics"]["tokens_per_second"][  # type: ignore[index]
+                    "coefficient_of_variation_percent"
+                ]
+            )
+            litenn_window_cv = float(
+                litenn_result["in_process"]["validated_statistics"]["tokens_per_second"][  # type: ignore[index]
+                    "coefficient_of_variation_percent"
+                ]
+            )
+            pair["in_process_variance"] = {
+                "llama_cpp_cv_percent": llama_window_cv,
+                "litenn_cv_percent": litenn_window_cv,
+                "passed": (
+                    llama_window_cv <= args.variance_threshold_percent
+                    and litenn_window_cv <= args.variance_threshold_percent
+                ),
+            }
         pair["power_policy_stable"] = paired_power_policy_stable(  # type: ignore[index]
             llama["process"], litenn_result["process"]  # type: ignore[index]
         )
@@ -1033,9 +1301,21 @@ def main() -> int:
         summary["first_natural_mismatch_indices"] = [
             pair["litenn"]["fixed_replay"]["first_natural_mismatch_index"] for pair in pairs  # type: ignore[index]
         ]
-    variance_passed = (
+    process_variance_passed = (
         float(summary["llama_cpp"]["coefficient_of_variation_percent"]) <= args.variance_threshold_percent
         and float(summary["litenn"]["coefficient_of_variation_percent"]) <= args.variance_threshold_percent
+    )
+    if args.in_process_windows:
+        summary["in_process_window_cv_percent"] = {
+            "llama_cpp": series_statistics(
+                [float(pair["in_process_variance"]["llama_cpp_cv_percent"]) for pair in pairs]  # type: ignore[index]
+            ),
+            "litenn": series_statistics(
+                [float(pair["in_process_variance"]["litenn_cv_percent"]) for pair in pairs]  # type: ignore[index]
+            ),
+        }
+    in_process_variance_passed = not args.in_process_windows or all(
+        bool(pair["in_process_variance"]["passed"]) for pair in pairs  # type: ignore[index]
     )
     gate = {
         "text_parity": all(bool(pair["text_match"]) for pair in pairs),  # type: ignore[index]
@@ -1051,7 +1331,9 @@ def main() -> int:
         ),
         "no_fallback": all(not bool(pair["litenn"]["fallback_used"]) for pair in pairs),  # type: ignore[index]
         "power_policy_stability": all(bool(pair["power_policy_stable"]) for pair in pairs),
-        "variance": variance_passed,
+        "process_variance": process_variance_passed,
+        "in_process_variance": in_process_variance_passed,
+        "variance": process_variance_passed and in_process_variance_passed,
     }
     gate["accepted"] = bool(
         gate["trajectory_parity"]
@@ -1069,12 +1351,12 @@ def main() -> int:
         f"[paired decode] LiteNN median {summary['litenn']['median']:.3f} t/s, "
         f"llama.cpp median {summary['llama_cpp']['median']:.3f} t/s, "
         f"paired delta {summary['paired_delta_percent']['median']:+.2f}%, "
-        f"variance_gate={variance_passed}",
+        f"variance_gate={gate['variance']}",
         file=sys.stderr,
     )
     if not gate["power_policy_stability"]:
         return 2
-    return 2 if args.require_variance_gate and not variance_passed else 0
+    return 2 if args.require_variance_gate and not gate["variance"] else 0
 
 
 if __name__ == "__main__":
