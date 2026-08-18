@@ -703,6 +703,53 @@ namespace
 		return topology;
 	}
 
+	std::optional<LiteNNCPUThreadAffinityTarget>
+	ResolveLiteNNCPUThreadAffinityTarget(std::span<const LiteNNCPUThreadAffinityTarget> targets, std::size_t workerSlot)
+	{
+#ifdef _WIN32
+		DWORD_PTR processMask = 0;
+		DWORD_PTR systemMask = 0;
+		GROUP_AFFINITY currentGroupAffinity{};
+		if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) && processMask != systemMask &&
+		    GetThreadGroupAffinity(GetCurrentThread(), &currentGroupAffinity))
+		{
+			std::size_t allowedSlot = 0;
+			for (const auto& target : targets)
+			{
+				if (target.group != currentGroupAffinity.Group || (target.mask & processMask) == 0)
+				{
+					continue;
+				}
+				if (allowedSlot++ == workerSlot)
+				{
+					return target;
+				}
+			}
+			return std::nullopt;
+		}
+#elif defined(__linux__)
+		cpu_set_t allowed;
+		CPU_ZERO(&allowed);
+		if (pthread_getaffinity_np(pthread_self(), sizeof(allowed), &allowed) == 0)
+		{
+			std::size_t allowedSlot = 0;
+			for (const auto& target : targets)
+			{
+				if (!CPU_ISSET(target.processor, &allowed))
+				{
+					continue;
+				}
+				if (allowedSlot++ == workerSlot)
+				{
+					return target;
+				}
+			}
+			return std::nullopt;
+		}
+#endif
+		return workerSlot < targets.size() ? std::optional{ targets[workerSlot] } : std::nullopt;
+	}
+
 	constexpr std::uint64_t kCPUAOTSchedulingFieldMask = 0xff;
 	constexpr std::uint64_t kCPUAOTWorkerWaitPolicyShift = 8;
 
@@ -757,14 +804,15 @@ namespace
 			}
 			const auto& topology = GetLiteNNCPUAffinityTopology();
 			const auto& targets = policy == CPUAOTAffinityPolicy::Spread ? topology.spread : topology.compact;
-			if (workerSlot >= targets.size())
+			const auto selectedTarget = ResolveLiteNNCPUThreadAffinityTarget(targets, workerSlot);
+			if (!selectedTarget)
 			{
 				return;
 			}
 #ifdef _WIN32
 			const GROUP_AFFINITY target{
-				.Mask = targets[workerSlot].mask,
-				.Group = targets[workerSlot].group,
+				.Mask = selectedTarget->mask,
+				.Group = selectedTarget->group,
 			};
 			if (SetThreadGroupAffinity(GetCurrentThread(), &target, &previousGroupAffinity_))
 			{
@@ -779,7 +827,7 @@ namespace
 			}
 			cpu_set_t targetSet;
 			CPU_ZERO(&targetSet);
-			CPU_SET(targets[workerSlot].processor, &targetSet);
+			CPU_SET(selectedTarget->processor, &targetSet);
 			if (pthread_setaffinity_np(pthread_self(), sizeof(targetSet), &targetSet) == 0)
 			{
 				previousSet_ = currentSet;

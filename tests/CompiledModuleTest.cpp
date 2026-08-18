@@ -38,6 +38,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace LiteNN;
 
 extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const float* rhs, const float* bias,
@@ -2976,6 +2980,59 @@ TEST(CompiledModuleTest, CPUParallelThreadPoolSurvivesRapidParticipantCountChang
 		}
 	}
 }
+
+#ifdef _WIN32
+TEST(CompiledModuleTest, CPUParallelAffinityRespectsRestrictedProcessMask)
+{
+	DWORD_PTR originalProcessMask = 0;
+	DWORD_PTR systemMask = 0;
+	ASSERT_TRUE(GetProcessAffinityMask(GetCurrentProcess(), &originalProcessMask, &systemMask));
+	std::vector<DWORD_PTR> availableBits;
+	for (std::size_t bit = 0; bit < sizeof(DWORD_PTR) * 8; ++bit)
+	{
+		const auto mask = static_cast<DWORD_PTR>(1) << bit;
+		if ((originalProcessMask & mask) != 0)
+		{
+			availableBits.push_back(mask);
+		}
+	}
+	if (availableBits.size() < 4)
+	{
+		GTEST_SKIP() << "requires at least four available logical processors";
+	}
+
+	DWORD_PTR restrictedMask = 0;
+	for (std::size_t index = 0; index < std::min<std::size_t>(8, availableBits.size() - 1); ++index)
+	{
+		restrictedMask |= availableBits[index];
+	}
+	ASSERT_NE(restrictedMask, originalProcessMask);
+	ASSERT_TRUE(SetProcessAffinityMask(GetCurrentProcess(), restrictedMask));
+	struct RestoreProcessAffinity
+	{
+		DWORD_PTR mask;
+		~RestoreProcessAffinity()
+		{
+			SetProcessAffinityMask(GetCurrentProcess(), mask);
+		}
+	} restore{ originalProcessMask };
+
+	constexpr std::uint64_t rows = 32;
+	constexpr std::uint64_t inner = 128;
+	constexpr std::uint64_t columns = 128;
+	std::vector<float> lhs(rows * inner, 1.0F);
+	std::vector<float> rhs(inner * columns, 0.5F);
+	std::vector<float> bias(columns, 1.0F);
+	std::vector<float> output(rows * columns);
+	litenn_cpu_matmul_bias_relu_parallel_f32(lhs.data(), rhs.data(), bias.data(), output.data(), rows, inner, columns,
+	                                         1, 8, static_cast<std::uint64_t>(CPUAOTAffinityPolicy::Compact), false);
+
+	DWORD_PTR observedProcessMask = 0;
+	DWORD_PTR observedSystemMask = 0;
+	ASSERT_TRUE(GetProcessAffinityMask(GetCurrentProcess(), &observedProcessMask, &observedSystemMask));
+	EXPECT_EQ(observedProcessMask, restrictedMask);
+}
+#endif
 
 TEST(CompiledModuleTest, CPUParallelLinearChainDiagnosticsReportSelection)
 {
