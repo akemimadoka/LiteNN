@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import statistics
 import subprocess
@@ -161,11 +162,80 @@ def option_present(arguments: list[str], name: str) -> bool:
     return any(argument == name or argument.startswith(name + "=") for argument in arguments)
 
 
+def option_value(arguments: list[str], name: str) -> str | None:
+    for index, argument in enumerate(arguments):
+        if argument.startswith(name + "="):
+            return argument[len(name) + 1 :]
+        if argument == name and index + 1 < len(arguments):
+            return arguments[index + 1]
+    return None
+
+
+def resume_input_facts(paired_arguments: list[str]) -> dict[str, dict[str, int]]:
+    facts = {}
+    for name in ("--model", "--litenn", "--llamacpp-tokenizer-tool", "--llama-completion"):
+        value = option_value(paired_arguments, name)
+        if value is None:
+            continue
+        path = Path(value).resolve()
+        try:
+            stat = path.stat()
+        except OSError as error:
+            raise SystemExit(f"cannot fingerprint resume input {name}: {error}") from error
+        facts[name] = {"size_bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
+    return facts
+
+
+def resume_identity(
+    thread_counts: list[int],
+    python: str,
+    paired_arguments: list[str],
+    input_facts: dict[str, dict[str, int]] | None = None,
+) -> str:
+    payload = json.dumps(
+        {
+            "thread_counts": thread_counts,
+            "python": python,
+            "paired_arguments": paired_arguments,
+            "input_facts": input_facts or {},
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def load_completed_child_report(path: Path, threads: int) -> dict[str, object] | None:
+    if not path.is_file():
+        return None
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        configuration = document["configuration"]
+        gate = document["gate"]
+        if (
+            document.get("status") != "complete"
+            or int(configuration["litenn_threads"]) != threads
+            or int(configuration["llama_threads"]) != threads
+            or not isinstance(document.get("pairs"), list)
+            or not document["pairs"]
+            or not isinstance(gate.get("accepted"), bool)
+        ):
+            return None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError, OSError):
+        return None
+    return document
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--thread-counts", default=[1, 2, 4, 8], type=positive_thread_counts)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--python", default=sys.executable)
+    parser.add_argument(
+        "--resume-complete",
+        action="store_true",
+        help="Reuse only complete thread controls from an identical scaling invocation",
+    )
     parser.add_argument(
         "paired_arguments",
         nargs=argparse.REMAINDER,
@@ -194,10 +264,29 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "gguf_decode_scaling_control.json"
     markdown_path = output_dir / "gguf_decode_scaling_control.md"
+    invocation_identity = resume_identity(
+        args.thread_counts,
+        args.python,
+        paired_arguments,
+        resume_input_facts(paired_arguments),
+    )
+    resume_validated = False
+    if args.resume_complete and report_path.is_file():
+        try:
+            previous = json.loads(report_path.read_text(encoding="utf-8"))
+            previous_configuration = previous["configuration"]
+        except (KeyError, TypeError, json.JSONDecodeError, OSError) as error:
+            raise SystemExit(f"cannot resume invalid scaling report: {error}") from error
+        if previous_configuration.get("resume_identity") != invocation_identity:
+            raise SystemExit("cannot resume scaling control: invocation identity differs")
+        resume_validated = True
     document: dict[str, object] = {
         "schema": "litenn.gguf_decode_scaling_control.v1",
         "status": "running",
-        "configuration": {"thread_counts": args.thread_counts},
+        "configuration": {
+            "thread_counts": args.thread_counts,
+            "resume_identity": invocation_identity,
+        },
         "runs": [],
     }
 
@@ -209,6 +298,9 @@ def main() -> int:
     runner = Path(__file__).with_name("run_paired_gguf_decode_control.py")
     for threads in args.thread_counts:
         run_dir = output_dir / f"threads_{threads:02d}"
+        child_report_path = run_dir / "paired_gguf_decode_control.json"
+        child = load_completed_child_report(child_report_path, threads) if resume_validated else None
+        resumed = child is not None
         command = [
             args.python,
             str(runner),
@@ -220,21 +312,29 @@ def main() -> int:
             "--output-dir",
             str(run_dir),
         ]
-        print(f"[decode scaling] T{threads} starting", file=sys.stderr, flush=True)
-        result = subprocess.run(command, check=False)
-        child_report_path = run_dir / "paired_gguf_decode_control.json"
-        if result.returncode != 0 or not child_report_path.is_file():
-            document["status"] = "failed"
-            document["failure"] = f"T{threads} paired control failed with return code {result.returncode}"
-            checkpoint()
-            return result.returncode or 1
-        child = json.loads(child_report_path.read_text(encoding="utf-8"))
+        if child is None:
+            print(f"[decode scaling] T{threads} starting", file=sys.stderr, flush=True)
+            result = subprocess.run(command, check=False)
+            if result.returncode != 0 or not child_report_path.is_file():
+                document["status"] = "failed"
+                document["failure"] = f"T{threads} paired control failed with return code {result.returncode}"
+                checkpoint()
+                return result.returncode or 1
+            child = load_completed_child_report(child_report_path, threads)
+            if child is None:
+                document["status"] = "failed"
+                document["failure"] = f"T{threads} paired control did not publish a complete report"
+                checkpoint()
+                return 1
+        else:
+            print(f"[decode scaling] T{threads} reusing complete report", file=sys.stderr, flush=True)
         reports.append((threads, child))
         document["runs"].append(  # type: ignore[union-attr]
             {
                 "threads": threads,
                 "paired_report": child_report_path.relative_to(output_dir).as_posix(),
                 "accepted": bool(child["gate"]["accepted"]),
+                "resumed": resumed,
             }
         )
         checkpoint()
