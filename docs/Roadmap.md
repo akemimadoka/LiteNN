@@ -3352,14 +3352,20 @@ Priority classes:
                               is retained as rejected: reference process CV is `3.723%`, and a host-utility excursion
                               raises one LiteNN process to `6.729%` window CV. Do not relax the 3% rule. Evidence:
                               `docs/QwenInProcessDecodeControl_2026-08-18.md`.
-                              - [ ] Add rolling host-state admission before each process/window. Reject and retain
-                                    externally disturbed windows instead of silently retrying them.
-                              - [ ] Add a configurable, reported cooldown between runtimes and outer pairs; require two
-                                    accepted five-pair batches under one stable power policy.
-                              - [ ] Run adjacent T1/T2/T4/T8 controls for both runtimes on the same affinity domain and
-                                    report process CPU ms/token, speedup, parallel efficiency, and throughput per
-                                    CPU-second. Current T8 LiteNN consumes `3.603x` the CPU time of the T2 reference,
-                                    so a wall-throughput comparison does not establish CPU-efficiency parity.
+                              - [x] Add rolling pre-process host admission plus post-window activity/frequency gates.
+                                    Raw rejected samples are retained; the first real scaling smoke waited `3.0-8.5 s`
+                                    through transient `116-117` activity before launching affected processes.
+                              - [x] Add configurable, reported cooldowns between runtimes and outer pairs.
+                              - [x] Apply and verify the same OS process CPU set for both runtimes. Add a T1/T2/T4/T8
+                                    controller that prepares thread-specific AOT caches outside timing and reports wall
+                                    time, process CPU ms/token, speedup, parallel efficiency, and tokens/CPU-second.
+                              - [x] Complete the first real T1/T2 short scaling smoke. LiteNN improves from `-21.35%`
+                                    wall throughput and `1.284x` process CPU time at T1 to `-2.75%` and `1.195x` at T2;
+                                    its `1.659x` scaling exceeds the reference `1.342x`. Short-window variance rejects
+                                    the result. Evidence: `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
+                              - [ ] Run the formal five-pair, three-window, 63-call T1/T2/T4/T8 control and require all
+                                    3% variance, correctness, host-stability, telemetry, and affinity gates before
+                                    selecting a single-thread implementation owner.
                   - [ ] Profile the new projection-dominated budget against matched reference stages before choosing
                         another kernel. QKV, attention output, Gate/Up, Down, and logits now aggregate to
                         `163.473 ms/token` (`80.71%`); this is a profiling priority, not proof of a runtime deficit.

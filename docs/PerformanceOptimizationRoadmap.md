@@ -121,14 +121,19 @@ P0 implementation order:
         reference/LiteNN medians and a directional `+9.350%` paired median, but remains rejected: reference process CV
         is `3.723%`, and one LiteNN process reaches `6.729%` window CV during a host-utility excursion. Keep the 3%
         threshold and every outlier. Evidence: `docs/QwenInProcessDecodeControl_2026-08-18.md`.
-        - [ ] P0: add pre-process and pre-window host-state admission from rolling utility/frequency samples. Reject and
-          retain externally disturbed windows; do not silently retry until a pass appears.
-        - [ ] P0: add a configurable, reported cooldown between runtimes and outer pairs, then obtain two accepted
-          five-pair batches under one stable power policy.
-        - [ ] P0: run adjacent T1/T2/T4/T8 controls for both runtimes on the same affinity domain. Report wall time,
-          process CPU ms/token, speedup, parallel efficiency, and throughput per CPU-second. Current T8 LiteNN uses
-          `1275.298 ms` process CPU/token versus `353.919 ms` for the T2 reference (`3.603x`), so wall-throughput parity
-          is not CPU-efficiency parity.
+        - [x] P0: add rolling pre-process host admission and post-window activity/frequency stability gates. Admissions
+          retain every raw sample and never retry a completed window; the real T1/T2 smoke waited `3.0-8.5 s` through
+          observed `116-117` activity excursions before launching affected processes.
+        - [x] P0: add configurable, reported cooldowns between runtimes and outer pairs.
+        - [x] P0: apply and verify one OS process CPU set for both runtimes, then add a T1/T2/T4/T8 scaling controller
+          with unmeasured thread-specific AOT-cache preparation, wall time, process CPU ms/token, speedup, parallel
+          efficiency, and throughput per CPU-second.
+        - [x] Run the first real T1/T2 short scaling smoke. LiteNN moves from `-21.35%` wall throughput and `1.284x`
+          process CPU time at T1 to `-2.75%` and `1.195x` at T2; its `1.659x` scaling exceeds the reference `1.342x`.
+          The result is directional only because 15-call window variance fails. Evidence:
+          `docs/QwenEqualThreadScalingControl_2026-08-18.md`.
+        - [ ] P0: run the formal T1/T2/T4/T8 control with five alternating pairs and three 63-call windows. Require
+          every existing 3%/correctness/host/affinity gate before selecting the accepted single-thread stage deficit.
     - [x] P0: capture continuous peak working set/private bytes during first cache publication and remove the unused
       model-sized gradient allocation. GGUF inference variables are now frozen; a real 14B Q4_K_M fresh build peaks at
       `18.566/18.679 GB` RSS/private versus the earlier `27.37/27.49 GB` single observation while publishing the same
