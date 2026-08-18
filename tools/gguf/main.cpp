@@ -1146,6 +1146,22 @@ namespace
 		}
 		return inputs;
 	}
+
+	void ResetStateInputs(std::span<const LiteNN::CompiledTensorSpec> inputSpecs,
+	                      std::span<LiteNN::Tensor<LiteNN::CPU>> inputs)
+	{
+		if (inputs.size() != inputSpecs.size() || inputs.empty())
+		{
+			throw std::runtime_error("Compiled LLM state reset input count mismatch");
+		}
+		for (std::size_t i = 1; i < inputs.size(); ++i)
+		{
+			auto& tensor = inputs[i];
+			LiteNN::DeviceTraits<LiteNN::CPU>::ZeroFill(tensor.CurDevice(), tensor.UnsafeRawData(), tensor.DType(),
+			                                            tensor.NumElements());
+			InitializePagedKVMetadataInput(inputSpecs[i], tensor);
+		}
+	}
 #endif
 
 	LiteNN::Tensor<LiteNN::CPU> MakeTokenIdTensorForPlan(std::int32_t tokenId, const LiteNN::ExecutablePlan& plan)
@@ -2228,6 +2244,10 @@ namespace
 	{
 		bool warmup{};
 		std::size_t index{};
+		std::int64_t windowStartMonotonicNs{};
+		std::int64_t decodeStartMonotonicNs{};
+		std::int64_t decodeEndMonotonicNs{};
+		std::int64_t windowEndMonotonicNs{};
 		double stateResetMs{};
 		double prefillMs{};
 		double decodeWallMs{};
@@ -2268,12 +2288,16 @@ namespace
 
 		std::vector<DecodeBenchmarkWindow> windows;
 		windows.reserve(warmupWindowCount + measuredWindowCount);
+		auto inputs = MakeZeroStateInputs(module.InputSpecs(),
+		                                  MakeTokenIdTensorForModule(promptTokenIds.front(), module.InputSpecs()));
 		const auto totalWindowCount = warmupWindowCount + measuredWindowCount;
+		const auto monotonicNanoseconds = [](std::chrono::steady_clock::time_point point) {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(point.time_since_epoch()).count();
+		};
 		for (std::size_t windowIndex = 0; windowIndex < totalWindowCount; ++windowIndex)
 		{
 			const auto resetStart = std::chrono::steady_clock::now();
-			auto inputs = MakeZeroStateInputs(module.InputSpecs(),
-			                                  MakeTokenIdTensorForModule(promptTokenIds.front(), module.InputSpecs()));
+			ResetStateInputs(module.InputSpecs(), inputs);
 			const auto resetEnd = std::chrono::steady_clock::now();
 
 			const auto prefillStart = std::chrono::steady_clock::now();
@@ -2300,6 +2324,10 @@ namespace
 			windows.push_back(
 			    { .warmup = windowIndex < warmupWindowCount,
 			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+			      .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
+			      .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
+			      .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+			      .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
 			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
 			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
 			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
@@ -2335,9 +2363,9 @@ namespace
 		{
 			throw std::runtime_error("failed to open in-process decode benchmark report: " + path.string());
 		}
-		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v1\",\n"
+		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v2\",\n"
 		       << "  \"producer\": \"LiteNN\",\n  \"runtime\": \"cpu_aot\",\n"
-		       << "  \"stateReset\": \"fresh_zero_inputs\",\n  \"moduleMappedOnce\": true,\n"
+		       << "  \"stateReset\": \"reuse_zero_fill_inputs\",\n  \"moduleMappedOnce\": true,\n"
 		       << "  \"warmupWindows\": " << warmupWindowCount << ",\n  \"measuredWindows\": " << measuredWindowCount
 		       << ",\n  \"promptTokens\": " << promptTokenIds.size()
 		       << ",\n  \"decodeTokensPerWindow\": " << forcedGeneratedTokenIds.size() - 1 << ",\n  \"windows\": [\n";
@@ -2347,11 +2375,15 @@ namespace
 			const auto millisecondsPerToken = window.decodeWallMs / static_cast<double>(window.decodeTokens);
 			const auto tokensPerSecond = static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs;
 			output << "    {\"phase\": \"" << (window.warmup ? "warmup" : "measured")
-			       << "\", \"index\": " << window.index << ", \"stateResetMs\": " << window.stateResetMs
-			       << ", \"prefillMs\": " << window.prefillMs << ", \"decodeWallMs\": " << window.decodeWallMs
-			       << ", \"moduleRunMs\": " << window.moduleRunMs << ", \"decodeTokens\": " << window.decodeTokens
-			       << ", \"msPerToken\": " << millisecondsPerToken << ", \"tokensPerSecond\": " << tokensPerSecond
-			       << '}';
+			       << "\", \"index\": " << window.index
+			       << ", \"windowStartMonotonicNs\": " << window.windowStartMonotonicNs
+			       << ", \"decodeStartMonotonicNs\": " << window.decodeStartMonotonicNs
+			       << ", \"decodeEndMonotonicNs\": " << window.decodeEndMonotonicNs
+			       << ", \"windowEndMonotonicNs\": " << window.windowEndMonotonicNs
+			       << ", \"stateResetMs\": " << window.stateResetMs << ", \"prefillMs\": " << window.prefillMs
+			       << ", \"decodeWallMs\": " << window.decodeWallMs << ", \"moduleRunMs\": " << window.moduleRunMs
+			       << ", \"decodeTokens\": " << window.decodeTokens << ", \"msPerToken\": " << millisecondsPerToken
+			       << ", \"tokensPerSecond\": " << tokensPerSecond << '}';
 			if (index + 1 != windows.size())
 			{
 				output << ',';

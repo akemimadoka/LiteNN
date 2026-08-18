@@ -996,6 +996,10 @@ namespace LiteNN::LlamaCppAdapter
 		{
 			bool warmup{};
 			std::size_t index{};
+			std::int64_t windowStartMonotonicNs{};
+			std::int64_t decodeStartMonotonicNs{};
+			std::int64_t decodeEndMonotonicNs{};
+			std::int64_t windowEndMonotonicNs{};
 			double stateResetMs{};
 			double prefillMs{};
 			double decodeWallMs{};
@@ -1003,6 +1007,9 @@ namespace LiteNN::LlamaCppAdapter
 		};
 		std::vector<Window> windows;
 		windows.reserve(warmupWindowCount + measuredWindowCount);
+		const auto monotonicNanoseconds = [](std::chrono::steady_clock::time_point point) {
+			return std::chrono::duration_cast<std::chrono::nanoseconds>(point.time_since_epoch()).count();
+		};
 		for (std::size_t windowIndex = 0; windowIndex < warmupWindowCount + measuredWindowCount; ++windowIndex)
 		{
 			const auto resetStart = std::chrono::steady_clock::now();
@@ -1031,6 +1038,10 @@ namespace LiteNN::LlamaCppAdapter
 			windows.push_back(
 			    { .warmup = windowIndex < warmupWindowCount,
 			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+			      .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
+			      .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
+			      .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+			      .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
 			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
 			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
 			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
@@ -1073,7 +1084,7 @@ namespace LiteNN::LlamaCppAdapter
 		{
 			throw std::runtime_error("failed to open llama.cpp fixed-decode benchmark report: " + reportPath.string());
 		}
-		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v1\",\n"
+		output << std::setprecision(17) << "{\n  \"schema\": \"litenn.in_process_decode_windows.v2\",\n"
 		       << "  \"producer\": \"llama.cpp\",\n  \"runtime\": \"cpu\",\n"
 		       << "  \"stateReset\": \"llama_memory_clear_metadata\",\n"
 		       << "  \"modelMappedOnce\": true,\n  \"contextCreatedOnce\": true,\n"
@@ -1088,11 +1099,15 @@ namespace LiteNN::LlamaCppAdapter
 			const auto millisecondsPerToken = window.decodeWallMs / static_cast<double>(window.decodeTokens);
 			const auto tokensPerSecond = static_cast<double>(window.decodeTokens) * 1000.0 / window.decodeWallMs;
 			output << "    {\"phase\": \"" << (window.warmup ? "warmup" : "measured")
-			       << "\", \"index\": " << window.index << ", \"stateResetMs\": " << window.stateResetMs
-			       << ", \"prefillMs\": " << window.prefillMs << ", \"decodeWallMs\": " << window.decodeWallMs
-			       << ", \"moduleRunMs\": " << window.decodeWallMs << ", \"decodeTokens\": " << window.decodeTokens
-			       << ", \"msPerToken\": " << millisecondsPerToken << ", \"tokensPerSecond\": " << tokensPerSecond
-			       << '}';
+			       << "\", \"index\": " << window.index
+			       << ", \"windowStartMonotonicNs\": " << window.windowStartMonotonicNs
+			       << ", \"decodeStartMonotonicNs\": " << window.decodeStartMonotonicNs
+			       << ", \"decodeEndMonotonicNs\": " << window.decodeEndMonotonicNs
+			       << ", \"windowEndMonotonicNs\": " << window.windowEndMonotonicNs
+			       << ", \"stateResetMs\": " << window.stateResetMs << ", \"prefillMs\": " << window.prefillMs
+			       << ", \"decodeWallMs\": " << window.decodeWallMs << ", \"moduleRunMs\": " << window.decodeWallMs
+			       << ", \"decodeTokens\": " << window.decodeTokens << ", \"msPerToken\": " << millisecondsPerToken
+			       << ", \"tokensPerSecond\": " << tokensPerSecond << '}';
 			if (index + 1 != windows.size())
 			{
 				output << ',';

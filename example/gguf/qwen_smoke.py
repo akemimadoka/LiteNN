@@ -355,7 +355,7 @@ def write_profile_artifacts(workdir: Path, steps: list[dict[str, object]]) -> tu
                 counters = {
                     key: value
                     for key, value in sample.items()
-                    if key not in ("elapsed_ms", "stage") and isinstance(value, int)
+                    if key not in ("monotonic_ns", "elapsed_ms", "stage") and isinstance(value, int)
                 }
                 trace_events.append(
                     {

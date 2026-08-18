@@ -14,6 +14,8 @@ VmRSS:      3072 kB
 RssAnon:    2048 kB
 RssFile:     768 kB
 RssShmem:    256 kB
+Threads:       7
+Cpus_allowed_list: 0-3,8
 """
         )
         self.assertEqual(metrics["virtual_bytes"], 8192 * 1024)
@@ -21,6 +23,8 @@ RssShmem:    256 kB
         self.assertEqual(metrics["rss_bytes"], 3072 * 1024)
         self.assertEqual(metrics["anonymous_resident_bytes"], 2048 * 1024)
         self.assertEqual(metrics["mapped_resident_bytes"], 1024 * 1024)
+        self.assertEqual(metrics["thread_count"], 7)
+        self.assertEqual(metrics["allowed_cpu_ids"], [0, 1, 2, 3, 8])
 
     def test_summarizes_each_peak_with_its_stage(self) -> None:
         summary = summarize_samples(
@@ -42,6 +46,9 @@ RssShmem:    256 kB
         metrics = sample_current_process()
         self.assertIsInstance(metrics["rss_bytes"], int)
         self.assertGreater(metrics["rss_bytes"], 0)
+        self.assertIsInstance(metrics["cpu_user_ms"], float)
+        self.assertIsInstance(metrics["cpu_system_ms"], float)
+        self.assertGreater(metrics["allowed_cpu_count"], 0)
 
 
 if __name__ == "__main__":

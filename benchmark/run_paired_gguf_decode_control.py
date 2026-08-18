@@ -21,6 +21,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 try:
     from .gguf_decode_compare import litenn_row, litenn_steady_generation_row
+    from .process_memory import ProcessMemorySampler
     from .run_llama_cpp_completion_control import (
         host_metadata,
         parse_perf_output,
@@ -31,6 +32,7 @@ try:
     )
 except ImportError:
     from gguf_decode_compare import litenn_row, litenn_steady_generation_row
+    from process_memory import ProcessMemorySampler
     from run_llama_cpp_completion_control import (
         host_metadata,
         parse_perf_output,
@@ -281,6 +283,7 @@ class WindowsPDHFrequencyMonitor:
             for name in valid_names
             if utilities[name] >= 10.0
         ]
+        active_names = [name for name in valid_names if utilities[name] >= 10.0]
         total_utility = sum(utility)
         weighted = (
             sum(frequencies[name] * max(0.0, utilities[name]) for name in valid_names) / total_utility
@@ -292,6 +295,8 @@ class WindowsPDHFrequencyMonitor:
             "current_mhz": current,
             "active_mhz": active,
             "utility_percent": utility,
+            "host_utility_percent_mean": sum(utility) / len(utility) if utility else None,
+            "active_logical_cpus": active_names,
             "weighted_actual_mhz": weighted,
             "monotonic_ns": time.monotonic_ns(),
         }
@@ -334,11 +339,15 @@ def linux_frequency_sample() -> dict[str, object] | None:
             continue
     if not current:
         return None
+    load = os.getloadavg() if hasattr(os, "getloadavg") else None
     return {
         "source": "linux-cpufreq",
         "current_mhz": current,
         "limit_mhz": limits,
         "max_mhz": maximum,
+        "host_load_1m": load[0] if load is not None else None,
+        "host_load_5m": load[1] if load is not None else None,
+        "host_load_15m": load[2] if load is not None else None,
     }
 
 
@@ -430,12 +439,19 @@ def run_monitored(
     policy_before = power_policy()
     samples: list[dict[str, object]] = []
     frequency_monitor = create_frequency_monitor()
-    initial_sample = frequency_monitor.sample()
-    if initial_sample is not None:
-        samples.append(initial_sample)
+    resource_document: dict[str, object] | None = None
+    resource_sampler: ProcessMemorySampler | None = None
+    final_sample: dict[str, object] | None = None
     try:
         with raw_stdout.open("wb") as stdout_stream, raw_stderr.open("wb") as stderr_stream:
             process = subprocess.Popen(command, stdout=stdout_stream, stderr=stderr_stream)
+            resource_sampler = ProcessMemorySampler(
+                process.pid, max(10, round(monitor_interval_seconds * 1000.0)), lambda: "paired_runtime"
+            )
+            resource_sampler.start()
+            initial_sample = frequency_monitor.sample()
+            if initial_sample is not None:
+                samples.append(initial_sample)
             while True:
                 try:
                     process.wait(timeout=monitor_interval_seconds)
@@ -446,6 +462,8 @@ def run_monitored(
                         samples.append(sample)
         final_sample = frequency_monitor.sample()
     finally:
+        if resource_sampler is not None:
+            resource_document = resource_sampler.stop()
         frequency_monitor.close()
     if final_sample is not None:
         samples.append(final_sample)
@@ -464,6 +482,12 @@ def run_monitored(
             "returncode": process.returncode,
             "wall_seconds": wall_seconds,
             "frequency": summarize_frequency(samples),
+            "telemetry": {
+                "schema": "litenn.paired_process_monitor.v1",
+                "sample_interval_seconds": monitor_interval_seconds,
+                "frequency_samples": samples,
+                "runtime_process_resources": resource_document,
+            },
             "power_policy_before": policy_before,
             "power_policy_after": policy_after,
             "stdout": stdout_path.name,
@@ -520,6 +544,115 @@ def load_tokenizer_token_ids(path: Path) -> list[int]:
     return values
 
 
+def _samples_in_interval(
+    samples: list[dict[str, object]], start_ns: int, end_ns: int
+) -> list[dict[str, object]]:
+    result = []
+    for sample in samples:
+        timestamp = sample.get("monotonic_ns")
+        if isinstance(timestamp, int) and not isinstance(timestamp, bool) and start_ns <= timestamp <= end_ns:
+            result.append(sample)
+    return result
+
+
+def _numeric_values(samples: list[dict[str, object]], name: str) -> list[float]:
+    return [
+        float(value)
+        for sample in samples
+        if isinstance((value := sample.get(name)), (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    ]
+
+
+def summarize_window_telemetry(
+    window: dict[str, object],
+    frequency_samples: list[dict[str, object]],
+    resource_samples: list[dict[str, object]],
+) -> dict[str, object]:
+    start_ns = int(window["decodeStartMonotonicNs"])
+    end_ns = int(window["decodeEndMonotonicNs"])
+    host = _samples_in_interval(frequency_samples, start_ns, end_ns)
+    process = _samples_in_interval(resource_samples, start_ns, end_ns)
+    weighted_frequency = _numeric_values(host, "weighted_actual_mhz")
+    host_utility = _numeric_values(host, "host_utility_percent_mean")
+    host_load = _numeric_values(host, "host_load_1m")
+    active_cpu_union = sorted(
+        {
+            str(cpu)
+            for sample in host
+            for cpu in sample.get("active_logical_cpus", [])  # type: ignore[union-attr]
+        }
+    )
+    allowed_sets = [
+        {int(cpu) for cpu in value}
+        for sample in process
+        if isinstance((value := sample.get("allowed_cpu_ids")), list)
+        and all(isinstance(cpu, int) and not isinstance(cpu, bool) for cpu in value)
+    ]
+    cpu_user = _numeric_values(process, "cpu_user_ms")
+    cpu_system = _numeric_values(process, "cpu_system_ms")
+    cpu_delta_ms = None
+    cpu_utilization_percent = None
+    if len(process) >= 2 and len(cpu_user) >= 2 and len(cpu_system) >= 2:
+        cpu_delta_ms = max(0.0, cpu_user[-1] - cpu_user[0]) + max(0.0, cpu_system[-1] - cpu_system[0])
+        observed_ms = (int(process[-1]["monotonic_ns"]) - int(process[0]["monotonic_ns"])) / 1_000_000.0
+        if observed_ms > 0.0:
+            cpu_utilization_percent = cpu_delta_ms * 100.0 / observed_ms
+
+    def range_summary(name: str) -> dict[str, float | None]:
+        values = _numeric_values(process, name)
+        return {"minimum": min(values) if values else None, "maximum": max(values) if values else None}
+
+    return {
+        "schema": "litenn.decode_window_telemetry.v1",
+        "available": bool(host) and len(process) >= 2,
+        "hostSampleCount": len(host),
+        "processSampleCount": len(process),
+        "weightedActualMHz": {
+            "minimum": min(weighted_frequency) if weighted_frequency else None,
+            "median": statistics.median(weighted_frequency) if weighted_frequency else None,
+            "maximum": max(weighted_frequency) if weighted_frequency else None,
+        },
+        "hostUtilityPercentMean": {
+            "minimum": min(host_utility) if host_utility else None,
+            "median": statistics.median(host_utility) if host_utility else None,
+            "maximum": max(host_utility) if host_utility else None,
+        },
+        "hostLoad1m": {
+            "minimum": min(host_load) if host_load else None,
+            "median": statistics.median(host_load) if host_load else None,
+            "maximum": max(host_load) if host_load else None,
+        },
+        "activeLogicalCPUUnion": active_cpu_union,
+        "processCPUTimeDeltaMs": cpu_delta_ms,
+        "processCPUUtilizationPercent": cpu_utilization_percent,
+        "rssBytes": range_summary("rss_bytes"),
+        "privateBytes": range_summary("private_bytes"),
+        "allowedCPUUnion": sorted(set().union(*allowed_sets)) if allowed_sets else [],
+        "allowedCPUIntersection": sorted(set.intersection(*allowed_sets)) if allowed_sets else [],
+    }
+
+
+def load_litenn_runtime_resource_document(report_path: Path) -> dict[str, object]:
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    steps = report.get("steps")
+    if not isinstance(steps, list):
+        raise RuntimeError("LiteNN smoke report is missing process steps")
+    decode_steps = [step for step in steps if isinstance(step, dict) and step.get("name") == "litenn_decode_token_ids"]
+    if len(decode_steps) != 1 or not isinstance(decode_steps[0].get("memory"), str):
+        raise RuntimeError("LiteNN smoke report is missing decode-process telemetry")
+    recorded_path = Path(str(decode_steps[0]["memory"]))
+    candidates = [recorded_path] if recorded_path.is_absolute() else [repo_root() / recorded_path, report_path.parent / recorded_path.name]
+    memory_path = next((candidate for candidate in candidates if candidate.exists()), None)
+    if memory_path is None:
+        raise RuntimeError("LiteNN decode-process telemetry file does not exist")
+    document = json.loads(memory_path.read_text(encoding="utf-8"))
+    if document.get("schema") != "litenn.process_memory.v2" or not isinstance(document.get("samples"), list):
+        raise RuntimeError("LiteNN decode-process telemetry has an unsupported schema")
+    return document
+
+
 def load_in_process_decode_report(
     path: Path,
     *,
@@ -528,10 +661,12 @@ def load_in_process_decode_report(
     measured_windows: int,
     prompt_tokens: int,
     decode_tokens: int,
+    frequency_samples: list[dict[str, object]] | None = None,
+    resource_samples: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     document = json.loads(path.read_text(encoding="utf-8"))
     expected = {
-        "schema": "litenn.in_process_decode_windows.v1",
+        "schema": "litenn.in_process_decode_windows.v2",
         "producer": producer,
         "warmupWindows": warmup_windows,
         "measuredWindows": measured_windows,
@@ -547,6 +682,7 @@ def load_in_process_decode_report(
     measured_throughputs: list[float] = []
     measured_latencies: list[float] = []
     phase_counts = {"warmup": 0, "measured": 0}
+    previous_window_end = 0
     for window in windows:
         if not isinstance(window, dict) or window.get("phase") not in phase_counts:
             raise RuntimeError("in-process decode report contains an invalid window")
@@ -555,12 +691,36 @@ def load_in_process_decode_report(
         if window.get("index") != expected_index or window.get("decodeTokens") != decode_tokens:
             raise RuntimeError("in-process decode report window order or token count is invalid")
         phase_counts[phase] += 1
+        timestamps = []
+        for name in (
+            "windowStartMonotonicNs",
+            "decodeStartMonotonicNs",
+            "decodeEndMonotonicNs",
+            "windowEndMonotonicNs",
+        ):
+            value = window.get(name)
+            if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                raise RuntimeError(f"in-process decode report contains invalid {name}")
+            timestamps.append(value)
+        if timestamps != sorted(timestamps) or timestamps[1] == timestamps[2]:
+            raise RuntimeError("in-process decode report contains invalid window timestamp ordering")
+        if previous_window_end > timestamps[0]:
+            raise RuntimeError("in-process decode report contains overlapping windows")
+        previous_window_end = timestamps[-1]
         for name in ("stateResetMs", "prefillMs", "decodeWallMs", "moduleRunMs", "msPerToken", "tokensPerSecond"):
             value = window.get(name)
             if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
                 raise RuntimeError(f"in-process decode report contains invalid {name}")
             if name in ("decodeWallMs", "moduleRunMs", "msPerToken", "tokensPerSecond") and value <= 0.0:
                 raise RuntimeError(f"in-process decode report contains non-positive {name}")
+        timestamp_decode_ms = (timestamps[2] - timestamps[1]) / 1_000_000.0
+        if not math.isclose(
+            timestamp_decode_ms,
+            float(window["decodeWallMs"]),
+            rel_tol=1e-6,
+            abs_tol=0.05,
+        ):
+            raise RuntimeError("in-process decode report timestamp duration does not match decodeWallMs")
         if phase == "measured":
             measured_throughputs.append(float(window["tokensPerSecond"]))
             measured_latencies.append(float(window["msPerToken"]))
@@ -581,7 +741,43 @@ def load_in_process_decode_report(
         float(reported_cv), float(throughput["coefficient_of_variation_percent"]), rel_tol=1e-9, abs_tol=1e-9
     ):
         raise RuntimeError("in-process decode report throughput CV does not match its windows")
-    document["validated_statistics"] = {"tokens_per_second": throughput, "ms_per_token": latency}
+    measured_windows_raw = [window for window in windows if window["phase"] == "measured"]
+    measured_values = [float(window["tokensPerSecond"]) for window in measured_windows_raw]
+    adjacent_deltas = [
+        (current / previous - 1.0) * 100.0
+        for previous, current in zip(measured_values, measured_values[1:])
+        if previous > 0.0
+    ]
+    monotonic_direction = "flat"
+    if any(current != previous for previous, current in zip(measured_values, measured_values[1:])):
+        if all(current >= previous for previous, current in zip(measured_values, measured_values[1:])):
+            monotonic_direction = "increasing"
+        elif all(current <= previous for previous, current in zip(measured_values, measured_values[1:])):
+            monotonic_direction = "decreasing"
+        else:
+            monotonic_direction = "mixed"
+    temporal_drift = {
+        "first_to_last_percent": (measured_values[-1] / measured_values[0] - 1.0) * 100.0,
+        "maximum_absolute_adjacent_percent": max((abs(value) for value in adjacent_deltas), default=0.0),
+        "direction": monotonic_direction,
+    }
+    host_samples = frequency_samples or []
+    process_samples = resource_samples or []
+    for window in windows:
+        window["telemetry"] = summarize_window_telemetry(window, host_samples, process_samples)
+    measured_coverage = [bool(window["telemetry"]["available"]) for window in measured_windows_raw]
+    document["telemetry"] = {
+        "schema": "litenn.decode_window_telemetry.v1",
+        "hostRawSampleCount": len(host_samples),
+        "processRawSampleCount": len(process_samples),
+        "measuredWindowsCovered": sum(measured_coverage),
+        "allMeasuredWindowsCovered": all(measured_coverage),
+    }
+    document["validated_statistics"] = {
+        "tokens_per_second": throughput,
+        "ms_per_token": latency,
+        "temporal_drift": temporal_drift,
+    }
     return document
 
 
@@ -888,6 +1084,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
             f"- Process-level variance gate: `{gate['process_variance']}`",  # type: ignore[index]
             f"- In-process window variance gate: `{gate['in_process_variance']}`",  # type: ignore[index]
+            f"- Window telemetry coverage gate: `{gate['window_telemetry']}`",  # type: ignore[index]
             f"- Variance gate: `{gate['variance']}`",  # type: ignore[index]
             f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         ]
@@ -902,10 +1099,13 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         )
     if document["configuration"]["in_process_windows"]:  # type: ignore[index]
         window_cv = summary["in_process_window_cv_percent"]
+        temporal_drift = summary["in_process_temporal_drift_percent"]
         lines.extend(
             [
                 f"- llama.cpp median within-process CV: `{window_cv['llama_cpp']['median']:.2f}%`",  # type: ignore[index]
                 f"- LiteNN median within-process CV: `{window_cv['litenn']['median']:.2f}%`",  # type: ignore[index]
+                f"- llama.cpp median first-to-last window drift: `{temporal_drift['llama_cpp']['median']:+.2f}%`",  # type: ignore[index]
+                f"- LiteNN median first-to-last window drift: `{temporal_drift['litenn']['median']:+.2f}%`",  # type: ignore[index]
             ]
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1119,6 +1319,8 @@ def main() -> int:
                 if args.in_process_windows:
                     assert prompt_token_ids is not None
                     fixed_reference = document["fixed_replay_reference"]
+                    process_telemetry = process_record["telemetry"]
+                    runtime_resources = process_telemetry["runtime_process_resources"]
                     window_report = load_in_process_decode_report(
                         in_process_report_path,
                         producer="llama.cpp",
@@ -1126,6 +1328,8 @@ def main() -> int:
                         measured_windows=args.in_process_windows,
                         prompt_tokens=len(prompt_token_ids),
                         decode_tokens=args.predict - 1,
+                        frequency_samples=process_telemetry["frequency_samples"],
+                        resource_samples=runtime_resources["samples"],
                     )
                     window_statistics = window_report["validated_statistics"]
                     pair["llama_cpp"] = {
@@ -1179,6 +1383,12 @@ def main() -> int:
                 if args.in_process_windows:
                     assert prompt_token_ids is not None
                     fixed_reference = document["fixed_replay_reference"]
+                    process_telemetry = process_record["telemetry"]
+                    process_telemetry["launcher_process_resources"] = process_telemetry[
+                        "runtime_process_resources"
+                    ]
+                    runtime_resources = load_litenn_runtime_resource_document(report_path)
+                    process_telemetry["runtime_process_resources"] = runtime_resources
                     window_report = load_in_process_decode_report(
                         in_process_report_path,
                         producer="LiteNN",
@@ -1186,6 +1396,8 @@ def main() -> int:
                         measured_windows=args.in_process_windows,
                         prompt_tokens=len(prompt_token_ids),
                         decode_tokens=args.predict - 1,
+                        frequency_samples=process_telemetry["frequency_samples"],
+                        resource_samples=runtime_resources["samples"],
                     )
                     window_statistics = window_report["validated_statistics"]
                     ms_per_token = window_statistics["ms_per_token"]["median"]
@@ -1256,6 +1468,17 @@ def main() -> int:
                     and litenn_window_cv <= args.variance_threshold_percent
                 ),
             }
+            llama_telemetry_covered = bool(  # type: ignore[index]
+                llama["in_process"]["telemetry"]["allMeasuredWindowsCovered"]
+            )
+            litenn_telemetry_covered = bool(  # type: ignore[index]
+                litenn_result["in_process"]["telemetry"]["allMeasuredWindowsCovered"]
+            )
+            pair["window_telemetry"] = {
+                "llama_cpp_covered": llama_telemetry_covered,
+                "litenn_covered": litenn_telemetry_covered,
+                "passed": llama_telemetry_covered and litenn_telemetry_covered,
+            }
         pair["power_policy_stable"] = paired_power_policy_stable(  # type: ignore[index]
             llama["process"], litenn_result["process"]  # type: ignore[index]
         )
@@ -1314,8 +1537,25 @@ def main() -> int:
                 [float(pair["in_process_variance"]["litenn_cv_percent"]) for pair in pairs]  # type: ignore[index]
             ),
         }
+        summary["in_process_temporal_drift_percent"] = {
+            "llama_cpp": series_statistics(
+                [
+                    float(pair["llama_cpp"]["in_process"]["validated_statistics"]["temporal_drift"]["first_to_last_percent"])  # type: ignore[index]
+                    for pair in pairs
+                ]
+            ),
+            "litenn": series_statistics(
+                [
+                    float(pair["litenn"]["in_process"]["validated_statistics"]["temporal_drift"]["first_to_last_percent"])  # type: ignore[index]
+                    for pair in pairs
+                ]
+            ),
+        }
     in_process_variance_passed = not args.in_process_windows or all(
         bool(pair["in_process_variance"]["passed"]) for pair in pairs  # type: ignore[index]
+    )
+    window_telemetry_passed = not args.in_process_windows or all(
+        bool(pair["window_telemetry"]["passed"]) for pair in pairs  # type: ignore[index]
     )
     gate = {
         "text_parity": all(bool(pair["text_match"]) for pair in pairs),  # type: ignore[index]
@@ -1333,12 +1573,14 @@ def main() -> int:
         "power_policy_stability": all(bool(pair["power_policy_stable"]) for pair in pairs),
         "process_variance": process_variance_passed,
         "in_process_variance": in_process_variance_passed,
+        "window_telemetry": window_telemetry_passed,
         "variance": process_variance_passed and in_process_variance_passed,
     }
     gate["accepted"] = bool(
         gate["trajectory_parity"]
         and gate["no_fallback"]
         and gate["power_policy_stability"]
+        and gate["window_telemetry"]
         and gate["variance"]
     )
     document["summary"] = summary
@@ -1356,7 +1598,7 @@ def main() -> int:
     )
     if not gate["power_policy_stability"]:
         return 2
-    return 2 if args.require_variance_gate and not gate["variance"] else 0
+    return 2 if args.require_variance_gate and not gate["accepted"] else 0
 
 
 if __name__ == "__main__":

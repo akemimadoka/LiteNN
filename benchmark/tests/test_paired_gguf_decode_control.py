@@ -120,6 +120,10 @@ class FixedTokenReplayTest(unittest.TestCase):
             {
                 "phase": "warmup",
                 "index": 0,
+                "windowStartMonotonicNs": 1_000_000_000,
+                "decodeStartMonotonicNs": 2_000_000_000,
+                "decodeEndMonotonicNs": 2_008_000_000,
+                "windowEndMonotonicNs": 2_008_000_000,
                 "stateResetMs": 0.01,
                 "prefillMs": 10.0,
                 "decodeWallMs": 8.0,
@@ -131,6 +135,10 @@ class FixedTokenReplayTest(unittest.TestCase):
             {
                 "phase": "measured",
                 "index": 0,
+                "windowStartMonotonicNs": 3_000_000_000,
+                "decodeStartMonotonicNs": 4_000_000_000,
+                "decodeEndMonotonicNs": 4_004_000_000,
+                "windowEndMonotonicNs": 4_004_000_000,
                 "stateResetMs": 0.01,
                 "prefillMs": 2.0,
                 "decodeWallMs": 4.0,
@@ -142,6 +150,10 @@ class FixedTokenReplayTest(unittest.TestCase):
             {
                 "phase": "measured",
                 "index": 1,
+                "windowStartMonotonicNs": 5_000_000_000,
+                "decodeStartMonotonicNs": 6_000_000_000,
+                "decodeEndMonotonicNs": 6_005_000_000,
+                "windowEndMonotonicNs": 6_005_000_000,
                 "stateResetMs": 0.01,
                 "prefillMs": 2.0,
                 "decodeWallMs": 5.0,
@@ -156,7 +168,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             path.write_text(
                 json.dumps(
                     {
-                        "schema": "litenn.in_process_decode_windows.v1",
+                        "schema": "litenn.in_process_decode_windows.v2",
                         "producer": "LiteNN",
                         "warmupWindows": 1,
                         "measuredWindows": 2,
@@ -178,8 +190,63 @@ class FixedTokenReplayTest(unittest.TestCase):
                 measured_windows=2,
                 prompt_tokens=3,
                 decode_tokens=4,
+                frequency_samples=[
+                    {
+                        "monotonic_ns": 4_001_000_000,
+                        "weighted_actual_mhz": 5100.0,
+                        "host_utility_percent_mean": 25.0,
+                        "active_logical_cpus": ["0,0", "0,1"],
+                    },
+                    {
+                        "monotonic_ns": 6_001_000_000,
+                        "weighted_actual_mhz": 5000.0,
+                        "host_utility_percent_mean": 30.0,
+                        "active_logical_cpus": ["0,1", "0,2"],
+                    },
+                ],
+                resource_samples=[
+                    {
+                        "monotonic_ns": 4_000_500_000,
+                        "cpu_user_ms": 10.0,
+                        "cpu_system_ms": 2.0,
+                        "rss_bytes": 100,
+                        "private_bytes": 80,
+                        "allowed_cpu_ids": [0, 1],
+                    },
+                    {
+                        "monotonic_ns": 4_003_500_000,
+                        "cpu_user_ms": 15.0,
+                        "cpu_system_ms": 3.0,
+                        "rss_bytes": 120,
+                        "private_bytes": 90,
+                        "allowed_cpu_ids": [0, 1],
+                    },
+                    {
+                        "monotonic_ns": 6_000_500_000,
+                        "cpu_user_ms": 20.0,
+                        "cpu_system_ms": 4.0,
+                        "rss_bytes": 130,
+                        "private_bytes": 95,
+                        "allowed_cpu_ids": [1, 2],
+                    },
+                    {
+                        "monotonic_ns": 6_004_500_000,
+                        "cpu_user_ms": 26.0,
+                        "cpu_system_ms": 5.0,
+                        "rss_bytes": 140,
+                        "private_bytes": 100,
+                        "allowed_cpu_ids": [1, 2],
+                    },
+                ],
             )
             self.assertEqual(report["validated_statistics"]["tokens_per_second"]["median"], 900.0)
+            self.assertEqual(report["validated_statistics"]["temporal_drift"]["direction"], "decreasing")
+            self.assertAlmostEqual(
+                report["validated_statistics"]["temporal_drift"]["first_to_last_percent"], -20.0
+            )
+            self.assertTrue(report["telemetry"]["allMeasuredWindowsCovered"])
+            self.assertEqual(report["windows"][1]["telemetry"]["rssBytes"]["maximum"], 120.0)
+            self.assertAlmostEqual(report["windows"][1]["telemetry"]["processCPUTimeDeltaMs"], 6.0)
 
             document = json.loads(path.read_text(encoding="utf-8"))
             document["summary"]["tokensPerSecondMedian"] = 901.0
