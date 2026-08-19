@@ -210,6 +210,15 @@ namespace LiteNN
 		CPUAOTActivationMathProvider provider{ CPUAOTActivationMathProvider::None };
 		bool strictSupported{ true };
 		bool boundedSupported{};
+		/// Maximum ULP error of the bounded exp primitive before the final SiLU arithmetic.
+		float boundedExpMaximumUlp{};
+		/// Inputs above/below these limits saturate to positive infinity/zero respectively.
+		float boundedExpOverflowInput{};
+		float boundedExpUnderflowInput{};
+		/// NaN, signed zero, and infinity behavior matches the strict SiLU contract.
+		bool boundedPreservesSpecialValues{};
+		/// True when this process can use the provider's vectorized implementation.
+		bool boundedVectorizedOnHost{};
 	};
 
 	CPUAOTActivationMathCapabilities QueryCPUAOTActivationMathCapabilities() noexcept;

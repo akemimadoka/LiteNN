@@ -2804,6 +2804,16 @@ TEST(GGUFLLaMAQuantizedExecution, CPUAOTFusesSwiGLUIntoFieldInterleavedV4DownPro
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
 		ExpectTensorNear(actual[0], expected[1], { .absolute = 1.0e-4, .relative = 1.0e-5 });
+
+		options.cpuAOTActivationMathPolicy = CPUAOTActivationMathPolicy::Bounded;
+		const auto boundedArtifact = Compiler<CPU>::CompileArtifact(plan, options);
+		EXPECT_TRUE(ByteSpanContains(boundedArtifact.Instructions(),
+		                             "litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		EXPECT_FALSE(ByteSpanContains(boundedArtifact.Instructions(),
+		                              "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32"));
+		const auto boundedActual = boundedArtifact.Load().RunTensors(inputs);
+		ASSERT_EQ(boundedActual.size(), 1u);
+		ExpectTensorNear(boundedActual[0], expected[1], { .absolute = 1.0e-4, .relative = 1.0e-5 });
 	}
 }
 

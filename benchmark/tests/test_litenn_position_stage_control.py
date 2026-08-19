@@ -52,6 +52,16 @@ class LiteNNPositionStageControlTest(unittest.TestCase):
             ),
             "ffn.swiglu_down_fused",
         )
+        self.assertEqual(
+            stage_for_helper(
+                helper(
+                    "projection",
+                    "ffn_down",
+                    "litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32",
+                )
+            ),
+            "ffn.swiglu_down_fused",
+        )
 
     def test_parses_generation_steps_and_helper_stages(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:

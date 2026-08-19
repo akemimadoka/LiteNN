@@ -100,6 +100,15 @@ extern "C" void litenn_cpu_swiglu_f32(const float*, const float* gateAligned, st
                                       std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
                                       std::int64_t outRowStride, std::int64_t outColumnStride);
 
+extern "C" void litenn_cpu_swiglu_bounded_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
+                                              std::int64_t gateRows, std::int64_t gateColumns,
+                                              std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*,
+                                              const float* upAligned, std::int64_t upOffset, std::int64_t upRows,
+                                              std::int64_t upColumns, std::int64_t upRowStride,
+                                              std::int64_t upColumnStride, float*, float* outAligned,
+                                              std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+                                              std::int64_t outRowStride, std::int64_t outColumnStride);
+
 extern "C" void litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
     const float*, const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows, std::int64_t gateColumns,
     std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*, const float* upAligned,
@@ -1708,6 +1717,7 @@ namespace
 	enum class SwiGLUBenchmarkMathPolicy
 	{
 		StrictStdExp,
+		BuiltInBoundedApproximate,
 		GGMLBoundedApproximate,
 	};
 
@@ -1762,6 +1772,16 @@ namespace
 					                      offset, 1, static_cast<std::int64_t>(width),
 					                      static_cast<std::int64_t>(rowStorage), columnStride);
 				}
+				else if (mathPolicy == SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate)
+				{
+					const auto offset = static_cast<std::int64_t>(base);
+					litenn_cpu_swiglu_bounded_f32(nullptr, gate.data(), offset, 1, static_cast<std::int64_t>(width),
+					                              static_cast<std::int64_t>(rowStorage), columnStride, nullptr,
+					                              up.data(), offset, 1, static_cast<std::int64_t>(width),
+					                              static_cast<std::int64_t>(rowStorage), columnStride, nullptr,
+					                              output.data(), offset, 1, static_cast<std::int64_t>(width),
+					                              static_cast<std::int64_t>(rowStorage), columnStride);
+				}
 				else
 				{
 					ggml_vec_swiglu_f32(static_cast<int>(width), output.data() + base, gate.data() + base,
@@ -1800,6 +1820,15 @@ namespace
 			                      static_cast<std::int64_t>(specialOutput.size()),
 			                      static_cast<std::int64_t>(specialOutput.size()), 1);
 		}
+		else if (mathPolicy == SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate)
+		{
+			litenn_cpu_swiglu_bounded_f32(
+			    nullptr, specialGate.data(), 0, 1, static_cast<std::int64_t>(specialGate.size()),
+			    static_cast<std::int64_t>(specialGate.size()), 1, nullptr, specialUp.data(), 0, 1,
+			    static_cast<std::int64_t>(specialUp.size()), static_cast<std::int64_t>(specialUp.size()), 1, nullptr,
+			    specialOutput.data(), 0, 1, static_cast<std::int64_t>(specialOutput.size()),
+			    static_cast<std::int64_t>(specialOutput.size()), 1);
+		}
 		else
 		{
 			ggml_vec_swiglu_f32(static_cast<int>(specialGate.size()), specialOutput.data(), specialGate.data(),
@@ -1832,7 +1861,9 @@ namespace
 		state.counters["column_stride"] = benchmark::Counter(static_cast<double>(columnStride));
 		state.counters["elements_per_call"] = benchmark::Counter(static_cast<double>(width));
 		state.counters["approximate_math"] =
-		    benchmark::Counter(mathPolicy == SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate ? 1.0 : 0.0);
+		    benchmark::Counter(mathPolicy == SwiGLUBenchmarkMathPolicy::StrictStdExp ? 0.0 : 1.0);
+		state.counters["built_in_provider"] =
+		    benchmark::Counter(mathPolicy == SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate ? 1.0 : 0.0);
 		state.counters["max_abs_delta"] = benchmark::Counter(maxAbsDelta);
 		state.counters["max_relative_delta"] = benchmark::Counter(maxRelativeDelta);
 		state.counters["special_value_mismatches"] = benchmark::Counter(static_cast<double>(specialValueMismatches));
@@ -5359,6 +5390,15 @@ namespace
 					                                  SwiGLUBenchmarkMathPolicy::StrictStdExp);
 				    });
 				benchmarkCase->Unit(benchmark::kMillisecond);
+
+				auto* builtInComparison = benchmark::RegisterBenchmark(
+				    std::format("SwiGLUF32ProductionSequence/builtin_bounded_2ulp/{}/calls:{}/width:13824", layoutName,
+				                callCount),
+				    [callCount, columnStride](benchmark::State& state) {
+					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride,
+					                                  SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate);
+				    });
+				builtInComparison->Unit(benchmark::kMillisecond);
 			}
 			auto* ggmlComparison = benchmark::RegisterBenchmark(
 			    std::format(

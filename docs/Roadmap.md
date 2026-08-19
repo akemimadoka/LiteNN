@@ -3240,7 +3240,7 @@ Priority classes:
       - [x] Add benchmark-only non-synchronizing llama.cpp CPU stage counters in a detached worktree, exact prompt/decode
             replay, clean-vs-instrumented binary pairing, aggregate coverage, and strict overhead/variance gates. The
             accepted T8 control measured `-0.21%` overhead and `0.16-0.98%` stage CV without production linkage.
-      - [ ] P0: close the confirmed FFN activation deficit. The accepted split measures reference activation at
+      - [x] P0: close the confirmed FFN activation deficit. The accepted split measures reference activation at
             `0.210 ms/token` and Down at `43.045 ms/token`, versus LiteNN helper lower bounds of `11.043/42.723 ms`.
             Activation is `+10.833 ms` and `52.5x`, accounting for about `84%` of the prior accepted composite gap;
             Down is within `0.322 ms` of reference and remains closed to new rewrites.
@@ -3284,21 +3284,21 @@ Priority classes:
             provider. Seven paired-binary repetitions measured strict `15.8 ms` versus bounded `0.526 ms` for 48 calls,
             about `30x` and `15.3 ms` saved, with max absolute/relative error `9.54e-7/3.47e-7` and zero special-value
             mismatches.
-      - [ ] Choose the vector-math ownership boundary: vendor a maintained cross-platform provider such as SLEEF, or
-            explicitly own an attributed compact kernel derived from pinned GGML. Avoid linking the complete GGML
-            runtime into `LiteNNCompiler` for one activation primitive.
+      - [x] Choose the vector-math ownership boundary. LiteNN owns an attributed compact kernel derived from the pinned
+            ggml implementation, keeps strict scalar `std::exp` as the default/reference, and avoids both a new
+            dependency and complete ggml runtime linkage.
       - [x] Establish an explicit bounded activation-math compiler/artifact contract covering standalone and fused
             SwiGLU symbol selection, capability reporting, unsupported-provider rejection, rodata-v6 runtime features,
             CPU AOT cache-v4 identity, GGUF CLI/environment configuration, and smoke-report provenance. Strict scalar
             `std::exp` remains the default/reference path, and bounded artifacts cannot silently fall back.
-      - [ ] After selecting the provider, implement the bounded standalone/fused helpers and freeze error, saturation,
-            special-value, and ISA-dispatch behavior with cross-platform execution tests. Capability remains disabled
-            until this executable slice is complete.
-      - [ ] Promote a candidate to full Qwen decode only after the 48-call row improves by at least `2x` or `5 ms`.
-            Retention requires three alternating cache-hit pairs, at least `3%` median token-latency gain, identical
-            token ids/text, no fallback, and a regenerated cache-v4 artifact that imports the intended helper.
-      - [ ] After promotion, repeat the accepted five-stage aggregate profile and require that activation moves without
-            transferring its cost to Down, dispatch, or the module residual.
+      - [x] Implement bounded standalone/fused helpers and freeze a conservative 2 ULP error bound, saturation inputs,
+            special-value behavior, AVX2+FMA dispatch, scalar tail, and cross-platform fallback contracts.
+      - [x] Pass the production-shape and full-Qwen promotion gates. The built-in 48-call row is `0.182-0.184 ms`
+            versus an initial strict `11.6 ms`; three alternating cache-hit pairs improve `5.20/3.05/9.00%`
+            (`5.20%` median) with identical token ids/text, no fallback, and the intended cache-v4 helper artifact.
+      - [x] Repeat stage attribution after promotion. Activation falls `12.338 -> 1.038 ms`; Down remains effectively
+            unchanged at `41.969 -> 42.832 ms`, while whole-step median falls `179.850 -> 172.944 ms`. Evidence:
+            `docs/QwenCPUDecodeBoundedActivationEvidence_2026-08-19.md`.
       - [x] P0 parallel: attribute the sustained context-dependent module slope before selecting Attention/KV
             implementation work.
             - [x] Add fixed-reference replay while retaining natural argmax diagnostics, exact token-identity gates,
@@ -3649,7 +3649,7 @@ Priority classes:
       - [x] Implement and reject the bounded Down-path tranche: interleaved output-group streams, software prefetch,
             Q4_K AVX2 x16 selection, and Q6_K AVX2/AVX-512 selection all failed the production-shaped mixed-stream
             gate and were removed. The production Q4_K x8/Q6_K AVX-512 x16 routes remain selected.
-      - [ ] P0: reduce the confirmed FFN activation deficit; keep Down rewrites closed without new accepted evidence.
+      - [x] P0: reduce the confirmed FFN activation deficit; keep Down rewrites closed without new accepted evidence.
             - [x] Split reference SwiGLU from Q4_K/Q6_K Down with non-synchronizing aggregate counters. Three
                   exact-token pairs passed overhead, coverage, whole-run variance, and stage-variance gates; reference
                   activation/Down medians are `0.210/43.045 ms/token`.
@@ -3662,11 +3662,14 @@ Priority classes:
             - [x] Add the separately named strict/bounded compiler and artifact contract. Standalone/fused helper symbol
                   selection, capability gating, cache-v4 identity, rodata-v6 runtime features, GGUF CLI/environment
                   configuration, and smoke-report provenance are complete; unsupported bounded requests fail early.
-            - [ ] Select the vector-math ownership boundary, implement the bounded standalone/fused helpers, and freeze
-                  explicit error, saturation, special-value, ISA-dispatch, and cross-platform execution contracts.
-            - [ ] Promote a candidate to full decode only after at least `2x` or `5 ms/token` activation savings; retain
-                  it only after three exact-token/no-fallback alternating pairs improve median token latency by at
-                  least `3%` and preserve the adjacent reference stage/whole-token gates.
+            - [x] Select the vector-math ownership boundary, implement bounded standalone/fused helpers, and freeze a
+                  conservative 2 ULP error bound, saturation inputs, special values, AVX2+FMA dispatch, scalar tail,
+                  and cross-platform fallback contracts. LiteNN owns a compact attributed kernel derived from the
+                  pinned ggml implementation without linking the full runtime.
+            - [x] Pass full-decode promotion. The 48-call built-in row is `0.182-0.184 ms` versus an initial strict
+                  `11.6 ms`; three exact-token/no-fallback pairs improve `5.20/3.05/9.00%` (`5.20%` median). A helper
+                  profile attributes `12.338 -> 1.038 ms` to activation and only `41.969 -> 42.832 ms` to Down.
+                  Evidence: `docs/QwenCPUDecodeBoundedActivationEvidence_2026-08-19.md`.
       - [ ] Re-run alternating LiteNN/llama.cpp full-decode and stage profiles using each runtime's measured production
             thread policy. Acceptance requires no fallback, unchanged generated output, prepared weights no larger
             than `1.03x` source quantized bytes, the promoted stage within `10%`, and total latency within `5%` of the

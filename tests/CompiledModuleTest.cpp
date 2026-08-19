@@ -1381,37 +1381,71 @@ TEST(CompiledModuleTest, CPUActivationMathCapabilitiesAreExplicit)
 	const auto options = CompilerOptions::Defaults();
 	EXPECT_EQ(options.cpuAOTActivationMathPolicy, CPUAOTActivationMathPolicy::Strict);
 	const auto capabilities = QueryCPUAOTActivationMathCapabilities();
-	EXPECT_EQ(capabilities.provider, CPUAOTActivationMathProvider::None);
+	EXPECT_EQ(capabilities.provider, CPUAOTActivationMathProvider::BuiltIn);
 	EXPECT_TRUE(capabilities.strictSupported);
-	EXPECT_FALSE(capabilities.boundedSupported);
+	EXPECT_TRUE(capabilities.boundedSupported);
+	EXPECT_FLOAT_EQ(capabilities.boundedExpMaximumUlp, 2.0F);
+	EXPECT_FLOAT_EQ(capabilities.boundedExpOverflowInput, 88.3762626647949F);
+	EXPECT_FLOAT_EQ(capabilities.boundedExpUnderflowInput, -103.972084045410F);
+	EXPECT_TRUE(capabilities.boundedPreservesSpecialValues);
 	EXPECT_TRUE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Strict));
-	EXPECT_FALSE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Bounded));
+	EXPECT_TRUE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Bounded));
 	EXPECT_FALSE(IsCPUAOTActivationMathPolicySupported(static_cast<CPUAOTActivationMathPolicy>(999)));
 }
 
-TEST(CompiledModuleTest, CPURejectsBoundedActivationMathWithoutProvider)
+TEST(CompiledModuleTest, CPUBoundedActivationMathCompilesAndMatchesContract)
 {
 	Graph graph;
 	Subgraph sg;
-	const auto gate = sg.AddParam(DataType::Float32, { 1, 4 });
-	const auto up = sg.AddParam(DataType::Float32, { 1, 4 });
+	const auto gate = sg.AddParam(DataType::Float32, { 1, 18 });
+	const auto up = sg.AddParam(DataType::Float32, { 1, 18 });
 	const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
-	                               { OutputInfo{ DataType::Float32, { 1, 4 } } });
+	                               { OutputInfo{ DataType::Float32, { 1, 18 } } });
 	sg.SetResults({ { output, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	auto options = CompilerOptions::Defaults();
 	options.cpuAOTActivationMathPolicy = CPUAOTActivationMathPolicy::Bounded;
-	try
+	const auto artifact = Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
+	const std::string instructions(reinterpret_cast<const char*>(artifact.Instructions().data()),
+	                               artifact.Instructions().size());
+	EXPECT_NE(instructions.find("litenn_cpu_swiglu_bounded_f32"), std::string::npos);
+	EXPECT_EQ(instructions.find("litenn_cpu_swiglu_f32"), std::string::npos);
+
+	const auto nan = std::numeric_limits<float>::quiet_NaN();
+	const auto infinity = std::numeric_limits<float>::infinity();
+	std::array inputs = {
+		Tensor<CPU>({ -8.0F, -4.0F, -1.0F, -0.0F, 0.0F, 0.25F, 0.5F, 1.0F, 2.0F, 4.0F, 8.0F, 20.0F, -20.0F, infinity,
+		              -infinity, nan, 100.0F, -88.0F },
+		            { 1, 18 }),
+		Tensor<CPU>({ 0.5F, -0.75F, 1.0F, -1.0F, 1.0F, 1.25F, -1.5F, 2.0F, -2.0F, 0.25F, -0.5F, 1.0F, 1.0F, 1.0F, 1.0F,
+		              1.0F, 1.0F, 1.0F },
+		            { 1, 18 }),
+	};
+	const auto actual = artifact.Load().RunTensors(inputs);
+	ASSERT_EQ(actual.size(), 1U);
+	for (std::size_t i = 0; i < 18; ++i)
 	{
-		(void) Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
-		FAIL() << "expected unavailable bounded activation math to be rejected";
-	}
-	catch (const std::invalid_argument& ex)
-	{
-		const std::string message = ex.what();
-		EXPECT_NE(message.find("bounded activation math"), std::string::npos);
-		EXPECT_NE(message.find("vector-math provider"), std::string::npos);
+		const auto gateValue = ReadAsFloat(inputs[0], i);
+		const auto upValue = ReadAsFloat(inputs[1], i);
+		const auto expected = gateValue / (1.0F + std::exp(-gateValue)) * upValue;
+		const auto value = ReadAsFloat(actual[0], i);
+		if (std::isnan(expected))
+		{
+			EXPECT_TRUE(std::isnan(value)) << "element " << i;
+		}
+		else if (std::isinf(expected))
+		{
+			EXPECT_EQ(value, expected) << "element " << i;
+		}
+		else
+		{
+			EXPECT_NEAR(value, expected, 2.0e-6F) << "element " << i;
+			if (expected == 0.0F)
+			{
+				EXPECT_EQ(std::signbit(value), std::signbit(expected)) << "element " << i;
+			}
+		}
 	}
 }
 
@@ -1458,6 +1492,22 @@ TEST(CompiledModuleTest, CPUFusedSwiGLUArtifactMatchesInterpreter)
 	EXPECT_TRUE(std::ranges::any_of(helperEvents, [](const auto& event) {
 		return event.helper == "litenn_cpu_swiglu_f32" && event.calls == 1 && event.totalMilliseconds > 0.0;
 	}));
+
+	auto boundedOptions = CompilerOptions::Defaults();
+	boundedOptions.cpuAOTActivationMathPolicy = CPUAOTActivationMathPolicy::Bounded;
+	const auto boundedArtifact =
+	    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), boundedOptions);
+	const std::string boundedInstructions(reinterpret_cast<const char*>(boundedArtifact.Instructions().data()),
+	                                      boundedArtifact.Instructions().size());
+	EXPECT_NE(boundedInstructions.find("litenn_cpu_swiglu_bounded_f32"), std::string::npos);
+	const auto boundedActual = boundedArtifact.Load().RunTensors(inputs);
+	Runtime::Interpreter<CPU> interpreter;
+	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs);
+	ASSERT_EQ(boundedActual.size(), expected.size());
+	for (std::size_t i = 0; i < boundedActual.size(); ++i)
+	{
+		ExpectTensorNear(boundedActual[i], expected[i], 2.0e-6F);
+	}
 }
 
 TEST(CompiledModuleTest, CPUMergedLoRALinearMatchesInterpreter)
@@ -2816,7 +2866,7 @@ TEST(CompiledModuleTest, RejectsRodataWithInvalidBackendMetadata)
 	}
 }
 
-TEST(CompiledModuleTest, RejectsRodataRequiringUnavailableBoundedActivationMath)
+TEST(CompiledModuleTest, LoadsRodataRequiringAvailableBoundedActivationMath)
 {
 	auto graph = BuildSimpleAddGraph();
 	auto compiled = Compiler<CPU>::Compile(Detail::BuildExecutablePlanFromGraph(graph));
@@ -2833,17 +2883,7 @@ TEST(CompiledModuleTest, RejectsRodataRequiringUnavailableBoundedActivationMath)
 		.instructionSize = compiled.Instructions().size(),
 	};
 
-	try
-	{
-		(void) CompiledModule<CPU>::Load(image);
-		FAIL() << "expected unavailable artifact feature validation to throw";
-	}
-	catch (const std::runtime_error& ex)
-	{
-		const std::string message = ex.what();
-		EXPECT_NE(message.find("bounded activation math"), std::string::npos);
-		EXPECT_NE(message.find("vector-math provider"), std::string::npos);
-	}
+	EXPECT_NO_THROW((void) CompiledModule<CPU>::Load(image));
 }
 
 TEST(CompiledModuleTest, ConcurrentRunUsesIndependentInputAndOutputBuffers)

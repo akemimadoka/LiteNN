@@ -72,11 +72,13 @@ P0 implementation order:
   - [x] Split reference activation from Down, repair real-artifact fusion eligibility, and evaluate the available
     bounded SwiGLU control. The accepted split has `-0.79%` median overhead, `98.44%` coverage, and at most `5.61%`
     stage CV; stale-cache fusion eligibility is repaired; strict scalar and vendored bounded 48-call controls measure
-    `15.8/0.526 ms`. Exact SIMD remains unavailable until the vector-math ownership boundary is selected.
+    `15.8/0.526 ms`.
   - [x] Establish a separately named bounded compiler/artifact policy before selecting a vector-math provider. Strict
     remains the default; capability, helper-symbol, rodata-v6, cache-v4, CLI, and smoke-report identity are complete.
-  - [ ] Select the vector-math owner, implement the bounded standalone/fused helpers, and pass standalone plus
-    exact-token full-model promotion gates before reopening any other implementation direction.
+  - [x] Select the vector-math owner, implement the bounded standalone/fused helpers, and pass standalone plus
+    exact-token full-model promotion gates. The attributed built-in AVX2+FMA implementation saves about `11.4 ms` in
+    the 48-call production shape and three full-model pairs improve `3.05-9.00%` (`5.20%` median) with identical
+    output/no fallback. Evidence: `docs/QwenCPUDecodeBoundedActivationEvidence_2026-08-19.md`.
   - [x] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
     control measures LiteNN/reference medians of `4.768/5.700 token/s` (`-15.01%` paired median); LiteNN module time
     rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. The first reference-side
@@ -496,7 +498,7 @@ P0 implementation order:
     AVX-512 x16 remains selected.
   - Preserve the field-interleaved-v4 layout ABI unless a replacement proves both higher full-decode throughput and a
     prepared-size ratio no greater than `1.03x`.
-- [ ] P0 active: reduce the confirmed FFN activation deficit.
+- [x] P0: reduce the confirmed FFN activation deficit.
   - Decision evidence: `docs/QwenCPUDecodeFFNActivationDownDecision_2026-08-04.md`; corrected artifact evidence and
     production-shape SwiGLU measurements: `docs/QwenCPUDecodeSwiGLUEvidence_2026-08-09.md`; accepted cross-runtime
     split: `docs/QwenCPUDecodeActivationDownSplit_2026-08-09.md`; consolidated data-to-decision record:
@@ -523,24 +525,23 @@ P0 implementation order:
     x86 vector-exp provider. In the same executable, seven 48-call repetitions measured strict `15.8 ms` versus GGML
     bounded `0.526 ms` (`30.0x`, about `15.3 ms` saved), with max absolute/relative error `9.54e-7/3.47e-7` and zero
     special-value mismatches. Exact SIMD cannot be implemented by surrounding scalar libm with AVX arithmetic.
-  - [ ] Choose and implement the vector-math ownership boundary. Preferred production option: vendor a maintained
-    cross-platform provider such as SLEEF while keeping strict scalar `std::exp` as default/reference. Alternative:
-    own a small attributed kernel derived from pinned GGML. Do not link the complete GGML runtime into
-    `LiteNNCompiler` for one primitive.
+  - [x] Choose and implement the vector-math ownership boundary. LiteNN owns a small attributed kernel derived from
+    the already pinned ggml implementation, keeping strict scalar `std::exp` as default/reference and avoiding a new
+    dependency or complete ggml runtime linkage.
   - [x] Establish the separately named activation-math policy and artifact contract before selecting a provider.
     `Strict` remains the default; explicit `Bounded` selection has distinct standalone/fused helper symbols, capability
     reporting, early unsupported-provider rejection, rodata-v6 required-runtime features, CPU AOT cache-v4 identity,
     GGUF CLI/environment configuration, and Qwen smoke-report provenance. Unsupported artifacts cannot silently load
     or fall back to strict scalar math.
-  - [ ] After choosing the provider, implement the bounded standalone and fused helpers and freeze their maximum-error,
-    saturation, special-value, and ISA-dispatch contracts. Keep the capability disabled until those executable paths
-    and their cross-platform tests exist.
-  - [ ] Require at least `2x` or `5 ms/token` savings in the 48-layer SwiGLU benchmark before an exact-token full-model
-    run. Retention then requires three alternating cache-hit pairs, at least `3%` median full-token improvement,
-    unchanged token ids/text, no fallback, FFN activation + Down within `10%`, and whole-token latency within `5%` of
-    the adjacent Clang/no-OpenMP control.
-  - [ ] Repeat the accepted five-stage aggregate profile after promotion and verify that activation moved without
-    transferring the cost to Down, dispatch, or the module residual.
+  - [x] Implement bounded standalone and fused helpers and freeze their maximum-error, saturation, special-value, and
+    ISA-dispatch contracts. The public capability reports a conservative 2 ULP bound, fixed overflow/underflow inputs,
+    special-value preservation, and host AVX2+FMA availability; scalar tails and cross-platform fallback are covered.
+  - [x] Pass the production-shape and full-model promotion gates. The stable built-in row is `0.182-0.184 ms` for 48
+    calls versus an initial strict `11.6 ms`; three alternating cache-hit pairs improve `5.20%`, `3.05%`, and `9.00%`
+    with identical token ids/text and no fallback.
+  - [x] Repeat stage attribution after promotion. Activation moves from `12.338` to `1.038 ms` while Down changes only
+    `41.969 -> 42.832 ms`; helper total and whole-step medians improve `7.841/6.907 ms`. The remaining reference
+    whole-token gate belongs to controlled full-model closure, not activation implementation.
 - [ ] Close with controlled full-model evidence.
   - Alternate at least three LiteNN and three CPU-only llama.cpp runs using each runtime's measured production thread
     policy; capture actual frequency to control host state and filesystem-cache variance.

@@ -125,7 +125,8 @@ def token_ids_digest(values: list[int]) -> str:
 
 
 def stage_for_helper(event: GGUFHelperEvent) -> str:
-    if "swiglu_ggml_block_matmul" in event.helper:
+    normalized_helper = event.helper.replace("swiglu_bounded_", "swiglu_")
+    if "swiglu_ggml_block_matmul" in normalized_helper:
         return "ffn.swiglu_down_fused"
     key = (event.operator, event.role)
     return {

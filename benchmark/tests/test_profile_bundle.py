@@ -35,6 +35,20 @@ class NativeResidualLedgerTest(unittest.TestCase):
         )
         self.assertEqual(
             classify_gguf_helper(
+                "litenn_cpu_swiglu_bounded_prepare_q8k_activation_f32",
+                "gate=1x13824 up=1x13824",
+            ),
+            ("activation", "swiglu"),
+        )
+        self.assertEqual(
+            classify_gguf_helper(
+                "litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32",
+                "lhs=1x13824 out=1x5120",
+            ),
+            ("projection", "ffn_down"),
+        )
+        self.assertEqual(
+            classify_gguf_helper(
                 "litenn_cpu_active_prefix_attention_f32_rank3_grouped",
                 "queries=40x128 keys=25x8x128 out=40x128",
             ),

@@ -81,10 +81,12 @@
 #include <immintrin.h>
 #define LITENN_HAS_X86_AVX2_TARGET 1
 #define LITENN_TARGET_AVX2 __attribute__((target("avx2")))
+#define LITENN_TARGET_AVX2_FMA __attribute__((target("avx2,fma")))
 #define LITENN_TARGET_AVX2_F16C __attribute__((target("avx2,f16c")))
 #else
 #define LITENN_HAS_X86_AVX2_TARGET 0
 #define LITENN_TARGET_AVX2
+#define LITENN_TARGET_AVX2_FMA
 #define LITENN_TARGET_AVX2_F16C
 #endif
 
@@ -1287,6 +1289,154 @@ namespace
 		LiteNNCPUMatMulBiasReLUParallel(lhs, rhs, bias, out, m, k, n, biasRows, threadCount, relu, policy, waitPolicy);
 	}
 
+	bool LiteNNCPUHasAVX2FMA();
+
+	// Adapted from the pinned ggml vector exp used by this repository's control benchmark. The original routine is
+	// derived from Arm's optimized exp implementation; LiteNN exposes a conservative 2 ULP contract.
+	float LiteNNBoundedExpF32(float value)
+	{
+		if (std::isnan(value))
+		{
+			return value;
+		}
+		if (value > 88.3762626647949F)
+		{
+			return std::numeric_limits<float>::infinity();
+		}
+		if (value < -103.972084045410F)
+		{
+			return 0.0F;
+		}
+
+		constexpr float roundBias = 0x1.8p23F;
+		const auto z = std::fma(value, 0x1.715476p+0F, roundBias);
+		const auto n = z - roundBias;
+		if (std::abs(n) > 126.0F)
+		{
+			return std::exp(value);
+		}
+		const auto reduced = std::fma(-n, 0x1.7f7d1cp-20F, std::fma(-n, 0x1.62e4p-1F, value));
+		const auto squared = reduced * reduced;
+		const auto polynomial = std::fma(std::fma(std::fma(0x1.0e4020p-7F, reduced, 0x1.573e2ep-5F), squared,
+		                                          std::fma(0x1.555e66p-3F, reduced, 0x1.fffdb6p-2F)),
+		                                 squared, 0x1.ffffecp-1F * reduced);
+		const auto exponentBits = std::bit_cast<std::uint32_t>(z) << 23;
+		const auto scale = std::bit_cast<float>(exponentBits + std::bit_cast<std::uint32_t>(1.0F));
+		return std::fma(polynomial, scale, scale);
+	}
+
+	float LiteNNBoundedSiLUF32(float value)
+	{
+		if (std::isinf(value))
+		{
+			return value > 0.0F ? value : std::numeric_limits<float>::quiet_NaN();
+		}
+		return value / (1.0F + LiteNNBoundedExpF32(-value));
+	}
+
+#if LITENN_HAS_X86_AVX2_TARGET
+	LITENN_TARGET_AVX2_FMA __m256 LiteNNBoundedExpF32AVX2(__m256 value)
+	{
+		const auto roundBias = _mm256_set1_ps(0x1.8p23F);
+		const auto z = _mm256_fmadd_ps(value, _mm256_set1_ps(0x1.715476p+0F), roundBias);
+		const auto n = _mm256_sub_ps(z, roundBias);
+		const auto reduced = _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.7f7d1cp-20F),
+		                                      _mm256_fnmadd_ps(n, _mm256_set1_ps(0x1.62e4p-1F), value));
+		const auto exponentBits = _mm256_slli_epi32(_mm256_castps_si256(z), 23);
+		const auto scale =
+		    _mm256_castsi256_ps(_mm256_add_epi32(exponentBits, _mm256_castps_si256(_mm256_set1_ps(1.0F))));
+		const auto largeExponent = _mm256_castps_si256(
+		    _mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0F), n), _mm256_set1_ps(126.0F), _CMP_GT_OQ));
+		const auto squared = _mm256_mul_ps(reduced, reduced);
+		const auto polynomial = _mm256_fmadd_ps(
+		    _mm256_fmadd_ps(_mm256_fmadd_ps(_mm256_set1_ps(0x1.0e4020p-7F), reduced, _mm256_set1_ps(0x1.573e2ep-5F)),
+		                    squared,
+		                    _mm256_fmadd_ps(_mm256_set1_ps(0x1.555e66p-3F), reduced, _mm256_set1_ps(0x1.fffdb6p-2F))),
+		    squared, _mm256_mul_ps(_mm256_set1_ps(0x1.ffffecp-1F), reduced));
+		if (!_mm256_movemask_ps(_mm256_castsi256_ps(largeExponent)))
+		{
+			return _mm256_fmadd_ps(polynomial, scale, scale);
+		}
+
+		const auto negativeExponent =
+		    _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(n, _mm256_setzero_ps(), _CMP_LE_OQ)),
+		                     _mm256_set1_epi32(static_cast<int>(0x82000000U)));
+		const auto scale1 =
+		    _mm256_castsi256_ps(_mm256_add_epi32(negativeExponent, _mm256_set1_epi32(static_cast<int>(0x7f000000U))));
+		const auto scale2 = _mm256_castsi256_ps(_mm256_sub_epi32(exponentBits, negativeExponent));
+		const auto extremeExponent = _mm256_castps_si256(
+		    _mm256_cmp_ps(_mm256_andnot_ps(_mm256_set1_ps(-0.0F), n), _mm256_set1_ps(192.0F), _CMP_GT_OQ));
+		return _mm256_or_ps(
+		    _mm256_and_ps(_mm256_castsi256_ps(extremeExponent), _mm256_mul_ps(scale1, scale1)),
+		    _mm256_andnot_ps(
+		        _mm256_castsi256_ps(extremeExponent),
+		        _mm256_or_ps(
+		            _mm256_and_ps(_mm256_castsi256_ps(largeExponent),
+		                          _mm256_mul_ps(_mm256_fmadd_ps(scale2, polynomial, scale2), scale1)),
+		            _mm256_andnot_ps(_mm256_castsi256_ps(largeExponent), _mm256_fmadd_ps(scale, polynomial, scale)))));
+	}
+
+	LITENN_TARGET_AVX2_FMA void LiteNNBoundedSwiGLUF32AVX2(const float* gate, const float* up, float* out,
+	                                                       std::int64_t columns)
+	{
+		std::int64_t column = 0;
+		for (; column + 8 <= columns; column += 8)
+		{
+			const auto gateValues = _mm256_loadu_ps(gate + column);
+			const auto exponent = LiteNNBoundedExpF32AVX2(_mm256_sub_ps(_mm256_setzero_ps(), gateValues));
+			const auto silu = _mm256_div_ps(gateValues, _mm256_add_ps(_mm256_set1_ps(1.0F), exponent));
+			_mm256_storeu_ps(out + column, _mm256_mul_ps(silu, _mm256_loadu_ps(up + column)));
+		}
+		for (; column < columns; ++column)
+		{
+			out[column] = LiteNNBoundedSiLUF32(gate[column]) * up[column];
+		}
+	}
+#endif
+
+	void LiteNNCPUSwiGLURowF32(const float* gate, std::int64_t gateColumnStride, const float* up,
+	                           std::int64_t upColumnStride, float* out, std::int64_t outColumnStride,
+	                           std::int64_t columns, bool bounded)
+	{
+		const auto contiguous = gateColumnStride == 1 && upColumnStride == 1 && outColumnStride == 1;
+#if LITENN_HAS_X86_AVX2_TARGET
+		if (bounded && contiguous && LiteNNCPUHasAVX2FMA())
+		{
+			LiteNNBoundedSwiGLUF32AVX2(gate, up, out, columns);
+			return;
+		}
+#endif
+		// Scalar libm is faster for gather/scatter layouts. Strict results remain inside the bounded policy contract.
+		const auto useBoundedScalar = bounded && contiguous;
+		for (std::int64_t column = 0; column < columns; ++column)
+		{
+			const auto gateValue = gate[column * gateColumnStride];
+			const auto silu =
+			    useBoundedScalar ? LiteNNBoundedSiLUF32(gateValue) : gateValue / (1.0F + std::exp(-gateValue));
+			out[column * outColumnStride] = silu * up[column * upColumnStride];
+		}
+	}
+
+	void LiteNNCPUSwiGLUF32(const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows,
+	                        std::int64_t gateColumns, std::int64_t gateRowStride, std::int64_t gateColumnStride,
+	                        const float* upAligned, std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns,
+	                        std::int64_t upRowStride, std::int64_t upColumnStride, float* outAligned,
+	                        std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	                        std::int64_t outRowStride, std::int64_t outColumnStride, bool bounded)
+	{
+		if (!gateAligned || !upAligned || !outAligned || gateRows <= 0 || gateColumns <= 0 || gateRows != upRows ||
+		    gateColumns != upColumns || gateRows != outRows || gateColumns != outColumns)
+		{
+			return;
+		}
+		for (std::int64_t row = 0; row < gateRows; ++row)
+		{
+			LiteNNCPUSwiGLURowF32(gateAligned + gateOffset + row * gateRowStride, gateColumnStride,
+			                      upAligned + upOffset + row * upRowStride, upColumnStride,
+			                      outAligned + outOffset + row * outRowStride, outColumnStride, gateColumns, bounded);
+		}
+	}
+
 	extern "C" void litenn_cpu_swiglu_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
 	                                      std::int64_t gateRows, std::int64_t gateColumns, std::int64_t gateRowStride,
 	                                      std::int64_t gateColumnStride, const float*, const float* upAligned,
@@ -1301,21 +1451,28 @@ namespace
 		                                          ? std::format("gate={}x{} up={}x{} out={}x{}", gateRows, gateColumns,
 		                                                        upRows, upColumns, outRows, outColumns)
 		                                          : std::string{});
-		if (gateRows <= 0 || gateColumns <= 0 || gateRows != upRows || gateColumns != upColumns ||
-		    gateRows != outRows || gateColumns != outColumns)
-		{
-			return;
-		}
-		for (std::int64_t row = 0; row < gateRows; ++row)
-		{
-			for (std::int64_t column = 0; column < gateColumns; ++column)
-			{
-				const auto gate = gateAligned[gateOffset + row * gateRowStride + column * gateColumnStride];
-				const auto up = upAligned[upOffset + row * upRowStride + column * upColumnStride];
-				outAligned[outOffset + row * outRowStride + column * outColumnStride] =
-				    gate / (1.0F + std::exp(-gate)) * up;
-			}
-		}
+		LiteNNCPUSwiGLUF32(gateAligned, gateOffset, gateRows, gateColumns, gateRowStride, gateColumnStride, upAligned,
+		                   upOffset, upRows, upColumns, upRowStride, upColumnStride, outAligned, outOffset, outRows,
+		                   outColumns, outRowStride, outColumnStride, false);
+	}
+
+	extern "C" void litenn_cpu_swiglu_bounded_f32(const float*, const float* gateAligned, std::int64_t gateOffset,
+	                                              std::int64_t gateRows, std::int64_t gateColumns,
+	                                              std::int64_t gateRowStride, std::int64_t gateColumnStride,
+	                                              const float*, const float* upAligned, std::int64_t upOffset,
+	                                              std::int64_t upRows, std::int64_t upColumns, std::int64_t upRowStride,
+	                                              std::int64_t upColumnStride, float*, float* outAligned,
+	                                              std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns,
+	                                              std::int64_t outRowStride, std::int64_t outColumnStride)
+	{
+		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_swiglu_bounded_f32",
+		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
+		                                          ? std::format("gate={}x{} up={}x{} out={}x{}", gateRows, gateColumns,
+		                                                        upRows, upColumns, outRows, outColumns)
+		                                          : std::string{});
+		LiteNNCPUSwiGLUF32(gateAligned, gateOffset, gateRows, gateColumns, gateRowStride, gateColumnStride, upAligned,
+		                   upOffset, upRows, upColumns, upRowStride, upColumnStride, outAligned, outOffset, outRows,
+		                   outColumns, outRowStride, outColumnStride, true);
 	}
 
 	struct RoPEAtPositionsThreadCache
@@ -2219,6 +2376,15 @@ namespace
 		return supported;
 	}
 
+	bool LiteNNCPUHasAVX2FMA()
+	{
+		static const bool supported = [] {
+			__builtin_cpu_init();
+			return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
+		}();
+		return supported;
+	}
+
 	bool LiteNNCPUHasAVX2F16C()
 	{
 		static const bool supported = [] {
@@ -2407,7 +2573,8 @@ namespace
 
 		const float* PrepareSwiGLU(const float* gate, std::int64_t gateOffset, std::int64_t rows, std::int64_t columns,
 		                           std::int64_t gateRowStride, std::int64_t gateColumnStride, const float* up,
-		                           std::int64_t upOffset, std::int64_t upRowStride, std::int64_t upColumnStride)
+		                           std::int64_t upOffset, std::int64_t upRowStride, std::int64_t upColumnStride,
+		                           bool bounded)
 		{
 			const auto elementCount = static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns);
 			const auto blockCount = static_cast<std::size_t>(columns / 256);
@@ -2416,16 +2583,11 @@ namespace
 			for (std::int64_t row = 0; row < rows; ++row)
 			{
 				auto* sourceRow = source_.data() + static_cast<std::size_t>(row * columns);
+				LiteNNCPUSwiGLURowF32(gate + gateOffset + row * gateRowStride, gateColumnStride,
+				                      up + upOffset + row * upRowStride, upColumnStride, sourceRow, 1, columns,
+				                      bounded);
 				for (std::size_t block = 0; block < blockCount; ++block)
 				{
-					const auto columnBase = static_cast<std::int64_t>(block * 256);
-					for (std::int64_t lane = 0; lane < 256; ++lane)
-					{
-						const auto column = columnBase + lane;
-						const auto gateValue = gate[gateOffset + row * gateRowStride + column * gateColumnStride];
-						const auto upValue = up[upOffset + row * upRowStride + column * upColumnStride];
-						sourceRow[column] = gateValue / (1.0F + std::exp(-gateValue)) * upValue;
-					}
 					QuantizeGGMLQ8KActivationBlock(sourceRow + block * 256, 1,
 					                               blocks_[static_cast<std::size_t>(row) * blockCount + block]);
 				}
@@ -5290,7 +5452,45 @@ namespace
 			        : std::string{});
 			activation = GetGGMLQ8KActivationThreadCache().PrepareSwiGLU(gateAligned, gateOffset, gateRows, gateColumns,
 			                                                             gateRowStride, gateColumnStride, upAligned,
-			                                                             upOffset, upRowStride, upColumnStride);
+			                                                             upOffset, upRowStride, upColumnStride, false);
+		}
+		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+		    nullptr, activation, 0, gateRows, gateColumns, gateColumns, 1, nullptr, rhsAligned, rhsOffset, rhsBytes,
+		    rhsStride, nullptr, outAligned, outOffset, outRows, outColumns, outRowStride, outColumnStride, formatValue,
+		    requestedThreadCount, affinityPolicyValue);
+	}
+
+	extern "C" void litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32(
+	    const float*, const float* gateAligned, std::int64_t gateOffset, std::int64_t gateRows,
+	    std::int64_t gateColumns, std::int64_t gateRowStride, std::int64_t gateColumnStride, const float*,
+	    const float* upAligned, std::int64_t upOffset, std::int64_t upRows, std::int64_t upColumns,
+	    std::int64_t upRowStride, std::int64_t upColumnStride, const std::uint8_t*, const std::uint8_t* rhsAligned,
+	    std::int64_t rhsOffset, std::int64_t rhsBytes, std::int64_t rhsStride, float*, float* outAligned,
+	    std::int64_t outOffset, std::int64_t outRows, std::int64_t outColumns, std::int64_t outRowStride,
+	    std::int64_t outColumnStride, std::uint64_t formatValue, std::uint64_t requestedThreadCount,
+	    std::uint64_t affinityPolicyValue)
+	{
+		const auto format = static_cast<QuantizedBlockFormat>(formatValue);
+		const auto layout = GetQuantizedBlockLayout(format);
+		if (!layout || (format != QuantizedBlockFormat::GGML_Q4_K && format != QuantizedBlockFormat::GGML_Q6_K) ||
+		    !gateAligned || !upAligned || !rhsAligned || !outAligned || gateOffset < 0 || upOffset < 0 ||
+		    gateRows <= 0 || gateColumns <= 0 || gateRows != upRows || gateColumns != upColumns ||
+		    gateRows != outRows || outColumns <= 0 || gateRowStride <= 0 || gateColumnStride <= 0 || upRowStride <= 0 ||
+		    upColumnStride <= 0 || static_cast<std::uint64_t>(gateColumns) % layout->elementsPerBlock != 0)
+		{
+			return;
+		}
+
+		const float* activation = nullptr;
+		{
+			CPUAOTHelperProfileTimer profileTimer(
+			    "litenn_cpu_swiglu_bounded_prepare_q8k_activation_f32",
+			    CompiledModuleCPUHelperProfilerAccess::Enabled()
+			        ? std::format("gate={}x{} up={}x{}", gateRows, gateColumns, upRows, upColumns)
+			        : std::string{});
+			activation = GetGGMLQ8KActivationThreadCache().PrepareSwiGLU(gateAligned, gateOffset, gateRows, gateColumns,
+			                                                             gateRowStride, gateColumnStride, upAligned,
+			                                                             upOffset, upRowStride, upColumnStride, true);
 		}
 		litenn_cpu_ggml_block_matmul_field_interleaved_v4_q8k_f32(
 		    nullptr, activation, 0, gateRows, gateColumns, gateColumns, 1, nullptr, rhsAligned, rhsOffset, rhsBytes,
@@ -10944,6 +11144,8 @@ namespace
 		RegisterJITRuntimeSymbol("litenn_cpu_matmul_bias_relu_parallel_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_matmul_bias_relu_parallel_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_swiglu_f32", reinterpret_cast<void*>(&litenn_cpu_swiglu_f32));
+		RegisterJITRuntimeSymbol("litenn_cpu_swiglu_bounded_f32",
+		                         reinterpret_cast<void*>(&litenn_cpu_swiglu_bounded_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_rope_at_positions_f32",
 		                         reinterpret_cast<void*>(&litenn_cpu_rope_at_positions_f32));
 		RegisterJITRuntimeSymbol("litenn_cpu_rms_norm_f32", reinterpret_cast<void*>(&litenn_cpu_rms_norm_f32));
@@ -10976,6 +11178,9 @@ namespace
 		RegisterJITRuntimeSymbol(
 		    "litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32",
 		    reinterpret_cast<void*>(&litenn_cpu_swiglu_ggml_block_matmul_field_interleaved_v4_q8k_f32));
+		RegisterJITRuntimeSymbol(
+		    "litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32",
+		    reinterpret_cast<void*>(&litenn_cpu_swiglu_bounded_ggml_block_matmul_field_interleaved_v4_q8k_f32));
 		RegisterJITRuntimeSymbol(
 		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
 		    reinterpret_cast<void*>(&litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32));
@@ -20170,7 +20375,20 @@ CompiledModule<CPU>::CompiledModule() = default;
 
 CPUAOTActivationMathCapabilities LiteNN::QueryCPUAOTActivationMathCapabilities() noexcept
 {
-	return {};
+	return {
+		.provider = CPUAOTActivationMathProvider::BuiltIn,
+		.strictSupported = true,
+		.boundedSupported = true,
+		.boundedExpMaximumUlp = 2.0F,
+		.boundedExpOverflowInput = 88.3762626647949F,
+		.boundedExpUnderflowInput = -103.972084045410F,
+		.boundedPreservesSpecialValues = true,
+#if LITENN_HAS_X86_AVX2_TARGET
+		.boundedVectorizedOnHost = LiteNNCPUHasAVX2FMA(),
+#else
+		.boundedVectorizedOnHost = false,
+#endif
+	};
 }
 
 bool LiteNN::IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy policy) noexcept
