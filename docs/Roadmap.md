@@ -3394,6 +3394,16 @@ Priority classes:
                                                 attention-output, FFN norm, Gate/Up, activation, Down, logits,
                                                 residual/dispatch, and unclassified-overhead stages under every formal
                                                 correctness and stability gate.
+                                                - [x] Repair the position-stage input window and run five T1
+                                                      clean/profile pairs per runtime with matching prefix/input
+                                                      digests. Keep both rejected after power switches and variance
+                                                      failures. Down/logits are the next diagnostic candidates, not
+                                                      accepted optimization owners. Completed on 2026-09-22; evidence:
+                                                      `docs/QwenT1StageWindowAudit_2026-09-22.md`.
+                                                - [ ] Expose and validate KV dtype/context capacity in both stage
+                                                      identities. Separate reference-default F16 and equal-precision
+                                                      rows; then split Down Q4_K/Q6_K and the large logits projection
+                                                      under stable power/host control before selecting a kernel.
                                           - [ ] P0: collect matched T1/T4 cycles, instructions, IPC, cache misses,
                                                 stalls, and effective bandwidth. Attribute the measured
                                                 `56.052 -> 231.647 ms/token` extra CPU-cost growth before choosing an

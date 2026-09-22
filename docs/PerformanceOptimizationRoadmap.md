@@ -47,7 +47,8 @@ Decision summary and ordered gates: `docs/QwenCPUDecodeCrossRuntimeDecision_2026
 `docs/QwenCPUDecodeSustained128Control_2026-08-09.md`; position-binned reference-stage evidence and its rejected gates:
 `docs/QwenCPUDecodePositionStageControl_2026-08-09.md`; LiteNN position attribution, grouped-attention parallelism,
 thread-pool waterfall, first-cache memory evidence, and the resulting re-prioritization:
-`docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
+`docs/QwenCPUDecodeAttentionThreadPoolEvidence_2026-08-12.md`; repaired steady-decode stage windows and current rejected
+T1 diagnostic candidates: `docs/QwenT1StageWindowAudit_2026-09-22.md`. The earlier GNU/OpenMP T8 stage attribution is retained as
 historical profiling evidence but no longer selects implementation work. The accepted stronger paired control places
 LiteNN `5.49%` behind Clang/no-OpenMP. A matched cumulative-cut profile reproduced the Clang reference near
 `166 ms/token`, but its `10.53-82.51%` derived-stage CV rejected fine attribution. LiteNN's stable internal accounting
@@ -111,6 +112,9 @@ P0 implementation order:
       - [x] Share the `mean <= 1 ms, standard deviation <= 0.05 ms` exception between both stage controllers;
         otherwise require the existing 15% stage CV, with whole/bin CV and overhead unchanged at 3%. Reject
         non-finite statistics and campaign-wide power-policy drift. Completed on 2026-09-22.
+      - [x] Run five fresh alternating reference pairs with that rule. Whole stage shape/coverage pass, but power
+        switches, 4.51% clean CV, and position-bin failures reject promotion. Preserve every sample and keep the
+        accepted-repeat requirement open. Evidence: `docs/QwenT1StageWindowAudit_2026-09-22.md`.
     - [ ] P0: rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under one stable power
       policy. Require exact trajectory, no fallback, cache hit, whole/bin variance and overhead gates; retain and report
       outliers instead of deleting them. This is the acceptance gate for the observed directional `7.02%` module gain.
@@ -171,6 +175,17 @@ P0 implementation order:
                 validate runtime positions, and publish matching prefix/input digests. Add the same optional OS
                 process CPU domain to both stage controllers. Completed on 2026-09-22; this does not replace native
                 per-window host/affinity validation or the full-token fine-stage evidence requirement.
+              - [x] Complete five clean/profile pairs per runtime on CPU 0, matching nine prefix tokens and 31 actual
+                decode inputs by digest. Cache hits, zero fallback and natural-token parity hold. Both campaigns
+                remain rejected by power/variance gates; raw Down/logits medians are `94.602/34.481 ms` LiteNN versus
+                `69.877/14.834 ms` reference, diagnostic candidates only. Evidence: `docs/QwenT1StageWindowAudit_2026-09-22.md`.
+              - [ ] Make reference KV dtype/context capacity explicit and include them in cross-runtime identity
+                checks before claiming matched Attention stages. Current reference defaults are F16/minimum-64 while
+                LiteNN's graph derives F32 KV and this artifact uses capacity 41; preserve reference-default and
+                equal-precision rows separately.
+              - [ ] Under accepted host/power control, split T1 Down by Q4_K/Q6_K and attribute the real 5120-to-152064
+                logits projection. Compare shape-matched cache-cold streams and dispatched instruction paths before
+                promoting kernel work. Do not transfer this rejected T1 ordering to accepted historical T8 results.
             - [ ] P0: collect matched T1 and T4 cycles, instructions, IPC, cache-miss, stall, and effective-bandwidth
               evidence. Use T1 to localize the `56.052 ms/token` excess and T4 to explain why it grows to
               `231.647 ms/token` instead of assuming a scheduler or kernel owner.
