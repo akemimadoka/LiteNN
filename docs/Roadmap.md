@@ -3835,6 +3835,14 @@ Priority classes:
             capacity, and entry-count policies, and remains dry-run unless `--apply` is supplied. Repository-root,
             CMake-tree, path-boundary, and symlink guards prevent an experiment cleanup from becoming a source/build
             deletion.
+            - [x] Add recursive file-count budgets and non-destructive `--check` enforcement. Protected storage counts
+                  toward the budget; unreachable limits are reported explicitly, and an over-budget check or apply
+                  returns a nonzero exit code. JSON reports include the remaining size and budget violations.
+                  Completed on 2026-09-22.
+            - [x] Protect Windows junctions/reparse points, nested CMake build trees, and both default shared-cache
+                  names during experiment retention. Validate all deletion targets before removing the first one;
+                  cover actual Windows junctions and out-of-root/protected target rejection in regression tests.
+                  Completed on 2026-09-22.
       - [x] Add metadata-only, cache-first stateful startup and an explicit trusted-cache validation boundary.
             Completed on 2026-08-01: cache hits no longer import tensor payloads or rebuild the decode graph, and the
             compiled module ABI drives state/input allocation directly. Default separated-artifact loading remains

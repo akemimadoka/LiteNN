@@ -73,14 +73,22 @@ cmake --build build
 python311 scripts/manage_build_artifacts.py --root build
 ```
 
-按容量和目录数生成清理计划时默认只预览，并自动保护 `.litenn-cache`。确认列表后才添加 `--apply`：
+按容量、目录数和递归文件数生成清理计划时默认只预览，并自动保护 `.litenn-cache`、`.litenn-shared-weights` 以及包含共享缓存、CMake 构建树或链接的目录。确认列表后才添加 `--apply`：
 
 ```powershell
-python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --keep qwen_speed_cache
-python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --keep qwen_speed_cache --apply
+python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --max-files 10000 --keep qwen_speed_cache
+python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --max-files 10000 --keep qwen_speed_cache --apply
 ```
 
-脚本只把 `build` 的直接子项作为清理单元，不跟随符号链接；默认拒绝仓库根目录和 CMake 构建树。真正的 CMake 输出建议继续放在 `build-release` 等独立目录，不与实验产物混放。
+只检查是否超限（不删除文件，超限退出码为 `1`），可以在实验前后执行：
+
+```powershell
+python311 scripts/manage_build_artifacts.py --root build --max-total-gib 32 --max-entries 80 --max-files 10000 --keep qwen_speed_cache --check
+```
+
+脚本只把 `build` 的直接子项作为清理单元，不跟随符号链接或 Windows junction；默认拒绝仓库根目录和 CMake 构建树。受保护文件也计入容量和数量，无法达到上限时会提示；`--apply` 后仍然超限也返回 `1`，不会以删除共享权重的方式强行达标。统计值为逻辑大小，不是磁盘实际分配空间。真正的 CMake 输出建议继续放在 `build-release` 等独立目录，不与实验产物混放。
+
+实验尽量固定复用同一个 `--workdir` 和 `--aot-cache-dir`，只在需要保留对照证据时另建目录，不为每次运行复制模型或共享权重。清理前停止使用这些目录的进程，并用 `--keep <直接子项名>` 保护正在使用的缓存、尚未归档的结果以及自定义共享目录。按年龄清理依据的是修改时间，不代表最后访问时间；脚本不会自动识别运行中的实验，也不会在模型启动时自动删除旧结果。
 
 ## 安装
 
