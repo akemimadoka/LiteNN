@@ -99,7 +99,7 @@ TEST(Interpreter, RunForwardWithTraceVisitsNodeOutputs)
 			    }
 		    }
 		    trace.emplace_back(subgraphId, nodeId, std::string(Validation::NodeKindName(entry.node)), outputs.size(),
-		                       sawNonFinite);
+			                   sawNonFinite);
 	    });
 
 	ASSERT_EQ(results.size(), 1);
@@ -202,14 +202,14 @@ TEST(Interpreter, PagedKVAppendUpdatesPagedStateBundle)
 	const auto position = sg.AddParam(DataType::Int64, { 1 });
 	const auto append =
 	    sg.AddNode(PagedKVAppendNode{ .kvState = { kvState, 0 },
-	                                  .pageTable = { pageTable, 0 },
-	                                  .pageDescriptors = { pageDescriptors, 0 },
-	                                  .activeLength = { activeLength, 0 },
-	                                  .keys = { keys, 0 },
-	                                  .values = { values, 0 },
-	                                  .position = { position, 0 } },
-	               { OutputInfo{ DataType::Float32, { 2, 2, 2, 1, 2 } }, OutputInfo{ DataType::Int64, { 2 } },
-	                 OutputInfo{ DataType::Int64, { 2, 4 } }, OutputInfo{ DataType::Int64, { 1 } } });
+		                              .pageTable = { pageTable, 0 },
+		                              .pageDescriptors = { pageDescriptors, 0 },
+		                              .activeLength = { activeLength, 0 },
+		                              .keys = { keys, 0 },
+		                              .values = { values, 0 },
+		                              .position = { position, 0 } },
+		           { OutputInfo{ DataType::Float32, { 2, 2, 2, 1, 2 } }, OutputInfo{ DataType::Int64, { 2 } },
+		             OutputInfo{ DataType::Int64, { 2, 4 } }, OutputInfo{ DataType::Int64, { 1 } } });
 	sg.SetResults({ { append, 0 }, { append, 1 }, { append, 2 }, { append, 3 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 

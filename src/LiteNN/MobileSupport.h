@@ -83,28 +83,28 @@ namespace LiteNN
 		{
 		case MobileFeature::CPUInterpreter:
 			return { feature, MobileFeatureName(feature), true,
-				     "Reference execution is available when LiteNNCore is linked." };
+			         "Reference execution is available when LiteNNCore is linked." };
 		case MobileFeature::SeparatedArtifactLoading:
 			return { feature, MobileFeatureName(feature), true,
-				     "Separated metadata/constants/weights/instructions are the preferred mobile package ABI." };
+			         "Separated metadata/constants/weights/instructions are the preferred mobile package ABI." };
 		case MobileFeature::VulkanNativeRuntime:
 			return { feature, MobileFeatureName(feature), true,
-				     "Supported when LiteNNVulkanRuntime is linked and a compute-capable Vulkan device is present." };
+			         "Supported when LiteNNVulkanRuntime is linked and a compute-capable Vulkan device is present." };
 		case MobileFeature::CPUObjectJIT:
 			return { feature, MobileFeatureName(feature), false,
-				     "Desktop CPU AOT object JIT loading is not part of the mobile runtime ABI." };
+			         "Desktop CPU AOT object JIT loading is not part of the mobile runtime ABI." };
 		case MobileFeature::CUDARuntime:
 			return { feature, MobileFeatureName(feature), false,
-				     "CUDA is a desktop/server backend and must not be required by mobile packages." };
+			         "CUDA is a desktop/server backend and must not be required by mobile packages." };
 		case MobileFeature::MLIRCompiler:
 			return { feature, MobileFeatureName(feature), false,
-				     "Mobile apps should load host-compiled artifacts instead of linking the compiler stack." };
+			         "Mobile apps should load host-compiled artifacts instead of linking the compiler stack." };
 		case MobileFeature::DynamicLibraryCarrierLoading:
 			return { feature, MobileFeatureName(feature), false,
-				     "Mobile packages should use separated regions, not desktop shared-library carrier loading." };
+			         "Mobile packages should use separated regions, not desktop shared-library carrier loading." };
 		case MobileFeature::OnDeviceGraphCompilation:
 			return { feature, MobileFeatureName(feature), false,
-				     "On-device graph compilation is intentionally excluded from the production mobile profile." };
+			         "On-device graph compilation is intentionally excluded from the production mobile profile." };
 		}
 		return { feature, MobileFeatureName(feature), false, "Unknown mobile feature." };
 	}
@@ -148,11 +148,11 @@ namespace LiteNN
 			};
 		case MobileConstraint::Threading:
 			return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Constrained,
-				     "Threading is permitted only through caller-owned policy; mobile runtime code should avoid hidden "
-				     "background threads and expose synchronization cost in profiles." };
+			         "Threading is permitted only through caller-owned policy; mobile runtime code should avoid hidden "
+			         "background threads and expose synchronization cost in profiles." };
 		}
 		return { constraint, MobileConstraintName(constraint), MobileConstraintLevel::Unsupported,
-			     "Unknown mobile constraint." };
+		         "Unknown mobile constraint." };
 	}
 
 	inline constexpr MobileVulkanProductionGateStatus
@@ -192,25 +192,25 @@ namespace LiteNN
 			};
 		case MobileVulkanProductionGate::DeviceLocalMemoryPlanning:
 			return { gate,
-				     MobileVulkanProductionGateName(gate),
-				     MobileConstraintLevel::Supported,
-				     true,
-				     "MemoryPlan exposes a DeviceLocalMemoryPlan with device-local allocation classes, upload/download "
-				     "staging steps, and validation against the canonical buffer plan.",
-				     "Backend allocators still need to consume the plan with per-device limit checks before broad "
-				     "mobile GPU "
-				     "production support." };
+			         MobileVulkanProductionGateName(gate),
+			         MobileConstraintLevel::Supported,
+			         true,
+			         "MemoryPlan exposes a DeviceLocalMemoryPlan with device-local allocation classes, upload/download "
+			         "staging steps, and validation against the canonical buffer plan.",
+			         "Backend allocators still need to consume the plan with per-device limit checks before broad "
+			         "mobile GPU "
+			         "production support." };
 		case MobileVulkanProductionGate::MobileDeviceMatrix:
 			return { gate,
-				     MobileVulkanProductionGateName(gate),
-				     MobileConstraintLevel::Constrained,
-				     true,
-				     "Desktop Vulkan tests cover selected native payload behavior.",
-				     "Need Android/iOS-adjacent Vulkan device matrix, storage/subgroup/timestamp/alignment probes, and "
-				     "skip/fail policy evidence." };
+			         MobileVulkanProductionGateName(gate),
+			         MobileConstraintLevel::Constrained,
+			         true,
+			         "Desktop Vulkan tests cover selected native payload behavior.",
+			         "Need Android/iOS-adjacent Vulkan device matrix, storage/subgroup/timestamp/alignment probes, and "
+			         "skip/fail policy evidence." };
 		}
 		return { gate, MobileVulkanProductionGateName(gate),     MobileConstraintLevel::Unsupported,
-			     true, "Unknown mobile Vulkan production gate.", "Unknown mobile Vulkan production gate." };
+		         true, "Unknown mobile Vulkan production gate.", "Unknown mobile Vulkan production gate." };
 	}
 
 	inline std::vector<MobileFeatureStatus> QueryMobileFeatureStatuses()

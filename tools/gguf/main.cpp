@@ -1374,12 +1374,12 @@ namespace
 		LogGGUFDiagnostic(
 		    enabled,
 		    std::format("decode step {} parallel_profile calls={} activation_lookup_ms={:.3f} "
-		                "activation_copy_ms={:.3f} activation_quantize_ms={:.3f} lock_wait_ms={:.3f} "
-		                "signaled_workers={} dispatch_ms={:.3f} parallel_wall_ms={:.3f} caller_useful_ms={:.3f} "
-		                "worker_useful_sum_ms={:.3f} barrier_wait_ms={:.3f}",
-		                step, summary.calls, summary.activationLookupMs, summary.activationCopyMs,
-		                summary.activationQuantizeMs, summary.lockWaitMs, summary.signaledWorkers, summary.dispatchMs,
-		                summary.parallelWallMs, summary.callerUsefulMs, summary.workerUsefulMs, summary.barrierWaitMs));
+			            "activation_copy_ms={:.3f} activation_quantize_ms={:.3f} lock_wait_ms={:.3f} "
+			            "signaled_workers={} dispatch_ms={:.3f} parallel_wall_ms={:.3f} caller_useful_ms={:.3f} "
+			            "worker_useful_sum_ms={:.3f} barrier_wait_ms={:.3f}",
+			            step, summary.calls, summary.activationLookupMs, summary.activationCopyMs,
+			            summary.activationQuantizeMs, summary.lockWaitMs, summary.signaledWorkers, summary.dispatchMs,
+			            summary.parallelWallMs, summary.callerUsefulMs, summary.workerUsefulMs, summary.barrierWaitMs));
 		for (const auto& aggregate : aggregates)
 		{
 			const auto calls = static_cast<double>(aggregate.calls);
@@ -1439,9 +1439,9 @@ namespace
 			LogGGUFDiagnostic(
 			    enabled,
 			    std::format("decode step {} node subgraph={} node={} op={} schema={} calls={} inclusive_ms={:.3f} "
-			                "self_ms={:.3f} helper_ms={:.3f}",
-			                step, event.subgraphId, event.nodeId, event.opKind, event.schemaId, event.calls,
-			                event.inclusiveMilliseconds, event.selfMilliseconds, event.helperMilliseconds));
+				            "self_ms={:.3f} helper_ms={:.3f}",
+				            step, event.subgraphId, event.nodeId, event.opKind, event.schemaId, event.calls,
+				            event.inclusiveMilliseconds, event.selfMilliseconds, event.helperMilliseconds));
 		}
 	}
 
@@ -1926,9 +1926,9 @@ namespace
 			    resolvedSharedWeightsPath, artifact.Weights().size(),
 			    [&](const std::filesystem::path& stagingWeights, const std::filesystem::path& stagingComplete) {
 				    WriteBinaryFileTimed(stagingWeights, artifact.Weights(), diagnostics,
-				                         "gguf decode aot shared weight store write weights");
+					                     "gguf decode aot shared weight store write weights");
 				    WriteBinaryFileTimed(stagingComplete, std::span<const std::byte>{}, diagnostics,
-				                         "gguf decode aot shared weight store write complete marker");
+					                     "gguf decode aot shared weight store write complete marker");
 			    });
 			if (publishResult == SharedWeightsPublishResult::Reused)
 			{
@@ -2031,7 +2031,7 @@ namespace
 			throw std::runtime_error("layer checkpoint must be a non-empty floating-point tensor");
 		}
 		LayerCheckpointSummary summary{ .minimum = std::numeric_limits<double>::infinity(),
-			                            .maximum = -std::numeric_limits<double>::infinity() };
+		                                .maximum = -std::numeric_limits<double>::infinity() };
 		double sum = 0.0;
 		double squareSum = 0.0;
 		LiteNN::EnumDispatch(tensor.DType(), [&]<LiteNN::DataType TypeValue> {
@@ -2235,8 +2235,8 @@ namespace
 			{
 				throw std::runtime_error(
 				    std::format("layer checkpoint group '{}' output count {} does not match expected {}",
-				                group.boundary.empty() ? "post_ffn_all" : group.boundary, group.outputs.size(),
-				                expectedLayers.size()));
+					            group.boundary.empty() ? "post_ffn_all" : group.boundary, group.outputs.size(),
+					            expectedLayers.size()));
 			}
 			for (std::size_t i = 0; i < expectedLayers.size(); ++i)
 			{
@@ -2333,16 +2333,16 @@ namespace
 			const auto decodeEnd = std::chrono::steady_clock::now();
 			windows.push_back(
 			    { .warmup = windowIndex < warmupWindowCount,
-			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
-			      .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
-			      .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
-			      .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
-			      .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
-			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
-			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
-			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
-			      .moduleRunMs = moduleRunMs,
-			      .decodeTokens = forcedGeneratedTokenIds.size() - 1 });
+				  .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+				  .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
+				  .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
+				  .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+				  .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+				  .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
+				  .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
+				  .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
+				  .moduleRunMs = moduleRunMs,
+				  .decodeTokens = forcedGeneratedTokenIds.size() - 1 });
 		}
 
 		std::vector<double> measuredThroughputs;
@@ -2525,7 +2525,7 @@ namespace
 			    [](const LiteNN::GGUF::LLaMACompatibilityDiagnostic& diagnostic) { return diagnostic.blocking; });
 			throw std::runtime_error(blocking == contextValidation.diagnostics.end()
 			                             ? "decode-loop context validation failed"
-			                             : "decode-loop context validation failed: " + blocking->message);
+										 : "decode-loop context validation failed: " + blocking->message);
 		}
 		if (options.pagedResidentPageCount && !options.pagedReferenceDecode)
 		{
@@ -2572,15 +2572,15 @@ namespace
 					return LiteNN::GGUF::BuildLLaMADecodeRuntimeSchedule(
 					    archive.model.UnsafeGraphView(),
 					    { .prefillSequenceLength = 1,
-					      .decodePastLength = 0,
-					      .maxCacheLength = maxCacheLength,
-					      .preserveQuantizedWeights = true,
-					      .dynamicDecodePosition = true,
-					      .conditionalLogits = true,
-					      .usePagedReferenceDecode = options.pagedReferenceDecode,
-					      .exposeLayerCheckpoints = options.layerCheckpointDirectory.has_value(),
-					      .subLayerCheckpointBlocks = options.subLayerCheckpointBlocks,
-					      .pagedResidentPageCount = options.pagedResidentPageCount });
+						  .decodePastLength = 0,
+						  .maxCacheLength = maxCacheLength,
+						  .preserveQuantizedWeights = true,
+						  .dynamicDecodePosition = true,
+						  .conditionalLogits = true,
+						  .usePagedReferenceDecode = options.pagedReferenceDecode,
+						  .exposeLayerCheckpoints = options.layerCheckpointDirectory.has_value(),
+						  .subLayerCheckpointBlocks = options.subLayerCheckpointBlocks,
+						  .pagedResidentPageCount = options.pagedResidentPageCount });
 				});
 				decodePlan = schedule.module.plan;
 				const auto projection =
@@ -2964,8 +2964,8 @@ namespace
 					LogGGUFDiagnostic(
 					    diagnostics,
 					    std::format("decode step {} node buckets self_ms={:.3f} instrumentation_ms={:.3f} "
-					                "module_unattributed_ms={:.3f}",
-					                step + 1, nodeSelfTotalMs, nodeInstrumentationMs, moduleUnattributedMs));
+						            "module_unattributed_ms={:.3f}",
+						            step + 1, nodeSelfTotalMs, nodeInstrumentationMs, moduleUnattributedMs));
 				}
 			}
 			else

@@ -35,7 +35,7 @@ TEST(WhileNode, Forward_Basic)
 	const auto cx = condSg.AddParam(DataType::Float32, { 1 });
 	const auto threshold =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 100.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { threshold, 0 } },
 	                                { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -46,7 +46,7 @@ TEST(WhileNode, Forward_Basic)
 	const auto bx = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto two =
 	    bodySg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto doubled = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bx, 0 }, { two, 0 } },
 	                                    { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { doubled, 0 } });
@@ -82,7 +82,7 @@ TEST(WhileNode, Forward_MultiCarry)
 	condSg.AddParam(DataType::Float32, { 1 }); // b（未使用但需要参数匹配）
 	const auto limit =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 50.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { ca, 0 }, { limit, 0 } },
 	                                { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -103,7 +103,7 @@ TEST(WhileNode, Forward_MultiCarry)
 	const auto b = fwdSg.AddParam(DataType::Float32, { 1 });
 	const auto whileNode =
 	    fwdSg.AddNode(WhileNode{ condId, bodyId, { { a, 0 }, { b, 0 } } },
-	                  { OutputInfo{ DataType::Float32, { 1 } }, OutputInfo{ DataType::Float32, { 1 } } });
+		              { OutputInfo{ DataType::Float32, { 1 } }, OutputInfo{ DataType::Float32, { 1 } } });
 	fwdSg.SetResults({ { whileNode, 0 }, { whileNode, 1 } });
 	graph.SetForward(graph.AddSubgraph(std::move(fwdSg)));
 
@@ -132,7 +132,7 @@ TEST(WhileNode, Forward_ZeroIteration)
 	const auto cx = condSg.AddParam(DataType::Float32, { 1 });
 	const auto zero =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 0.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp =
 	    condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -143,7 +143,7 @@ TEST(WhileNode, Forward_ZeroIteration)
 	const auto bx = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto two =
 	    bodySg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto doubled = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bx, 0 }, { two, 0 } },
 	                                    { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { doubled, 0 } });
@@ -179,7 +179,7 @@ static void BuildDoubleWhileGraph(Graph& graph, SubgraphId& condId, SubgraphId& 
 	const auto cx = condSg.AddParam(DataType::Float32, { 1 });
 	const auto threshold =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 100.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { threshold, 0 } },
 	                                { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -190,7 +190,7 @@ static void BuildDoubleWhileGraph(Graph& graph, SubgraphId& condId, SubgraphId& 
 	const auto bx = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto two =
 	    bodySg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto doubled = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bx, 0 }, { two, 0 } },
 	                                    { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { doubled, 0 } });
@@ -239,7 +239,7 @@ TEST(WhileNode, Autograd_ZeroIteration)
 	const auto cx = condSg.AddParam(DataType::Float32, { 1 });
 	const auto zero =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 0.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp =
 	    condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -250,7 +250,7 @@ TEST(WhileNode, Autograd_ZeroIteration)
 	const auto bx = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto two =
 	    bodySg.AddNode(ConstantNode{ Tensor<CPU>({ 2.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto doubled = bodySg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { bx, 0 }, { two, 0 } },
 	                                    { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { doubled, 0 } });
@@ -291,7 +291,7 @@ TEST(WhileNode, Autograd_Addition)
 	const auto cx = condSg.AddParam(DataType::Float32, { 1 });
 	const auto threshold =
 	    condSg.AddNode(ConstantNode{ Tensor<CPU>({ 100.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto cmp = condSg.AddNode(BinaryOpNode{ BinaryOp::Less, { cx, 0 }, { threshold, 0 } },
 	                                { OutputInfo{ DataType::Bool, { 1 } } });
 	condSg.SetResults({ { cmp, 0 } });
@@ -302,7 +302,7 @@ TEST(WhileNode, Autograd_Addition)
 	const auto bx = bodySg.AddParam(DataType::Float32, { 1 });
 	const auto ten =
 	    bodySg.AddNode(ConstantNode{ Tensor<CPU>({ 10.0f }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                   { OutputInfo{ DataType::Float32, { 1 } } });
+		               { OutputInfo{ DataType::Float32, { 1 } } });
 	const auto added = bodySg.AddNode(BinaryOpNode{ BinaryOp::Add, { bx, 0 }, { ten, 0 } },
 	                                  { OutputInfo{ DataType::Float32, { 1 } } });
 	bodySg.SetResults({ { added, 0 } });

@@ -678,10 +678,10 @@ namespace LiteNN
 	                                              std::uint32_t schemaId)
 	{
 		return { .kind = schema.kind,
-			     .schemaId = schemaId,
-			     .category = schema.category,
-			     .effect = schema.effect,
-			     .attributes = ExtractPlanAttributes(node) };
+		         .schemaId = schemaId,
+		         .category = schema.category,
+		         .effect = schema.effect,
+		         .attributes = ExtractPlanAttributes(node) };
 	}
 
 	inline void ValidateExecutableTensorType(const TensorType& type, std::string_view context)
@@ -855,13 +855,13 @@ namespace LiteNN
 		{
 			throw std::runtime_error(
 			    std::format("ExecutablePlan public input count {} does not match forward param count {}",
-			                plan.inputs.size(), forward.params.size()));
+				            plan.inputs.size(), forward.params.size()));
 		}
 		if (plan.outputs.size() != forward.results.size())
 		{
 			throw std::runtime_error(
 			    std::format("ExecutablePlan public output count {} does not match forward result count {}",
-			                plan.outputs.size(), forward.results.size()));
+				            plan.outputs.size(), forward.results.size()));
 		}
 		for (std::size_t i = 0; i < plan.inputs.size(); ++i)
 		{
@@ -939,8 +939,8 @@ namespace LiteNN
 				    .opKind = node.op.kind,
 				    .domain = schema.domain,
 				    .message = std::format("op '{}' remains in compatibility domain; importer must lower it to core "
-				                           "ops or keep it in a tagged compatibility partition",
-				                           node.op.kind),
+					                       "ops or keep it in a tagged compatibility partition",
+					                       node.op.kind),
 				});
 			}
 		}

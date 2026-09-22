@@ -376,8 +376,8 @@ namespace LiteNN::Training
 					    Optimizer::Detail::VariableGradient(backwardResults, inputGradientCount, parameterIndex);
 					Optimizer::Detail::ValidateVariableGradient(parameter, gradient, parameterIndex);
 					std::array<Tensor<CPU>, 4> updateInputs = { parameterCPU, gradient,
-						                                        optimizer_.FirstMoment(parameterIndex),
-						                                        optimizer_.SecondMoment(parameterIndex) };
+					                                            optimizer_.FirstMoment(parameterIndex),
+					                                            optimizer_.SecondMoment(parameterIndex) };
 					auto updateRunner = CreateCompiledAdamWUpdateRunner(parameters_[parameterIndex].type,
 					                                                    optimizer_.Options(), step, device_);
 					auto updateOutputs = updateRunner(updateInputs);

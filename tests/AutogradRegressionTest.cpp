@@ -81,7 +81,7 @@ TEST(AutogradRegression, FusedSwiGLUProducesBothInputGradients)
 	std::array forwardInputs = { Tensor<CPU>({ 1.0f }, { 1 }), Tensor<CPU>({ 2.0f }, { 1 }) };
 	(void) interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), forwardInputs);
 	std::array backwardInputs = { Tensor<CPU>({ 1.0f }, { 1 }), Tensor<CPU>({ 2.0f }, { 1 }),
-		                          Tensor<CPU>({ 1.0f }, { 1 }) };
+	                              Tensor<CPU>({ 1.0f }, { 1 }) };
 	const auto gradients = interpreter.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), backwardInputs);
 
 	ASSERT_EQ(gradients.size(), 2u);

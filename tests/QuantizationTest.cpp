@@ -363,7 +363,7 @@ TEST(Quantization, ConstFoldQuantizeDequantize)
 	Subgraph sg;
 	const auto c =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ -1.0, 0.0, 1.0 }, { 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 3 } } });
+		           { OutputInfo{ DataType::Float32, { 3 } } });
 	const auto q = sg.AddNode(QuantizeNode{ { c, 0 }, params }, { OutputInfo{ DataType::Int8, { 3 } } });
 	const auto dq =
 	    sg.AddNode(DequantizeNode{ { q, 0 }, params, DataType::Float32 }, { OutputInfo{ DataType::Float32, { 3 } } });

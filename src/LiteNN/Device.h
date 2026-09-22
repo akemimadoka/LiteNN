@@ -735,15 +735,15 @@ namespace LiteNN
 										         ? static_cast<const std::byte*>(src1) +
 										               (shape1[0] == 1
 										                    ? 0
-										                    : i * shape1.SubShape(1).NumElements() * sizeof(T1))
-										         : static_cast<const std::byte*>(src1),
+															: i * shape1.SubShape(1).NumElements() * sizeof(T1))
+												 : static_cast<const std::byte*>(src1),
 										     shape2.NumDim() > 1 ? shape2.SubShape(1) : shape2,
 										     shape2.NumDim() > 1
 										         ? static_cast<const std::byte*>(src2) +
 										               (shape2[0] == 1
 										                    ? 0
-										                    : i * shape2.SubShape(1).NumElements() * sizeof(T2))
-										         : static_cast<const std::byte*>(src2),
+															: i * shape2.SubShape(1).NumElements() * sizeof(T2))
+												 : static_cast<const std::byte*>(src2),
 										     op);
 									}
 								}

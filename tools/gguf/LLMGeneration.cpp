@@ -324,7 +324,7 @@ namespace LiteNN::GGUF
 			candidates.resize(std::max<std::size_t>(keep, 1));
 			totalWeight =
 			    std::accumulate(candidates.begin(), candidates.end(), 0.0,
-			                    [](double sum, const Candidate& candidate) { return sum + candidate.weight; });
+				                [](double sum, const Candidate& candidate) { return sum + candidate.weight; });
 		}
 
 		std::mt19937_64 rng(sampler.config.seed + sampler.drawCount++);

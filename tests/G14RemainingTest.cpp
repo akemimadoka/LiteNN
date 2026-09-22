@@ -38,7 +38,7 @@ namespace
 		    { OutputInfo{ DataType::Float32, { 2 } } });
 		const auto parameterGradient =
 		    backwardAndUpdate.AddNode(BinaryOpNode{ BinaryOp::Multiply, { outputGradient, 0 }, { backwardInput, 0 } },
-		                              { OutputInfo{ DataType::Float32, { 2 } } });
+			                          { OutputInfo{ DataType::Float32, { 2 } } });
 		const auto update = backwardAndUpdate.AddNode(
 		    SGDStepNode{ { backwardParameter, 0 }, { parameterGradient, 0 }, std::nullopt, 0.1, 0.0, 0.0, false },
 		    { OutputInfo{ DataType::Float32, { 2 } } });
@@ -82,17 +82,17 @@ namespace
 		    { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } } });
 		const auto adamw =
 		    subgraph.AddNode(AdamWStepNode{ { parameter, 0 },
-		                                    { gradient, 0 },
-		                                    { firstMoment, 0 },
-		                                    { secondMoment, 0 },
-		                                    0.001,
-		                                    0.9,
-		                                    0.999,
-		                                    1e-8,
-		                                    0.01,
-		                                    7 },
-		                     { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } },
-		                       OutputInfo{ DataType::Float32, { 2 } } });
+			                                { gradient, 0 },
+			                                { firstMoment, 0 },
+			                                { secondMoment, 0 },
+			                                0.001,
+			                                0.9,
+			                                0.999,
+			                                1e-8,
+			                                0.01,
+			                                7 },
+			                 { OutputInfo{ DataType::Float32, { 2 } }, OutputInfo{ DataType::Float32, { 2 } },
+			                   OutputInfo{ DataType::Float32, { 2 } } });
 		subgraph.SetResults({ { sgd, 0 }, { sgd, 1 }, { adamw, 0 }, { adamw, 1 }, { adamw, 2 } });
 		graph.SetForward(graph.AddSubgraph(std::move(subgraph)));
 		return graph;
@@ -377,7 +377,7 @@ TEST(G14Remaining, CostModelRanksCPUAOTCUDANativeAndInterpreterFallback)
 	                                               .relativeCost = 0.01,
 	                                           });
 	constexpr std::array<std::string_view, 4> backends{ BackendCPUInterpreter, BackendCPUAOT, BackendCUDANative,
-		                                                BackendCUDABridge };
+	                                                    BackendCUDABridge };
 	const auto plan = Detail::BuildExecutablePlanFromGraph(graph);
 	const auto placement = Runtime::BuildPlacementPlan(plan, backends, registry);
 	ASSERT_EQ(placement.decisions.size(), 2u);

@@ -146,8 +146,8 @@ namespace
 		case UnaryOpKind::Negate:
 			return isFloat
 			           ? b.create<arith::NegFOp>(loc, input).getResult()
-			           : b.create<arith::SubIOp>(loc, b.create<arith::ConstantIntOp>(loc, elemType, (int64_t) 0), input)
-			                 .getResult();
+					   : b.create<arith::SubIOp>(loc, b.create<arith::ConstantIntOp>(loc, elemType, (int64_t) 0), input)
+					         .getResult();
 		case UnaryOpKind::Abs:
 			return isFloat ? b.create<math::AbsFOp>(loc, input).getResult()
 			               : b.create<math::AbsIOp>(loc, input).getResult();
@@ -551,17 +551,17 @@ namespace
 				    if (kind == ReduceOpKind::Sum || kind == ReduceOpKind::Mean)
 				    {
 					    result = isa<FloatType>(elemType) ? b.create<arith::AddFOp>(l, acc, cur).getResult()
-					                                      : b.create<arith::AddIOp>(l, acc, cur).getResult();
+						                                  : b.create<arith::AddIOp>(l, acc, cur).getResult();
 				    }
 				    else if (kind == ReduceOpKind::Max)
 				    {
 					    result = isa<FloatType>(elemType) ? b.create<arith::MaximumFOp>(l, acc, cur).getResult()
-					                                      : b.create<arith::MaxSIOp>(l, acc, cur).getResult();
+						                                  : b.create<arith::MaxSIOp>(l, acc, cur).getResult();
 				    }
 				    else
 				    {
 					    result = isa<FloatType>(elemType) ? b.create<arith::MinimumFOp>(l, acc, cur).getResult()
-					                                      : b.create<arith::MinSIOp>(l, acc, cur).getResult();
+						                                  : b.create<arith::MinSIOp>(l, acc, cur).getResult();
 				    }
 				    b.create<linalg::YieldOp>(l, result);
 			    });
@@ -591,7 +591,7 @@ namespace
 				    loc, TypeRange{ resultType }, ValueRange{ output }, ValueRange{ emptyMean },
 				    SmallVector<AffineMap>{ map, map }, iterTypes, [&](OpBuilder& b, Location l, ValueRange args) {
 					    Value q = isa<FloatType>(elemType) ? b.create<arith::DivFOp>(l, args[0], divisor).getResult()
-					                                       : b.create<arith::DivSIOp>(l, args[0], divisor).getResult();
+						                                   : b.create<arith::DivSIOp>(l, args[0], divisor).getResult();
 					    b.create<linalg::YieldOp>(l, q);
 				    });
 				output = meanGeneric.getResult(0);

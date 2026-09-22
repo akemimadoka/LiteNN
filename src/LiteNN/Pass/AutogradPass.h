@@ -481,8 +481,8 @@ namespace LiteNN
 					    if constexpr (std::same_as<T, UnaryOpNode>)
 					    {
 						    if (node.op == UnaryOp::Abs || node.op == UnaryOp::Log || node.op == UnaryOp::Sin ||
-						        node.op == UnaryOp::Cos || node.op == UnaryOp::Tan || node.op == UnaryOp::Arcsin ||
-						        node.op == UnaryOp::Arccos || node.op == UnaryOp::Arctan)
+							    node.op == UnaryOp::Cos || node.op == UnaryOp::Tan || node.op == UnaryOp::Arcsin ||
+							    node.op == UnaryOp::Arccos || node.op == UnaryOp::Arctan)
 						    {
 							    SaveIfNeeded(fwdSg, graph, node.input, saved, insideLoop);
 						    }
@@ -498,8 +498,8 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, BinaryOpNode>)
 					    {
 						    if (node.op == BinaryOp::Multiply || node.op == BinaryOp::SwiGLU ||
-						        node.op == BinaryOp::MatMul || node.op == BinaryOp::Divide ||
-						        node.op == BinaryOp::Max || node.op == BinaryOp::Min)
+							    node.op == BinaryOp::MatMul || node.op == BinaryOp::Divide ||
+							    node.op == BinaryOp::Max || node.op == BinaryOp::Min)
 						    {
 							    SaveIfNeeded(fwdSg, graph, node.lhs, saved, insideLoop);
 							    SaveIfNeeded(fwdSg, graph, node.rhs, saved, insideLoop);
@@ -526,7 +526,7 @@ namespace LiteNN
 						    // 全部在前向图中静态可知，无需保存激活值
 					    }
 					    else if constexpr (std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
-					                       std::same_as<T, GatherNode> || std::same_as<T, ScatterNode>)
+						                   std::same_as<T, GatherNode> || std::same_as<T, ScatterNode>)
 					    {
 						    // G5.1 data movement nodes do not need extra saved activations here.
 						    // Differentiation is still explicitly gated below.
@@ -537,17 +537,17 @@ namespace LiteNN
 						    SaveIfNeeded(fwdSg, graph, node.labels, saved, insideLoop);
 					    }
 					    else if constexpr (std::same_as<T, ScanNode> || std::same_as<T, SSMScanNode> ||
-					                       std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
-					                       std::same_as<T, GroupedActivePrefixAttentionNode> ||
-					                       std::same_as<T, GroupedPagedAttentionNode> ||
-					                       std::same_as<T, PagedKVAppendNode> || std::same_as<T, SoftmaxNode> ||
-					                       std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
-					                       std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
-					                       std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
-					                       std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
-					                       std::same_as<T, AdamWStepNode> || std::same_as<T, Im2ColNode> ||
-					                       std::same_as<T, Conv2DNode> || std::same_as<T, ConvTranspose2DNode> ||
-					                       std::same_as<T, Pool2DNode> || std::same_as<T, UpsampleNode>)
+						                   std::same_as<T, RWKVWKVNode> || std::same_as<T, ActivePrefixAttentionNode> ||
+						                   std::same_as<T, GroupedActivePrefixAttentionNode> ||
+						                   std::same_as<T, GroupedPagedAttentionNode> ||
+						                   std::same_as<T, PagedKVAppendNode> || std::same_as<T, SoftmaxNode> ||
+						                   std::same_as<T, RoPENode> || std::same_as<T, CrossEntropyLossBackwardNode> ||
+						                   std::same_as<T, NormalizationNode> || std::same_as<T, BatchMatMulNode> ||
+						                   std::same_as<T, OutProdNode> || std::same_as<T, TimestepEmbeddingNode> ||
+						                   std::same_as<T, SolveTriNode> || std::same_as<T, SGDStepNode> ||
+						                   std::same_as<T, AdamWStepNode> || std::same_as<T, Im2ColNode> ||
+						                   std::same_as<T, Conv2DNode> || std::same_as<T, ConvTranspose2DNode> ||
+						                   std::same_as<T, Pool2DNode> || std::same_as<T, UpsampleNode>)
 					    {
 						    // G5.2/G5.3/G5.4 nodes use explicit differentiation gates below for now.
 					    }
@@ -740,7 +740,7 @@ namespace LiteNN
 
 					auto countingWhileId =
 					    augFwd.AddNode(WhileNode{ countingCondId, countingBodyId, std::move(countingInitArgs) },
-					                   std::move(countingOutputInfos));
+						               std::move(countingOutputInfos));
 
 					// Save count via SaveActivationNode (virtual port = numCarry)
 					const auto countSlotId = saved.at({ fwdNodeId, numCarry }).slotId;
@@ -791,7 +791,7 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, VariableRefNode>)
+					              std::same_as<T, VariableRefNode>)
 				    {
 					    return n;
 				    }
@@ -937,9 +937,9 @@ namespace LiteNN
 					    return NormalizationNode{
 						    { nodeMap[n.input.node], n.input.port },
 						    n.scale ? std::optional<NodeOutput>{ { nodeMap[n.scale->node], n.scale->port } }
-						            : std::nullopt,
+							        : std::nullopt,
 						    n.bias ? std::optional<NodeOutput>{ { nodeMap[n.bias->node], n.bias->port } }
-						           : std::nullopt,
+							       : std::nullopt,
 						    n.mode,
 						    n.axis,
 						    n.groupCount,
@@ -1311,7 +1311,7 @@ namespace LiteNN
 				    [&](const auto& node) {
 					    using T = std::decay_t<decltype(node)>;
 					    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-					                  std::same_as<T, VariableRefNode>)
+						              std::same_as<T, VariableRefNode>)
 					    { /* 叶子节点 */
 					    }
 					    else if constexpr (std::same_as<T, UnaryOpNode>)
@@ -1334,7 +1334,7 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, CallNode>)
 					    {
 						    EmitCallGrad(fwdSg, graph, bwdSg, node, dy, calleeInfo, saved, loadMap, gradContribs,
-						                 varGradContribs);
+							             varGradContribs);
 					    }
 					    else if constexpr (std::same_as<T, ReduceOpNode>)
 					    {
@@ -1389,7 +1389,7 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, GroupedActivePrefixAttentionNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: GroupedActivePrefixAttentionNode differentiation "
-						                             "is not yet implemented");
+							                         "is not yet implemented");
 					    }
 					    else if constexpr (std::same_as<T, GroupedPagedAttentionNode>)
 					    {
@@ -1500,28 +1500,28 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, CondNode>)
 					    {
 						    EmitCondGrad(fwdSg, graph, bwdSg, node, dy, calleeInfo, saved, loadMap, gradContribs,
-						                 varGradContribs);
+							             varGradContribs);
 					    }
 					    else if constexpr (std::same_as<T, WhileNode>)
 					    {
 						    EmitWhileGrad(fwdSg, graph, bwdSg, fwdNodeId, node, dy, calleeInfo, saved, loadMap,
-						                  gradContribs, varGradContribs);
+							              gradContribs, varGradContribs);
 					    }
 					    else if constexpr (std::same_as<T, SaveActivationNode> ||
-					                       std::same_as<T, TapeSaveActivationNode>)
+						                   std::same_as<T, TapeSaveActivationNode>)
 					    {
 						    // 透传节点，梯度直接流向 input
 						    auto& dst = gradContribs[{ node.input.node, node.input.port }];
 						    dst.push_back(dy);
 					    }
 					    else if constexpr (std::same_as<T, LoadActivationNode> ||
-					                       std::same_as<T, TapeLoadActivationNode>)
+						                   std::same_as<T, TapeLoadActivationNode>)
 					    { /* 加载节点，不产生反向梯度 */
 					    }
 					    else if constexpr (std::same_as<T, FusedOpNode>)
 					    {
 						    throw std::runtime_error("AutogradPass: FusedOpNode encountered. "
-						                             "FusionPass should run after AutogradPass.");
+							                         "FusionPass should run after AutogradPass.");
 					    }
 					    else
 					    {
@@ -1760,7 +1760,7 @@ namespace LiteNN
 				                                      { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto siluDerivative =
 				    bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { sigmoid, 0 }, { derivativeFactor, 0 } },
-				                  { OutputInfo{ outInfo.dtype, outInfo.shape } });
+					              { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto dyTimesB = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, dy, { bV, 0 } },
 				                              { OutputInfo{ outInfo.dtype, outInfo.shape } });
 				auto da = bwdSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { dyTimesB, 0 }, { siluDerivative, 0 } },

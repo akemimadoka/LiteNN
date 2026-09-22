@@ -31,7 +31,7 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error(
 			    std::format("LLaMA embedding_length {} must be divisible by attention.head_count {}", embeddingLength,
-			                attentionHeadCount));
+				            attentionHeadCount));
 		}
 		return embeddingLength / attentionHeadCount;
 	}
@@ -46,7 +46,7 @@ namespace LiteNN::GGUF
 		{
 			throw std::runtime_error(
 			    std::format("LLaMA attention.head_count {} must be divisible by attention.head_count_kv {}",
-			                attentionHeadCount, attentionHeadCountKV));
+				            attentionHeadCount, attentionHeadCountKV));
 		}
 		return attentionHeadCount / attentionHeadCountKV;
 	}
@@ -541,90 +541,90 @@ namespace LiteNN::GGUF
 		{
 		case LLaMACompatibilityProfileKind::TinyFixture:
 			return { kind,
-				     LLaMACompatibilityProfileName(kind),
-				     "llama",
-				     false,
-				     true,
-				     true,
-				     true,
-				     false,
-				     true,
-				     false,
-				     "Self-contained tiny LLaMA-family fixtures used for metadata, lowering, AOT, and deterministic "
-				     "logit regression tests.",
-				     "Unsupported metadata, tensor shapes, and quantization formats fail with importer/lowering "
-				     "diagnostics.",
-				     "Internal fixture parity is sufficient only for regression coverage, not production model "
-				     "acceptance." };
+			         LLaMACompatibilityProfileName(kind),
+			         "llama",
+			         false,
+			         true,
+			         true,
+			         true,
+			         false,
+			         true,
+			         false,
+			         "Self-contained tiny LLaMA-family fixtures used for metadata, lowering, AOT, and deterministic "
+			         "logit regression tests.",
+			         "Unsupported metadata, tensor shapes, and quantization formats fail with importer/lowering "
+			         "diagnostics.",
+			         "Internal fixture parity is sufficient only for regression coverage, not production model "
+			         "acceptance." };
 		case LLaMACompatibilityProfileKind::LLaMA2LikeCausalLM:
 			return { kind,
-				     LLaMACompatibilityProfileName(kind),
-				     "llama",
-				     true,
-				     true,
-				     true,
-				     true,
-				     false,
-				     true,
-				     true,
-				     "LLaMA-family causal LM archives with static-shape prefill/decode, token_embd/output weights, "
-				     "RMSNorm, SwiGLU MLP, GQA/MQA head layout, none/linear RoPE, and ggml block weights "
-				     "dequantized during import.",
-				     "Unsupported llama.cpp ops, tensor layouts, RoPE variants, state ABI, or quantization formats are "
-				     "rejected instead of guessed.",
-				     "A new production profile requires external llama.cpp golden logits for prefill and decode plus "
-				     "dtype/quantization-specific tolerance." };
+			         LLaMACompatibilityProfileName(kind),
+			         "llama",
+			         true,
+			         true,
+			         true,
+			         true,
+			         false,
+			         true,
+			         true,
+			         "LLaMA-family causal LM archives with static-shape prefill/decode, token_embd/output weights, "
+			         "RMSNorm, SwiGLU MLP, GQA/MQA head layout, none/linear RoPE, and ggml block weights "
+			         "dequantized during import.",
+			         "Unsupported llama.cpp ops, tensor layouts, RoPE variants, state ABI, or quantization formats are "
+			         "rejected instead of guessed.",
+			         "A new production profile requires external llama.cpp golden logits for prefill and decode plus "
+			         "dtype/quantization-specific tolerance." };
 		case LLaMACompatibilityProfileKind::LLaMA3LikeCausalLM:
 			return { kind,
-				     LLaMACompatibilityProfileName(kind),
-				     "llama",
-				     true,
-				     true,
-				     true,
-				     true,
-				     false,
-				     true,
-				     true,
-				     "LLaMA-3-like causal LM archives that stay inside the same static causal-LM contract as the "
-				     "LLaMA2-like profile: GQA, RMSNorm, SwiGLU, tokenizer metadata preservation, and none/linear "
-				     "RoPE execution.",
-				     "YaRN/LongRoPE, sliding-window attention, mixture-of-experts, custom tokenizer runtime behavior, "
-				     "and unsupported block layouts remain blocking diagnostics.",
-				     "Acceptance requires external llama.cpp golden logits for representative prompt, prefill, and "
-				     "decode cases before claiming production support." };
+			         LLaMACompatibilityProfileName(kind),
+			         "llama",
+			         true,
+			         true,
+			         true,
+			         true,
+			         false,
+			         true,
+			         true,
+			         "LLaMA-3-like causal LM archives that stay inside the same static causal-LM contract as the "
+			         "LLaMA2-like profile: GQA, RMSNorm, SwiGLU, tokenizer metadata preservation, and none/linear "
+			         "RoPE execution.",
+			         "YaRN/LongRoPE, sliding-window attention, mixture-of-experts, custom tokenizer runtime behavior, "
+			         "and unsupported block layouts remain blocking diagnostics.",
+			         "Acceptance requires external llama.cpp golden logits for representative prompt, prefill, and "
+			         "decode cases before claiming production support." };
 		case LLaMACompatibilityProfileKind::Qwen2LikeCausalLM:
 			return { kind,
-				     LLaMACompatibilityProfileName(kind),
-				     "qwen2",
-				     false,
-				     true,
-				     true,
-				     true,
-				     true,
-				     true,
-				     true,
-				     "Qwen2/Qwen2.5-style causal LM GGUF archives that use the LLaMA-like decoder skeleton but require "
-				     "Qwen-specific tokenizer/config validation, RoPE scaling semantics, native quantized projection "
-				     "execution, and external logits before production use.",
-				     "Current LiteNN support is an analysis/lowering target only: tokenizer runtime, chat template, "
-				     "long-context RoPE variants, full decode-loop ABI, and external golden-logit evidence must remain "
-				     "explicit diagnostics. Q4_K_M projection formats are now reported as native CUDA quantized paths.",
-				     "Acceptance requires a real Qwen2.5 GGUF fixture, llama.cpp golden prefill/decode logits, "
-				     "tokenizer/chat-template parity, and CUDA/native or explicitly configured fallback evidence." };
+			         LLaMACompatibilityProfileName(kind),
+			         "qwen2",
+			         false,
+			         true,
+			         true,
+			         true,
+			         true,
+			         true,
+			         true,
+			         "Qwen2/Qwen2.5-style causal LM GGUF archives that use the LLaMA-like decoder skeleton but require "
+			         "Qwen-specific tokenizer/config validation, RoPE scaling semantics, native quantized projection "
+			         "execution, and external logits before production use.",
+			         "Current LiteNN support is an analysis/lowering target only: tokenizer runtime, chat template, "
+			         "long-context RoPE variants, full decode-loop ABI, and external golden-logit evidence must remain "
+			         "explicit diagnostics. Q4_K_M projection formats are now reported as native CUDA quantized paths.",
+			         "Acceptance requires a real Qwen2.5 GGUF fixture, llama.cpp golden prefill/decode logits, "
+			         "tokenizer/chat-template parity, and CUDA/native or explicitly configured fallback evidence." };
 		}
 		return { kind,
-			     "unknown",
-			     "unknown",
-			     false,
-			     false,
-			     false,
-			     false,
-			     false,
-			     false,
-			     true,
-			     "Unknown profile.",
-			     "Unknown profile.",
-			     "Unknown profile." };
+		         "unknown",
+		         "unknown",
+		         false,
+		         false,
+		         false,
+		         false,
+		         false,
+		         false,
+		         true,
+		         "Unknown profile.",
+		         "Unknown profile.",
+		         "Unknown profile." };
 	}
 
 	std::vector<LLaMACompatibilityProfileDescriptor> QueryLLaMACompatibilityProfiles()
@@ -821,13 +821,13 @@ namespace LiteNN::GGUF
 			    .selectedPolicy = policy,
 			    .blocking = overBudget,
 			    .reason = nativeKQuant
-			                  ? "CPU Interpreter/AOT and CUDA native projection kernels consume the original GGML "
-			                    "block payload directly"
-			              : overBudget
-			                  ? std::format("dequantized bytes {} exceed budget {}", stats.dequantizedBytes,
-			                                dequantizedMemoryBudgetBytes)
-			                  : "CPU reference dequantization is required for this block format; CUDA native quantized "
-			                    "kernels are not selected yet",
+				              ? "CPU Interpreter/AOT and CUDA native projection kernels consume the original GGML "
+				                "block payload directly"
+				          : overBudget
+				              ? std::format("dequantized bytes {} exceed budget {}", stats.dequantizedBytes,
+				                            dequantizedMemoryBudgetBytes)
+				              : "CPU reference dequantization is required for this block format; CUDA native quantized "
+				                "kernels are not selected yet",
 			});
 		}
 		return plan;
@@ -878,12 +878,12 @@ namespace LiteNN::GGUF
 			addDiagnostic(
 			    "qwen2.tokenizer",
 			    std::format("Qwen2 tokenizer metadata: model={}, tokens={}, token_types={}, "
-			                "chat_template={} ({} bytes), bos={}, eos={}, unk={}. Token-id parity against "
-			                "llama.cpp is still required; current LiteNN lowering accepts token ids directly.",
-			                tokenizer.model.value_or("<missing>"), tokenizer.tokenCount, tokenizer.tokenTypeCount,
-			                tokenizer.hasChatTemplate ? "yes" : "no", tokenizer.chatTemplateBytes,
-			                tokenizer.hasBosTokenId ? "yes" : "no", tokenizer.hasEosTokenId ? "yes" : "no",
-			                tokenizer.hasUnknownTokenId ? "yes" : "no"),
+				            "chat_template={} ({} bytes), bos={}, eos={}, unk={}. Token-id parity against "
+				            "llama.cpp is still required; current LiteNN lowering accepts token ids directly.",
+				            tokenizer.model.value_or("<missing>"), tokenizer.tokenCount, tokenizer.tokenTypeCount,
+				            tokenizer.hasChatTemplate ? "yes" : "no", tokenizer.chatTemplateBytes,
+				            tokenizer.hasBosTokenId ? "yes" : "no", tokenizer.hasEosTokenId ? "yes" : "no",
+				            tokenizer.hasUnknownTokenId ? "yes" : "no"),
 			    false);
 			addDiagnostic("qwen2.quantized-cuda",
 			              "Qwen2 Q4_K_M projection formats (Q4_K/Q6_K, plus Q5_K/Q8_0 coverage) are reported as "
@@ -925,14 +925,14 @@ namespace LiteNN::GGUF
 				}
 				summary +=
 				    std::format("{}:{} tensors/stored={} bytes/dequantized={} bytes/policy={}",
-				                QuantizedBlockFormatName(decision.format), decision.tensorCount, decision.storedBytes,
-				                decision.dequantizedBytes, LLaMAQuantizedExecutionPolicyName(decision.selectedPolicy));
+					            QuantizedBlockFormatName(decision.format), decision.tensorCount, decision.storedBytes,
+					            decision.dequantizedBytes, LLaMAQuantizedExecutionPolicyName(decision.selectedPolicy));
 			}
 			addDiagnostic(
 			    "quantization.mix",
 			    std::format("GGUF archive contains block-quantized weights: {}. LiteNN preserves block payloads "
-			                "for reported native policies; unsupported formats still require explicit fallback.",
-			                summary),
+				            "for reported native policies; unsupported formats still require explicit fallback.",
+				            summary),
 			    !quantizedExecution.lowerable);
 		}
 		if (std::ranges::any_of(quantizedExecution.decisions, [](const auto& decision) {

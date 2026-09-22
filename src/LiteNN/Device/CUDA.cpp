@@ -98,8 +98,8 @@ namespace LiteNN
 			{
 				throw std::runtime_error(
 				    std::format("CUDA host fallback for {} is disabled; add an explicit runtime schedule fallback step "
-				                "or set CUDAHostFallbackPolicy::Allow for this debug/fallback path",
-				                operation));
+					            "or set CUDAHostFallbackPolicy::Allow for this debug/fallback path",
+					            operation));
 			}
 		}
 
@@ -688,7 +688,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 				{
 					throw std::runtime_error(
 					    std::format("nvrtcCompileProgram for CUDA conversion kernel failed: {}\n{}",
-					                NVRTCStatusName(compileStatus), log));
+						            NVRTCStatusName(compileStatus), log));
 				}
 
 				size_t ptxSize = 0;
@@ -746,7 +746,7 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			const auto count = static_cast<std::uint64_t>(size);
 			void* srcPtr = const_cast<void*>(src);
 			void* arguments[]{ &srcPtr, const_cast<int*>(&srcTypeValue), &dst, const_cast<int*>(&dstTypeValue),
-				               const_cast<std::uint64_t*>(&count) };
+			                   const_cast<std::uint64_t*>(&count) };
 			constexpr unsigned int kBlockSize = 256;
 			const auto gridX = static_cast<unsigned int>((size + kBlockSize - 1) / kBlockSize);
 			module.Launch("litenn_convert_kernel",
@@ -1200,8 +1200,8 @@ extern "C" __global__ void litenn_convert_kernel(const void *src, int srcType, v
 			}
 			const auto status =
 			    cublasLtMatmul(handle.get(), operation, alpha, src1, aLayout.get(), src2, bLayout.get(), beta,
-			                   outputBuffer, cLayout.get(), outputBuffer, cLayout.get(), algo, workspacePtr,
-			                   algoWorkspaceBytes, reinterpret_cast<cudaStream_t>(options.stream));
+				               outputBuffer, cLayout.get(), outputBuffer, cLayout.get(), algo, workspacePtr,
+				               algoWorkspaceBytes, reinterpret_cast<cudaStream_t>(options.stream));
 			if (status != CUBLAS_STATUS_SUCCESS)
 			{
 				return false;

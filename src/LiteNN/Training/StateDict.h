@@ -59,7 +59,7 @@ namespace LiteNN::Training
 				set.entries_.push_back({
 				    .name = graph.VariableName(i).empty() ? std::format("parameter.{}", i) : graph.VariableName(i),
 				    .type = TensorType::Dense(parameter.DType(), parameter.Shape(),
-				                              ParameterMemorySpace(parameter.CurDevice())),
+					                          ParameterMemorySpace(parameter.CurDevice())),
 				    .parameter = &parameter,
 				    .gradient = &variable->Grad(),
 				});

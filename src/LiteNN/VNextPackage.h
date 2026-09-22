@@ -76,36 +76,36 @@ namespace LiteNN
 		{
 		case VNextABIChangeArea::ManifestShape:
 			return { area, VNextVersionComponent::Manifest,
-				     "JSON manifest keys, required sections, or package layout shape changed" };
+			         "JSON manifest keys, required sections, or package layout shape changed" };
 		case VNextABIChangeArea::OpSemantics:
 			return { area, VNextVersionComponent::OpSet, "Executable op semantics or required op attributes changed" };
 		case VNextABIChangeArea::DTypeSemantics:
 			return { area, VNextVersionComponent::DTypeSet,
-				     "Data type encoding, precision behavior, or dtype availability changed" };
+			         "Data type encoding, precision behavior, or dtype availability changed" };
 		case VNextABIChangeArea::LayoutSemantics:
 			return { area, VNextVersionComponent::LayoutSet,
-				     "Tensor layout interpretation, strides, or memory-space layout contracts changed" };
+			         "Tensor layout interpretation, strides, or memory-space layout contracts changed" };
 		case VNextABIChangeArea::QuantizationSemantics:
 			return { area, VNextVersionComponent::QuantizationSet,
-				     "Quantization parameter, block format, scale, or zero-point semantics changed" };
+			         "Quantization parameter, block format, scale, or zero-point semantics changed" };
 		case VNextABIChangeArea::TensorBinding:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "Runtime-visible tensor binding names, mutability, rebind policy, or checksum contracts changed" };
+			         "Runtime-visible tensor binding names, mutability, rebind policy, or checksum contracts changed" };
 		case VNextABIChangeArea::ExternalRegion:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "External rodata, weight, instruction, or object-region ownership/alignment contracts changed" };
+			         "External rodata, weight, instruction, or object-region ownership/alignment contracts changed" };
 		case VNextABIChangeArea::BackendRequirement:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "Backend selection, capability, fallback, or native artifact requirement contracts changed" };
+			         "Backend selection, capability, fallback, or native artifact requirement contracts changed" };
 		case VNextABIChangeArea::RuntimeState:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "KV cache, diffusion, training, optimizer, or adapter runtime-state binding contracts changed" };
+			         "KV cache, diffusion, training, optimizer, or adapter runtime-state binding contracts changed" };
 		case VNextABIChangeArea::RuntimeSchedule:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "Runtime schedule step, transfer, fallback, or profile-record contracts changed" };
+			         "Runtime schedule step, transfer, fallback, or profile-record contracts changed" };
 		case VNextABIChangeArea::ArtifactEntry:
 			return { area, VNextVersionComponent::ArtifactABI,
-				     "Named artifact entry kinds, entry functions, or required binding contracts changed" };
+			         "Named artifact entry kinds, entry functions, or required binding contracts changed" };
 		}
 		return { area, VNextVersionComponent::Manifest, "Unknown vNext ABI change area" };
 	}
@@ -418,8 +418,8 @@ namespace LiteNN
 			{
 				summary.backendRequirements.push_back(
 				    std::format("{}:{}:segment={}:caps={}:transfer={}", artifact.name, requirement.backend,
-				                requirement.segment ? std::to_string(*requirement.segment) : std::string("none"),
-				                requirement.requiredCapabilities.size(), requirement.transferABI));
+					            requirement.segment ? std::to_string(*requirement.segment) : std::string("none"),
+					            requirement.requiredCapabilities.size(), requirement.transferABI));
 			}
 		}
 
@@ -439,9 +439,9 @@ namespace LiteNN
 		{
 			requirements.push_back(
 			    { .segment = segment.id,
-			      .backend = segment.backend,
-			      .requiredCapabilities = { "runtime-schedule:dispatch-segment", "backend:" + segment.backend },
-			      .transferABI = hasTransferABI ? "runtime-buffer-transfer-v1" : "none" });
+				  .backend = segment.backend,
+				  .requiredCapabilities = { "runtime-schedule:dispatch-segment", "backend:" + segment.backend },
+				  .transferABI = hasTransferABI ? "runtime-buffer-transfer-v1" : "none" });
 		}
 		if (!requirements.empty())
 		{
@@ -451,8 +451,8 @@ namespace LiteNN
 		{
 			requirements.push_back(
 			    { .backend = partition.backend,
-			      .requiredCapabilities = { "runtime-schedule:dispatch-region", "backend:" + partition.backend },
-			      .transferABI = "none" });
+				  .requiredCapabilities = { "runtime-schedule:dispatch-region", "backend:" + partition.backend },
+				  .transferABI = "none" });
 		}
 		return requirements;
 	}
@@ -529,16 +529,16 @@ namespace LiteNN
 	inline VNextExternalTensorRef ToVNextExternalTensorRef(std::string name, const TensorStorageRef& storage)
 	{
 		return { .name = std::move(name),
-			     .type = storage.type,
-			     .quantization = storage.quantization,
-			     .kind = storage.region.externalKind,
-			     .relativePath = storage.region.name,
-			     .byteOffset = storage.region.byteOffset + storage.storageOffsetBytes,
-			     .byteSize = storage.LogicalByteSize().value_or(storage.region.byteSize),
-			     .alignment = storage.region.alignment,
-			     .checksum = storage.region.checksum,
-			     .mutability = storage.region.mutability,
-			     .rebindPolicy = storage.region.rebindPolicy };
+		         .type = storage.type,
+		         .quantization = storage.quantization,
+		         .kind = storage.region.externalKind,
+		         .relativePath = storage.region.name,
+		         .byteOffset = storage.region.byteOffset + storage.storageOffsetBytes,
+		         .byteSize = storage.LogicalByteSize().value_or(storage.region.byteSize),
+		         .alignment = storage.region.alignment,
+		         .checksum = storage.region.checksum,
+		         .mutability = storage.region.mutability,
+		         .rebindPolicy = storage.region.rebindPolicy };
 	}
 
 	inline VNextPackageManifest BuildVNextPackageManifest(Runtime::RuntimeSchedule schedule,
@@ -589,7 +589,7 @@ namespace LiteNN
 			manifest.tensors.push_back(ToVNextExternalTensorRef(
 			    i < schedule.module.plan.variableNames.size() && !schedule.module.plan.variableNames[i].empty()
 			        ? schedule.module.plan.variableNames[i]
-			        : (storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name),
+					: (storage.region.name.empty() ? std::format("variable{}", i) : storage.region.name),
 			    storage));
 		}
 		return manifest;

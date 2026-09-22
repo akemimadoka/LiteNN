@@ -855,7 +855,7 @@ namespace LiteNN
 			params.expressedShape = source.Shape().ToOwned();
 		}
 		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(),
-			                                                                    std::size_t{ 2 }) };
+		                                                                        std::size_t{ 2 }) };
 		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
 
@@ -923,7 +923,7 @@ namespace LiteNN
 			params.expressedShape = source.Shape().ToOwned();
 		}
 		const std::vector<std::size_t> packedShape{ QuantizationDetail::CeilDiv(source.NumElements(),
-			                                                                    std::size_t{ 2 }) };
+		                                                                        std::size_t{ 2 }) };
 		Tensor<CPU> storage(Uninitialized, packedShape, DataType::UInt8);
 		ValidateQuantizationParams(params, storage.Shape(), storage.DType());
 

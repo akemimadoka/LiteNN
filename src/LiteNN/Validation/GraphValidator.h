@@ -235,13 +235,13 @@ namespace LiteNN::Validation
 			{
 				throw GraphValidationError(
 				    std::format("Graph validation failed: forward subgraph {} is out of range; subgraphCount={}",
-				                graph_.Forward(), graph_.SubgraphCount()));
+					            graph_.Forward(), graph_.SubgraphCount()));
 			}
 			if (const auto backward = graph_.Backward(); backward && *backward >= graph_.SubgraphCount())
 			{
 				throw GraphValidationError(
 				    std::format("Graph validation failed: backward subgraph {} is out of range; subgraphCount={}",
-				                *backward, graph_.SubgraphCount()));
+					            *backward, graph_.SubgraphCount()));
 			}
 
 			ValidateVariables();
@@ -1769,7 +1769,7 @@ namespace LiteNN::Validation
 			}
 			const auto outputShape =
 			    Detail::ConvTranspose2DOutputShape(input.shape, weight.shape, node.strides, node.dilations,
-			                                       node.lowPads, node.highPads, node.outputPads, node.groupCount);
+				                                   node.lowPads, node.highPads, node.outputPads, node.groupCount);
 			if (node.bias)
 			{
 				const auto bias =

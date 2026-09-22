@@ -142,7 +142,7 @@ namespace LiteNN
 			const auto chip = ResolveNVPTXTargetChip();
 			auto targetMachine = std::unique_ptr<llvm::TargetMachine>(
 			    target->createTargetMachine(llvm::Triple(std::string(kNVPTXTriple)), chip, std::string(kNVPTXFeatures),
-			                                options, std::nullopt, std::nullopt, llvm::CodeGenOptLevel::Aggressive));
+				                            options, std::nullopt, std::nullopt, llvm::CodeGenOptLevel::Aggressive));
 			if (!targetMachine)
 			{
 				throw std::runtime_error("Failed to create NVPTX LLVM target machine");
@@ -440,7 +440,7 @@ namespace LiteNN
 				throw std::runtime_error("CUDA native MLIR broadcast shape is too large for u32 indexing");
 			}
 			return CUDANativeBroadcastStrides{ std::move(*outputStrides), std::move(*lhsStrides),
-				                               std::move(*rhsStrides) };
+			                                   std::move(*rhsStrides) };
 		}
 
 		CUDANativeBatchMatMulStrides ComputeBatchMatMulStrides(const CUDANativeBatchMatMulF32CodegenSpec& spec)
@@ -806,7 +806,7 @@ namespace LiteNN
 				        .getResult();
 				auto denominator =
 				    EmitF32Intrinsic("llvm.nvvm.sqrt.rn.ftz.f",
-				                     mlir::ValueRange{ EmitF32Add(meanSquares, EmitF32Constant(spec.epsilon)) });
+					                 mlir::ValueRange{ EmitF32Add(meanSquares, EmitF32Constant(spec.epsilon)) });
 				auto value = EmitLoadF32(EmitF32GEP(in, blocks.index32));
 				auto normalized =
 				    builder_.create<mlir::LLVM::FDivOp>(loc_, f32Type_, mlir::ValueRange{ value, denominator })
@@ -1253,7 +1253,7 @@ namespace LiteNN
 				{
 					auto blockBase =
 					    EmitI32Mul(EmitI32Add(EmitI32Mul(column, EmitI32Constant(blocksPerRow)), blockIndex),
-					               EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
+						           EmitI32Constant(static_cast<std::uint32_t>(layout->bytesPerBlock)));
 					const auto dOffset = spec.format == QuantizedBlockFormat::GGML_Q6_K
 					                         ? EmitI32Add(blockBase, EmitI32Constant(208))
 					                         : blockBase;
@@ -1267,7 +1267,7 @@ namespace LiteNN
 					{
 						auto minRaw = EmitLoad(
 						    EmitTypedGEP(rhs, f16Type,
-						                 EmitI32UDiv(EmitI32Add(blockBase, EmitI32Constant(2)), EmitI32Constant(2))),
+							             EmitI32UDiv(EmitI32Add(blockBase, EmitI32Constant(2)), EmitI32Constant(2))),
 						    f16Type);
 						minScale = builder_.create<mlir::arith::ExtFOp>(loc_, f32Type_, minRaw).getResult();
 					}
@@ -1276,9 +1276,9 @@ namespace LiteNN
 					{
 						auto lhsOffset =
 						    EmitI32Add(EmitI32Mul(row, EmitI32Constant(spec.k)),
-						               EmitI32Add(EmitI32Mul(blockIndex, EmitI32Constant(static_cast<std::uint32_t>(
+							           EmitI32Add(EmitI32Mul(blockIndex, EmitI32Constant(static_cast<std::uint32_t>(
 						                                                     layout->elementsPerBlock))),
-						                          EmitI32Constant(lane)));
+							                      EmitI32Constant(lane)));
 						auto lhsValue = EmitLoadF32(EmitF32GEP(lhs, lhsOffset));
 						mlir::Value weight;
 						if (spec.format == QuantizedBlockFormat::GGML_Q8_0)
@@ -1426,7 +1426,7 @@ namespace LiteNN
 				auto highTwo =
 				    builder_
 				        .create<mlir::arith::AndIOp>(loc_, builder_.create<mlir::arith::ShRUIOp>(loc_, qh, shift),
-				                                     builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 3))
+						                             builder_.create<mlir::arith::ConstantIntOp>(loc_, i32Type_, 3))
 				        .getResult();
 				auto quant = builder_
 				                 .create<mlir::arith::SubIOp>(
@@ -1504,7 +1504,7 @@ namespace LiteNN
 				const auto chip = ResolveNVPTXTargetChip();
 				auto target =
 				    mlir::NVVM::NVVMTargetAttr::get(&context_, 2, ToLLVMStringRef(kNVPTXTriple), ToLLVMStringRef(chip),
-				                                    ToLLVMStringRef(kNVPTXFeatures), nullptr, nullptr, false);
+					                                ToLLVMStringRef(kNVPTXFeatures), nullptr, nullptr, false);
 				llvm::SmallVector<mlir::Attribute, 1> targets{ target };
 				auto gpuModule = builder_.create<mlir::gpu::GPUModuleOp>(loc_, "litenn_cuda_kernels", targets);
 				return CUDANativeMLIRKernelModule{ mlir::OwningOpRef<mlir::ModuleOp>(module), gpuModule };

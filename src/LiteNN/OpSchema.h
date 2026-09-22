@@ -65,9 +65,9 @@ namespace LiteNN
 	inline constexpr std::string_view BackendMobile = "Mobile";
 
 	inline constexpr std::array<std::string_view, 7> DefaultBackendNames{ BackendCPUInterpreter, BackendCPUAOT,
-		                                                                  BackendCUDANative,     BackendCUDABridge,
-		                                                                  BackendVulkanNative,   BackendVulkanBridge,
-		                                                                  BackendMobile };
+	                                                                      BackendCUDANative,     BackendCUDABridge,
+	                                                                      BackendVulkanNative,   BackendVulkanBridge,
+	                                                                      BackendMobile };
 
 	struct BackendCapability
 	{
@@ -750,14 +750,14 @@ namespace LiteNN
 		    [](const auto& value) -> std::vector<NodeOutput> {
 			    using T = std::decay_t<decltype(value)>;
 			    if constexpr (std::same_as<T, UnaryOpNode> || std::same_as<T, CastNode> ||
-			                  std::same_as<T, QuantizeNode> || std::same_as<T, DequantizeNode> ||
-			                  std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode> ||
-			                  std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
-			                  std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
-			                  std::same_as<T, PadNode> || std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
-			                  std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
-			                  std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
-			                  std::same_as<T, ArgsortNode>)
+				              std::same_as<T, QuantizeNode> || std::same_as<T, DequantizeNode> ||
+				              std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode> ||
+				              std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
+				              std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
+				              std::same_as<T, PadNode> || std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
+				              std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+				              std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
+				              std::same_as<T, ArgsortNode>)
 			    {
 				    return { value.input };
 			    }
@@ -766,8 +766,8 @@ namespace LiteNN
 				    return { value.timesteps };
 			    }
 			    else if constexpr (std::same_as<T, BinaryOpNode> || std::same_as<T, QuantizedMatMulNode> ||
-			                       std::same_as<T, QuantizedGetRowsNode> || std::same_as<T, BatchMatMulNode> ||
-			                       std::same_as<T, OutProdNode>)
+				                   std::same_as<T, QuantizedGetRowsNode> || std::same_as<T, BatchMatMulNode> ||
+				                   std::same_as<T, OutProdNode>)
 			    {
 				    if constexpr (std::same_as<T, QuantizedMatMulNode>)
 				    {

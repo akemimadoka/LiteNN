@@ -777,7 +777,7 @@ static InstructionStats AnalyzeObjectInstructions(const std::filesystem::path& o
 	const auto errPath = asmPath.string() + ".err";
 	const auto command =
 	    std::format("{} -d -M intel {} > {} 2> {}", QuoteProgramForShell(objdump), QuoteForShell(objectPath.string()),
-	                QuoteForShell(asmPath.string()), QuoteForShell(errPath));
+		            QuoteForShell(asmPath.string()), QuoteForShell(errPath));
 	if (std::system(command.c_str()) != 0)
 	{
 		return { .message = std::format("objdump failed; set LITENN_OBJDUMP or inspect {}", errPath) };

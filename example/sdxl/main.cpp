@@ -874,8 +874,8 @@ namespace
 		{
 			throw std::runtime_error(
 			    std::format("{} copy requires matching dtype/shape; source {} {}, destination {} {}", label,
-			                LiteNN::DataTypeName(source.DType()), ShapeToString(source.Shape()),
-			                LiteNN::DataTypeName(destination.DType()), ShapeToString(destination.Shape())));
+				            LiteNN::DataTypeName(source.DType()), ShapeToString(source.Shape()),
+				            LiteNN::DataTypeName(destination.DType()), ShapeToString(destination.Shape())));
 		}
 		switch (source.DType())
 		{
@@ -1346,7 +1346,7 @@ namespace
 		{
 			throw std::runtime_error(
 			    std::format("Input tensor '{}' from {} has shape {}, but compiled module expects {}", spec.name,
-			                inputPath.string(), ShapeToString(tensorShape), ShapeToString(specShape)));
+				            inputPath.string(), ShapeToString(tensorShape), ShapeToString(specShape)));
 		}
 	}
 
@@ -1927,13 +1927,13 @@ namespace
 		auto outputs = interpreter.RunForwardWithTrace(
 		    plan, std::span<const LiteNN::Tensor<LiteNN::CPU>>(inputs.data(), inputs.size()),
 		    [&](LiteNN::SubgraphId subgraphId, LiteNN::NodeId nodeId, const LiteNN::NodeEntry& entry,
-		        std::span<const LiteNN::Tensor<LiteNN::CPU>> nodeOutputs) {
+			    std::span<const LiteNN::Tensor<LiteNN::CPU>> nodeOutputs) {
 			    ++visitedNodes;
 			    if (options.maxNodes && visitedNodes > *options.maxNodes)
 			    {
 				    throw std::runtime_error(
 				        std::format("Finite diagnostics reached --max-nodes {} without finding a non-finite tensor",
-				                    *options.maxNodes));
+						            *options.maxNodes));
 			    }
 			    for (std::size_t port = 0; port < nodeOutputs.size(); ++port)
 			    {
@@ -1970,10 +1970,10 @@ namespace
 				    else if (options.verbose)
 				    {
 					    std::cout << std::format("  finite subgraph={} node={} kind={} port={} dtype={} shape={} "
-					                             "mean={} rms={} min={} max={}\n",
-					                             subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
-					                             LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()),
-					                             stats.mean, stats.rms, stats.min, stats.max);
+						                         "mean={} rms={} min={} max={}\n",
+						                         subgraphId, nodeId, LiteNN::Validation::NodeKindName(entry.node), port,
+						                         LiteNN::DataTypeName(tensor.DType()), ShapeToString(tensor.Shape()),
+						                         stats.mean, stats.rms, stats.min, stats.max);
 				    }
 			    }
 		    });

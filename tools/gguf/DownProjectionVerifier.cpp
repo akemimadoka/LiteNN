@@ -242,7 +242,7 @@ namespace LiteNN::GGUF::Tooling
 					throw std::runtime_error("failed to read checkpoint payload range");
 				}
 				const auto bytes = std::span{ static_cast<const std::byte*>(tensor.UnsafeRawData()),
-					                          static_cast<std::size_t>(byteSize) };
+				                              static_cast<std::size_t>(byteSize) };
 				if (std::format("{:016x}", FNV1a(bytes)) != fields[16])
 				{
 					throw std::runtime_error("checkpoint payload checksum does not match manifest");
@@ -980,18 +980,18 @@ namespace LiteNN::GGUF::Tooling
 				{
 					summary.maximumProductionGateVersusCapturedNRMSE =
 					    std::max(summary.maximumProductionGateVersusCapturedNRMSE,
-					             metrics.gateVersusCaptured.normalizedRmsError);
+						         metrics.gateVersusCaptured.normalizedRmsError);
 					summary.maximumProductionUpVersusCapturedNRMSE = std::max(
 					    summary.maximumProductionUpVersusCapturedNRMSE, metrics.upVersusCaptured.normalizedRmsError);
 					summary.maximumProductionSwiGLUVersusCapturedNRMSE =
 					    std::max(summary.maximumProductionSwiGLUVersusCapturedNRMSE,
-					             metrics.swigluVersusCaptured.normalizedRmsError);
+						         metrics.swigluVersusCaptured.normalizedRmsError);
 				}
 				if (candidate.name == "captured_gate_up_litenn_strict_swiglu")
 				{
 					summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE =
 					    std::max(summary.maximumCapturedInputSwiGLUVersusCapturedNRMSE,
-					             metrics.swigluVersusCaptured.normalizedRmsError);
+						         metrics.swigluVersusCaptured.normalizedRmsError);
 				}
 				result.candidates.push_back(std::move(metrics));
 			}
@@ -1014,10 +1014,10 @@ namespace LiteNN::GGUF::Tooling
 		const auto finalBlock = hyperparameters.blockCount - 1;
 		auto candidateHidden =
 		    LoadCheckpointTensor(options.candidateCheckpointDirectory, "post_ffn", options.generatedIndex, finalBlock,
-		                         hyperparameters.embeddingLength);
+			                     hyperparameters.embeddingLength);
 		auto referenceHidden =
 		    LoadCheckpointTensor(options.referenceCheckpointDirectory, "post_ffn", options.generatedIndex, finalBlock,
-		                         hyperparameters.embeddingLength);
+			                     hyperparameters.embeddingLength);
 		const auto normIndex = graph.FindVariable("output_norm.weight");
 		if (!normIndex)
 		{

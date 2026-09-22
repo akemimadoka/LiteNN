@@ -728,15 +728,15 @@ namespace litenn
 					    auto rounded = b.create<math::RoundOp>(loc, scaled).getResult();
 					    auto shifted = b.create<arith::AddFOp>(loc, rounded, args[2]).getResult();
 					    auto minConst = b.create<arith::ConstantFloatOp>(loc, cast<FloatType>(inputElemType),
-					                                                     llvm::APFloat(static_cast<float>(minValue)));
+						                                                 llvm::APFloat(static_cast<float>(minValue)));
 					    auto maxConst = b.create<arith::ConstantFloatOp>(loc, cast<FloatType>(inputElemType),
-					                                                     llvm::APFloat(static_cast<float>(maxValue)));
+						                                                 llvm::APFloat(static_cast<float>(maxValue)));
 					    auto clampedMin = b.create<arith::MaximumFOp>(loc, shifted, minConst).getResult();
 					    auto clamped = b.create<arith::MinimumFOp>(loc, clampedMin, maxConst).getResult();
 					    Value result =
 					        params.storageType == DataType::UInt8
-					            ? b.create<arith::FPToUIOp>(loc, resultType.getElementType(), clamped).getResult()
-					            : b.create<arith::FPToSIOp>(loc, resultType.getElementType(), clamped).getResult();
+						        ? b.create<arith::FPToUIOp>(loc, resultType.getElementType(), clamped).getResult()
+						        : b.create<arith::FPToSIOp>(loc, resultType.getElementType(), clamped).getResult();
 					    b.create<linalg::YieldOp>(loc, result);
 				    });
 				return generic.getResult(0);
@@ -813,8 +813,8 @@ namespace litenn
 						initValue = builder_.create<arith::ConstantFloatOp>(
 						    loc, floatType,
 						    llvm::APFloat::getInf(floatType.getFloatSemantics(),
-						                          /*negative=*/
-						                          opKind == LiteNN::ReduceOp::Max));
+							                      /*negative=*/
+							                      opKind == LiteNN::ReduceOp::Max));
 					}
 					else
 					{
@@ -845,14 +845,14 @@ namespace litenn
 					    if (opKind == LiteNN::ReduceOp::Max)
 					    {
 						    result = isa<FloatType>(elemType)
-						                 ? b.create<arith::MaximumFOp>(l, args[1], args[0]).getResult()
-						                 : b.create<arith::MaxSIOp>(l, args[1], args[0]).getResult();
+							             ? b.create<arith::MaximumFOp>(l, args[1], args[0]).getResult()
+							             : b.create<arith::MaxSIOp>(l, args[1], args[0]).getResult();
 					    }
 					    else if (opKind == LiteNN::ReduceOp::Min)
 					    {
 						    result = isa<FloatType>(elemType)
-						                 ? b.create<arith::MinimumFOp>(l, args[1], args[0]).getResult()
-						                 : b.create<arith::MinSIOp>(l, args[1], args[0]).getResult();
+							             ? b.create<arith::MinimumFOp>(l, args[1], args[0]).getResult()
+							             : b.create<arith::MinSIOp>(l, args[1], args[0]).getResult();
 					    }
 					    else
 					    {
@@ -1290,7 +1290,7 @@ namespace litenn
 					auto scale =
 					    emitFilledConstant(node.targetType, output.shape, static_cast<double>(node.params.scales[0]));
 					valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
-						                                 output.shape) };
+					                                     output.shape) };
 					return;
 				}
 
@@ -1315,7 +1315,7 @@ namespace litenn
 				}
 				auto scale = emitQuantizationParameterConstant(node.params, node.targetType, output.shape, scales);
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, casted, scale, node.targetType,
-					                                 output.shape) };
+				                                     output.shape) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const QuantizedMatMulNode& node,
@@ -1417,7 +1417,7 @@ namespace litenn
 					const auto preparedBlockBytes = GGMLPreparedBlockBytes(node.params.blockFormat);
 					const auto expectedPreparedBytes =
 					    preparedBlockBytes ? std::optional<std::size_t>{ n * blockCount * *preparedBlockBytes }
-					                       : std::nullopt;
+						                   : std::nullopt;
 					const auto expectedCompactBytes = GGMLCompactBlockGroupedBytes(node.params.blockFormat, n, k);
 					const auto expectedFieldInterleavedBytes =
 					    GGMLFieldInterleavedV4Bytes(node.params.blockFormat, n, k);
@@ -1463,8 +1463,8 @@ namespace litenn
 						    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
 						    SmallVector<AffineMap>{ lhsMap, outputMap },
 						    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
-						                                      utils::IteratorType::parallel,
-						                                      utils::IteratorType::reduction },
+							                                  utils::IteratorType::parallel,
+							                                  utils::IteratorType::reduction },
 						    [&](OpBuilder& b, Location l, ValueRange args) {
 							    // Keep the UInt8 storage operand alive so the CPU LLVM pass can rewrite this
 							    // lightweight placeholder into a GGML sidecar call after bufferization.
@@ -1473,7 +1473,7 @@ namespace litenn
 							        b.create<tensor::ExtractOp>(l, rhs, ValueRange{ zeroIndex }).getResult();
 							    auto storageF32 =
 							        b.create<arith::UIToFPOp>(l, b.getF32Type(),
-							                                  b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
+									                          b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
 							            .getResult();
 							    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 							    auto storageDependency = b.create<arith::MulFOp>(l, storageF32, zeroF32).getResult();
@@ -1513,7 +1513,7 @@ namespace litenn
 					    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
 					    SmallVector<AffineMap>{ lhsMap, outputMap },
 					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
-					                                      utils::IteratorType::reduction },
+						                                  utils::IteratorType::reduction },
 					    [&](OpBuilder& b, Location l, ValueRange args) {
 						    const auto i16 = b.getI16Type();
 						    const auto i32 = b.getI32Type();
@@ -1558,8 +1558,8 @@ namespace litenn
 						        b.create<arith::RemUIOp>(l, reductionIndex, index(layout->elementsPerBlock))
 						            .getResult();
 						    auto d = fp16At(node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K
-						                        ? b.create<arith::AddIOp>(l, blockBase, index(208)).getResult()
-						                        : blockBase);
+							                    ? b.create<arith::AddIOp>(l, blockBase, index(208)).getResult()
+							                    : blockBase);
 						    Value weightF32;
 						    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0)
 						    {
@@ -1595,7 +1595,7 @@ namespace litenn
 							    auto lowFour = b.create<arith::SelectOp>(
 							                        l, highNibble, b.create<arith::ShRUIOp>(l, ql, shift4).getResult(),
 							                        b.create<arith::AndIOp>(l, ql, mask15).getResult())
-							                       .getResult();
+								                   .getResult();
 							    auto qhOffset =
 							        b.create<arith::AddIOp>(
 							             l, b.create<arith::MulIOp>(l, halfBlock, index(32)).getResult(), lane)
@@ -1609,8 +1609,8 @@ namespace litenn
 							        b.create<arith::MulIOp>(l, segmentI32, b.create<arith::ConstantIntOp>(l, i32, 2))
 							            .getResult();
 							    auto highTwo = b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, qh, shift),
-							                                           b.create<arith::ConstantIntOp>(l, i32, 3))
-							                       .getResult();
+								                                       b.create<arith::ConstantIntOp>(l, i32, 3))
+								                   .getResult();
 							    auto quant =
 							        b.create<arith::SubIOp>(
 							             l,
@@ -1632,7 +1632,7 @@ namespace litenn
 							             byteAt(b.create<arith::AddIOp>(
 							                         l, b.create<arith::AddIOp>(l, blockBase, index(192)).getResult(),
 							                         scaleOffset)
-							                        .getResult()))
+										            .getResult()))
 							            .getResult();
 							    auto quantF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), quant).getResult();
 							    auto scaleF32 = b.create<arith::SIToFPOp>(l, b.getF32Type(), scale).getResult();
@@ -1651,12 +1651,12 @@ namespace litenn
 							    auto scaleLowOffset = b.create<arith::SelectOp>(
 							                               l, belowFour, subblock,
 							                               b.create<arith::AddIOp>(l, subblock, index(4)).getResult())
-							                              .getResult();
+								                          .getResult();
 							    auto scaleLow = byteToI32(
 							        byteAt(b.create<arith::AddIOp>(l, scalesBase, scaleLowOffset).getResult()));
 							    auto minLow = byteToI32(byteAt(
 							        b.create<arith::AddIOp>(l, scalesBase,
-							                                b.create<arith::AddIOp>(l, subblock, index(4)).getResult())
+									                        b.create<arith::AddIOp>(l, subblock, index(4)).getResult())
 							            .getResult()));
 							    auto mask63 = b.create<arith::ConstantIntOp>(l, i32, 63);
 							    auto scaleDirect = b.create<arith::AndIOp>(l, scaleLow, mask63).getResult();
@@ -1664,7 +1664,7 @@ namespace litenn
 							    auto highOffset = b.create<arith::SelectOp>(
 							                           l, belowFour, index(0),
 							                           b.create<arith::SubIOp>(l, subblock, index(4)).getResult())
-							                          .getResult();
+								                      .getResult();
 							    auto highSource =
 							        byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, highOffset).getResult()));
 							    auto minHighSource =
@@ -1676,13 +1676,13 @@ namespace litenn
 							        b.create<arith::OrIOp>(
 							             l, b.create<arith::AndIOp>(l, scaleLow, mask15),
 							             b.create<arith::ShLIOp>(l, b.create<arith::ShRUIOp>(l, highSource, shift6),
-							                                     shift4))
+										                         shift4))
 							            .getResult();
 							    auto minExtended =
 							        b.create<arith::OrIOp>(
 							             l, b.create<arith::ShRUIOp>(l, minLow, shift4),
 							             b.create<arith::ShLIOp>(l, b.create<arith::ShRUIOp>(l, minHighSource, shift6),
-							                                     shift4))
+										                         shift4))
 							            .getResult();
 							    auto scale =
 							        b.create<arith::SelectOp>(l, belowFour, scaleDirect, scaleExtended).getResult();
@@ -1692,7 +1692,7 @@ namespace litenn
 							        b.create<arith::AddIOp>(
 							             l,
 							             b.create<arith::MulIOp>(l, b.create<arith::DivUIOp>(l, withinBlock, index(64)),
-							                                     index(32))
+										                         index(32))
 							                 .getResult(),
 							             b.create<arith::RemUIOp>(l, withinBlock, index(32)).getResult())
 							            .getResult();
@@ -1719,11 +1719,11 @@ namespace litenn
 								        byteAt(b.create<arith::AddIOp>(
 								                    l, b.create<arith::AddIOp>(l, blockBase, index(16)).getResult(),
 								                    b.create<arith::RemUIOp>(l, withinBlock, index(32)).getResult())
-								                   .getResult()));
+										           .getResult()));
 								    auto subblockI32 = b.create<arith::IndexCastOp>(l, i32, subblock).getResult();
 								    auto highBit =
 								        b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, highBits, subblockI32),
-								                                b.create<arith::ConstantIntOp>(l, i32, 1))
+										                        b.create<arith::ConstantIntOp>(l, i32, 1))
 								            .getResult();
 								    nibble =
 								        b.create<arith::OrIOp>(l, nibble, b.create<arith::ShLIOp>(l, highBit, shift4))
@@ -1737,7 +1737,7 @@ namespace litenn
 							            .getResult();
 							    weightF32 = b.create<arith::SubFOp>(
 							                     l, scaled, b.create<arith::MulFOp>(l, dmin, minF32).getResult())
-							                    .getResult();
+								                .getResult();
 						    }
 						    auto product =
 						        b.create<arith::MulFOp>(l, emitScalarToF32(b, l, args[0]), weightF32).getResult();
@@ -1769,7 +1769,7 @@ namespace litenn
 					    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
 					    SmallVector<AffineMap>{ lhsMap, outputMap },
 					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
-					                                      utils::IteratorType::reduction },
+						                                  utils::IteratorType::reduction },
 					    [&](OpBuilder& b, Location l, ValueRange args) {
 						    const auto i32 = b.getI32Type();
 						    const auto lhsF32 = emitScalarToF32(b, l, args[0]);
@@ -1778,7 +1778,7 @@ namespace litenn
 						    auto nIndex = b.create<arith::ConstantIndexOp>(l, n).getResult();
 						    auto elementIndex =
 						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, rowIndex, nIndex).getResult(),
-						                                colIndex)
+								                        colIndex)
 						            .getResult();
 						    auto twoIndex = b.create<arith::ConstantIndexOp>(l, 2).getResult();
 						    auto byteIndex = b.create<arith::DivUIOp>(l, elementIndex, twoIndex).getResult();
@@ -1786,7 +1786,7 @@ namespace litenn
 						    auto byte = b.create<tensor::ExtractOp>(l, rhs, ValueRange{ byteIndex }).getResult();
 						    auto byteI32 = b.create<arith::ExtUIOp>(l, i32, byte).getResult();
 						    auto low = b.create<arith::AndIOp>(l, byteI32, b.create<arith::ConstantIntOp>(l, i32, 15))
-						                   .getResult();
+							               .getResult();
 						    auto high =
 						        b.create<arith::AndIOp>(
 						             l,
@@ -1799,13 +1799,13 @@ namespace litenn
 						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, nibbleOffset, oneIndex)
 						            .getResult();
 						    Value nibble = lowThenHigh
-						                       ? b.create<arith::SelectOp>(l, takeSecond, high, low).getResult()
-						                       : b.create<arith::SelectOp>(l, takeSecond, low, high).getResult();
+							                   ? b.create<arith::SelectOp>(l, takeSecond, high, low).getResult()
+							                   : b.create<arith::SelectOp>(l, takeSecond, low, high).getResult();
 						    if (signedInt4)
 						    {
 							    auto isNegative = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, nibble,
-							                                              b.create<arith::ConstantIntOp>(l, i32, 8))
-							                          .getResult();
+								                                          b.create<arith::ConstantIntOp>(l, i32, 8))
+								                      .getResult();
 							    nibble =
 							        b.create<arith::SelectOp>(
 							             l, isNegative,
@@ -1819,12 +1819,12 @@ namespace litenn
 						                  l, rhsF32,
 						                  b.create<arith::ConstantFloatOp>(
 						                      l, b.getF32Type(), llvm::APFloat(static_cast<float>(zeroPoint))))
-						                 .getResult();
+							             .getResult();
 						    rhsF32 = b.create<arith::MulFOp>(
 						                  l, rhsF32,
 						                  b.create<arith::ConstantFloatOp>(l, b.getF32Type(),
-						                                                   llvm::APFloat(static_cast<float>(scale))))
-						                 .getResult();
+										                                   llvm::APFloat(static_cast<float>(scale))))
+							             .getResult();
 						    auto product = b.create<arith::MulFOp>(l, lhsF32, rhsF32).getResult();
 						    auto accumulator = emitScalarToF32(b, l, args[1]);
 						    auto sum = b.create<arith::AddFOp>(l, accumulator, product).getResult();
@@ -1903,7 +1903,7 @@ namespace litenn
 				    ValueRange{ filled },
 				    SmallVector<AffineMap>{ lhsMap, rhsMap, parameterMap, parameterMap, outputMap },
 				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
-				                                      utils::IteratorType::reduction },
+					                                  utils::IteratorType::reduction },
 				    [&](OpBuilder& b, Location l, ValueRange args) {
 					    const auto lhsF32 = emitScalarToF32(b, l, args[0]);
 					    auto rhsF32 = emitIntegerScalarToF32(b, l, args[1], node.params.storageType == DataType::UInt8);
@@ -1923,7 +1923,7 @@ namespace litenn
 						    scale =
 						        b.create<tensor::ExtractOp>(l, scaleValue, ValueRange{ parameterIndex }).getResult();
 						    zeroPoint = b.create<tensor::ExtractOp>(l, zeroPointValue, ValueRange{ parameterIndex })
-						                    .getResult();
+							                .getResult();
 					    }
 					    rhsF32 = b.create<arith::SubFOp>(l, rhsF32, zeroPoint).getResult();
 					    rhsF32 = b.create<arith::MulFOp>(l, rhsF32, scale).getResult();
@@ -2073,7 +2073,7 @@ namespace litenn
 				    loc, TypeRange{ resultType }, ValueRange{ lhs }, ValueRange{ filled },
 				    SmallVector<AffineMap>{ lhsMap, outputMap },
 				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel,
-				                                      utils::IteratorType::reduction },
+					                                  utils::IteratorType::reduction },
 				    [&](OpBuilder& b, Location l, ValueRange args) {
 					    auto dependency =
 					        b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F)).getResult();
@@ -2086,7 +2086,7 @@ namespace litenn
 						    auto rhsF32 = b.create<arith::UIToFPOp>(l, b.getF32Type(), rhsI32).getResult();
 						    dependency = b.create<arith::AddFOp>(
 						                      l, dependency, b.create<arith::MulFOp>(l, rhsF32, zeroF32).getResult())
-						                     .getResult();
+							                 .getResult();
 					    }
 					    auto accumulator = emitScalarToF32(b, l, args.back());
 					    auto sum = b.create<arith::AddFOp>(l, accumulator, dependency).getResult();
@@ -2165,7 +2165,7 @@ namespace litenn
 					    loc, TypeRange{ resultType }, ValueRange{ indices }, ValueRange{ empty },
 					    SmallVector<AffineMap>{ indicesMap, outputMap },
 					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
-					                                      utils::IteratorType::parallel },
+						                                  utils::IteratorType::parallel },
 					    [&](OpBuilder& b, Location l, ValueRange) {
 						    // Keep the UInt8 storage operand alive so the CPU LLVM pass can rewrite this
 						    // lightweight placeholder into a GGML sidecar call after bufferization.
@@ -2174,7 +2174,7 @@ namespace litenn
 						        b.create<tensor::ExtractOp>(l, storage, ValueRange{ zeroIndex }).getResult();
 						    auto storageF32 =
 						        b.create<arith::UIToFPOp>(l, b.getF32Type(),
-						                                  b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
+								                          b.create<arith::ExtUIOp>(l, b.getI32Type(), storageByte))
 						            .getResult();
 						    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 						    auto value = b.create<arith::MulFOp>(l, storageF32, zeroF32).getResult();
@@ -2206,13 +2206,13 @@ namespace litenn
 						             l, i16, byteAt(b.create<arith::AddIOp>(l, byteIndex, index(1)).getResult()))
 						            .getResult();
 						    auto bits = b.create<arith::OrIOp>(l, low,
-						                                       b.create<arith::ShLIOp>(
+							                                   b.create<arith::ShLIOp>(
 						                                           l, high, b.create<arith::ConstantIntOp>(l, i16, 8)))
-						                    .getResult();
+							                .getResult();
 						    return b
-						        .create<arith::ExtFOp>(l, b.getF32Type(),
-						                               b.create<arith::BitcastOp>(l, b.getF16Type(), bits).getResult())
-						        .getResult();
+							    .create<arith::ExtFOp>(l, b.getF32Type(),
+							                           b.create<arith::BitcastOp>(l, b.getF16Type(), bits).getResult())
+							    .getResult();
 					    };
 
 					    auto row = b.create<arith::IndexCastOp>(l, b.getIndexType(), args[0]).getResult();
@@ -2228,8 +2228,8 @@ namespace litenn
 					    auto withinBlock =
 					        b.create<arith::RemUIOp>(l, column, index(layout->elementsPerBlock)).getResult();
 					    auto d = fp16At(node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K
-					                        ? b.create<arith::AddIOp>(l, blockBase, index(208)).getResult()
-					                        : blockBase);
+						                    ? b.create<arith::AddIOp>(l, blockBase, index(208)).getResult()
+						                    : blockBase);
 					    Value value;
 					    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q8_0)
 					    {
@@ -2238,7 +2238,7 @@ namespace litenn
 						            .getResult();
 						    auto quant = b.create<arith::ExtSIOp>(l, i32, byteAt(quantIndex)).getResult();
 						    value = b.create<arith::MulFOp>(l, d, b.create<arith::SIToFPOp>(l, b.getF32Type(), quant))
-						                .getResult();
+							            .getResult();
 					    }
 					    else if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q6_K)
 					    {
@@ -2249,7 +2249,7 @@ namespace litenn
 						    auto oddSegment = b.create<arith::RemUIOp>(l, segment, index(2)).getResult();
 						    auto qlOffset =
 						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, halfBlock, index(64)),
-						                                b.create<arith::AddIOp>(
+								                        b.create<arith::AddIOp>(
 						                                    l, lane, b.create<arith::MulIOp>(l, oddSegment, index(32))))
 						            .getResult();
 						    auto ql = byteToI32(byteAt(b.create<arith::AddIOp>(l, blockBase, qlOffset)));
@@ -2259,7 +2259,7 @@ namespace litenn
 						    auto mask15 = b.create<arith::ConstantIntOp>(l, i32, 15);
 						    auto lowFour =
 						        b.create<arith::SelectOp>(l, highNibble, b.create<arith::ShRUIOp>(l, ql, shift4),
-						                                  b.create<arith::AndIOp>(l, ql, mask15))
+								                          b.create<arith::AndIOp>(l, ql, mask15))
 						            .getResult();
 						    auto qhOffset =
 						        b.create<arith::AddIOp>(l, b.create<arith::MulIOp>(l, halfBlock, index(32)), lane)
@@ -2271,8 +2271,8 @@ namespace litenn
 						        b.create<arith::MulIOp>(l, segmentI32, b.create<arith::ConstantIntOp>(l, i32, 2))
 						            .getResult();
 						    auto highTwo = b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, qh, shift),
-						                                           b.create<arith::ConstantIntOp>(l, i32, 3))
-						                       .getResult();
+							                                       b.create<arith::ConstantIntOp>(l, i32, 3))
+							                   .getResult();
 						    auto quant =
 						        b.create<arith::SubIOp>(
 						             l, b.create<arith::OrIOp>(l, lowFour, b.create<arith::ShLIOp>(l, highTwo, shift4)),
@@ -2282,13 +2282,13 @@ namespace litenn
 						        b.create<arith::AddIOp>(
 						             l, b.create<arith::MulIOp>(l, halfBlock, index(8)),
 						             b.create<arith::AddIOp>(l, b.create<arith::DivUIOp>(l, lane, index(16)),
-						                                     b.create<arith::MulIOp>(l, segment, index(2))))
+									                         b.create<arith::MulIOp>(l, segment, index(2))))
 						            .getResult();
 						    auto scale = b.create<arith::ExtSIOp>(
 						                      l, i32,
 						                      byteAt(b.create<arith::AddIOp>(
 						                          l, b.create<arith::AddIOp>(l, blockBase, index(192)), scaleOffset)))
-						                     .getResult();
+							                 .getResult();
 						    value =
 						        b.create<arith::MulFOp>(
 						             l,
@@ -2305,7 +2305,7 @@ namespace litenn
 						    auto scalesBase = b.create<arith::AddIOp>(l, blockBase, index(4)).getResult();
 						    auto scaleLowOffset =
 						        b.create<arith::SelectOp>(l, belowFour, subblock,
-						                                  b.create<arith::AddIOp>(l, subblock, index(4)))
+								                          b.create<arith::AddIOp>(l, subblock, index(4)))
 						            .getResult();
 						    auto scaleLow = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, scaleLowOffset)));
 						    auto minLow = byteToI32(byteAt(b.create<arith::AddIOp>(
@@ -2314,8 +2314,8 @@ namespace litenn
 						    auto scaleDirect = b.create<arith::AndIOp>(l, scaleLow, mask63).getResult();
 						    auto minDirect = b.create<arith::AndIOp>(l, minLow, mask63).getResult();
 						    auto highOffset = b.create<arith::SelectOp>(l, belowFour, index(0),
-						                                                b.create<arith::SubIOp>(l, subblock, index(4)))
-						                          .getResult();
+							                                            b.create<arith::SubIOp>(l, subblock, index(4)))
+							                      .getResult();
 						    auto highSource = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, highOffset)));
 						    auto minHighSource = byteToI32(byteAt(b.create<arith::AddIOp>(l, scalesBase, subblock)));
 						    auto shift4 = b.create<arith::ConstantIntOp>(l, i32, 4);
@@ -2323,14 +2323,14 @@ namespace litenn
 						    auto mask15 = b.create<arith::ConstantIntOp>(l, i32, 15);
 						    auto scaleExtended =
 						        b.create<arith::OrIOp>(l, b.create<arith::AndIOp>(l, scaleLow, mask15),
-						                               b.create<arith::ShLIOp>(
+								                       b.create<arith::ShLIOp>(
 						                                   l, b.create<arith::ShRUIOp>(l, highSource, shift6), shift4))
 						            .getResult();
 						    auto minExtended = b.create<arith::OrIOp>(
 						                            l, b.create<arith::ShRUIOp>(l, minLow, shift4),
 						                            b.create<arith::ShLIOp>(
 						                                l, b.create<arith::ShRUIOp>(l, minHighSource, shift6), shift4))
-						                           .getResult();
+							                       .getResult();
 						    auto scale =
 						        b.create<arith::SelectOp>(l, belowFour, scaleDirect, scaleExtended).getResult();
 						    auto minimum = b.create<arith::SelectOp>(l, belowFour, minDirect, minExtended).getResult();
@@ -2338,7 +2338,7 @@ namespace litenn
 						        b.create<arith::AddIOp>(
 						             l,
 						             b.create<arith::MulIOp>(l, b.create<arith::DivUIOp>(l, withinBlock, index(64)),
-						                                     index(32)),
+									                         index(32)),
 						             b.create<arith::RemUIOp>(l, withinBlock, index(32)))
 						            .getResult();
 						    const auto quantBaseOffset =
@@ -2347,24 +2347,24 @@ namespace litenn
 						        l, b.create<arith::AddIOp>(l, blockBase, index(quantBaseOffset)), quantOffset)));
 						    auto highNibble =
 						        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::uge,
-						                                b.create<arith::RemUIOp>(l, withinBlock, index(64)), index(32))
+								                        b.create<arith::RemUIOp>(l, withinBlock, index(64)), index(32))
 						            .getResult();
 						    auto nibble =
 						        b.create<arith::SelectOp>(l, highNibble, b.create<arith::ShRUIOp>(l, quantByte, shift4),
-						                                  b.create<arith::AndIOp>(l, quantByte, mask15))
+								                          b.create<arith::AndIOp>(l, quantByte, mask15))
 						            .getResult();
 						    if (node.params.blockFormat == QuantizedBlockFormat::GGML_Q5_K)
 						    {
 							    auto highBits = byteToI32(byteAt(
 							        b.create<arith::AddIOp>(l, b.create<arith::AddIOp>(l, blockBase, index(16)),
-							                                b.create<arith::RemUIOp>(l, withinBlock, index(32)))));
+									                        b.create<arith::RemUIOp>(l, withinBlock, index(32)))));
 							    auto subblockI32 = b.create<arith::IndexCastOp>(l, i32, subblock).getResult();
 							    auto highBit =
 							        b.create<arith::AndIOp>(l, b.create<arith::ShRUIOp>(l, highBits, subblockI32),
-							                                b.create<arith::ConstantIntOp>(l, i32, 1))
+									                        b.create<arith::ConstantIntOp>(l, i32, 1))
 							            .getResult();
 							    nibble = b.create<arith::OrIOp>(l, nibble, b.create<arith::ShLIOp>(l, highBit, shift4))
-							                 .getResult();
+								             .getResult();
 						    }
 						    auto scaled =
 						        b.create<arith::MulFOp>(
@@ -2375,8 +2375,8 @@ namespace litenn
 						    value = b.create<arith::SubFOp>(
 						                 l, scaled,
 						                 b.create<arith::MulFOp>(l, dmin,
-						                                         b.create<arith::UIToFPOp>(l, b.getF32Type(), minimum)))
-						                .getResult();
+										                         b.create<arith::UIToFPOp>(l, b.getF32Type(), minimum)))
+							            .getResult();
 					    }
 					    b.create<linalg::YieldOp>(l, value);
 				    });
@@ -2518,7 +2518,7 @@ namespace litenn
 				auto input = getVal(valueMap, node.input);
 				auto op =
 				    builder_.create<litenn::ReduceOp>(builder_.getUnknownLoc(), resultType, convertReduceOp(node.op),
-				                                      input, static_cast<uint64_t>(node.axis));
+					                                  input, static_cast<uint64_t>(node.axis));
 				valueMap[nodeId] = { op.getResult() };
 			}
 
@@ -2805,7 +2805,7 @@ namespace litenn
 				{
 					zeroThenLoopDims.push_back(static_cast<std::size_t>(dim) == node.axis
 					                               ? builder_.getAffineConstantExpr(0)
-					                               : builder_.getAffineDimExpr(dim));
+												   : builder_.getAffineDimExpr(dim));
 				}
 				auto indexMap = AffineMap::get(rank, 0, builder_.getAffineConstantExpr(0), &ctx_);
 				auto updatesMap = AffineMap::get(rank, 0, zeroThenLoopDims, &ctx_);
@@ -2825,8 +2825,8 @@ namespace litenn
 					    if (node.mode == ScatterMode::Add)
 					    {
 						    replacement = isa<FloatType>(update.getType())
-						                      ? b.create<arith::AddFOp>(l, args[0], update).getResult()
-						                      : b.create<arith::AddIOp>(l, args[0], update).getResult();
+							                  ? b.create<arith::AddFOp>(l, args[0], update).getResult()
+							                  : b.create<arith::AddIOp>(l, args[0], update).getResult();
 					    }
 					    b.create<linalg::YieldOp>(
 					        l, b.create<arith::SelectOp>(l, matches, replacement, args[0]).getResult());
@@ -2911,7 +2911,7 @@ namespace litenn
 				auto generic = builder_.create<linalg::GenericOp>(
 				    loc, TypeRange{ resultType },
 				    ValueRange{ getVal(valueMap, node.query), getVal(valueMap, node.keys),
-				                getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
+					            getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
 				    ValueRange{ filled },
 				    SmallVector<AffineMap>{ queryMap, keyMap, valueAffineMap, positionMap, outputMap },
 				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
@@ -2923,10 +2923,10 @@ namespace litenn
 					    auto out = emitScalarToF32(b, l, args[4]);
 					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 					    auto dep = b.create<arith::AddFOp>(l, b.create<arith::AddFOp>(l, queryDep, keyDep).getResult(),
-					                                       b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
-					                   .getResult();
+						                                   b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
+						               .getResult();
 					    auto sum = b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, dep, zeroF32).getResult())
-					                   .getResult();
+						               .getResult();
 					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
 				    });
 				generic->setAttr("litenn.active_prefix_attention",
@@ -2980,7 +2980,7 @@ namespace litenn
 				auto generic = builder_.create<linalg::GenericOp>(
 				    loc, TypeRange{ resultType },
 				    ValueRange{ getVal(valueMap, node.queries), getVal(valueMap, node.keys),
-				                getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
+					            getVal(valueMap, node.values), getVal(valueMap, node.currentPosition) },
 				    ValueRange{ filled },
 				    SmallVector<AffineMap>{ queryMap, keyMap, valueMapAffine, positionMap, outputMap },
 				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
@@ -2992,10 +2992,10 @@ namespace litenn
 					    auto out = emitScalarToF32(b, l, args[4]);
 					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 					    auto dep = b.create<arith::AddFOp>(l, b.create<arith::AddFOp>(l, queryDep, keyDep).getResult(),
-					                                       b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
-					                   .getResult();
+						                                   b.create<arith::AddFOp>(l, valueDep, posF32).getResult())
+						               .getResult();
 					    auto sum = b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, dep, zeroF32).getResult())
-					                   .getResult();
+						               .getResult();
 					    b.create<linalg::YieldOp>(l, emitScalarFromF32(b, l, sum, resultType.getElementType()));
 				    });
 				generic->setAttr("litenn.grouped_active_prefix_attention",
@@ -3053,11 +3053,11 @@ namespace litenn
 				auto generic = builder_.create<linalg::GenericOp>(
 				    loc, TypeRange{ resultType },
 				    ValueRange{ getVal(valueMap, node.queries), getVal(valueMap, node.kvState),
-				                getVal(valueMap, node.pageTable), getVal(valueMap, node.pageDescriptors),
-				                getVal(valueMap, node.activeLength) },
+					            getVal(valueMap, node.pageTable), getVal(valueMap, node.pageDescriptors),
+					            getVal(valueMap, node.activeLength) },
 				    ValueRange{ filled },
 				    SmallVector<AffineMap>{ queryMap, kvMap, pageTableMap, pageDescriptorMap, activeLengthMap,
-				                            outputMap },
+					                        outputMap },
 				    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel, utils::IteratorType::parallel },
 				    [&](OpBuilder& b, Location l, ValueRange args) {
 					    auto queryDep = emitScalarToF32(b, l, args[0]);
@@ -3069,11 +3069,11 @@ namespace litenn
 					    auto zeroF32 = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 					    auto metadataDep =
 					        b.create<arith::AddFOp>(l, tableF32,
-					                                b.create<arith::AddFOp>(l, descriptorF32, activeF32).getResult())
+							                        b.create<arith::AddFOp>(l, descriptorF32, activeF32).getResult())
 					            .getResult();
 					    auto valueDep = b.create<arith::AddFOp>(
 					                         l, b.create<arith::AddFOp>(l, queryDep, kvDep).getResult(), metadataDep)
-					                        .getResult();
+						                    .getResult();
 					    auto sum =
 					        b.create<arith::AddFOp>(l, out, b.create<arith::MulFOp>(l, valueDep, zeroF32).getResult())
 					            .getResult();
@@ -3136,7 +3136,7 @@ namespace litenn
 				auto kvGeneric = builder_.create<linalg::GenericOp>(
 				    loc, TypeRange{ kvResultType },
 				    ValueRange{ getVal(valueMap, node.keys), getVal(valueMap, node.values),
-				                getVal(valueMap, node.position) },
+					            getVal(valueMap, node.position) },
 				    ValueRange{ getVal(valueMap, node.kvState) },
 				    SmallVector<AffineMap>{ keyMap, keyMap, positionMapRank5, kvMap },
 				    SmallVector<utils::IteratorType>(5, utils::IteratorType::parallel),
@@ -3230,8 +3230,8 @@ namespace litenn
 					    auto rowMatches =
 					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::eq, row, logicalPage).getResult();
 					    auto columnInRange = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, column,
-					                                                 emitI64Constant(b, l, descriptorColumns))
-					                             .getResult();
+						                                             emitI64Constant(b, l, descriptorColumns))
+						                         .getResult();
 					    b.create<linalg::YieldOp>(
 					        l, b.create<arith::SelectOp>(
 					                l, b.create<arith::AndIOp>(l, rowMatches, columnInRange).getResult(), replacement,
@@ -3249,7 +3249,7 @@ namespace litenn
 					    b.create<linalg::YieldOp>(l, emitI64Max(b, l, args[1], nextLength));
 				    });
 				valueMap[nodeId] = { kvGeneric.getResult(0), pageTableGeneric.getResult(0),
-					                 pageDescriptorGeneric.getResult(0), activeLengthGeneric.getResult(0) };
+				                     pageDescriptorGeneric.getResult(0), activeLengthGeneric.getResult(0) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const SoftmaxNode& node,
@@ -3294,7 +3294,7 @@ namespace litenn
 				const auto scalarShape = std::vector<std::size_t>{ 1 };
 				auto divisor = emitFilledConstant(dtype, scalarShape, static_cast<double>(rowCount));
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Divide, total, divisor, dtype,
-					                                 outputInfos[0].shape) };
+				                                     outputInfos[0].shape) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const CrossEntropyLossBackwardNode& node,
@@ -3316,7 +3316,7 @@ namespace litenn
 				auto divisor = emitFilledConstant(dtype, scalarShape, static_cast<double>(rowCount));
 				auto scale = emitBinaryValue(LiteNN::BinaryOp::Divide, grad, divisor, dtype, scalarShape);
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Multiply, diff, scale, dtype,
-					                                 outputInfos[0].shape) };
+				                                     outputInfos[0].shape) };
 			}
 
 			void emitNode(const PlanSubgraphView& sg, NodeId nodeId, const NormalizationNode& node,
@@ -3353,7 +3353,7 @@ namespace litenn
 						    ValueRange{ getVal(valueMap, node.input), getVal(valueMap, *node.scale) },
 						    ValueRange{ empty }, SmallVector<AffineMap>{ inputMap, scaleMap, outputMap },
 						    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
-						                                      utils::IteratorType::parallel },
+							                                  utils::IteratorType::parallel },
 						    [&](OpBuilder& b, Location l, ValueRange args) {
 							    auto zero = b.create<arith::ConstantFloatOp>(l, b.getF32Type(), APFloat(0.0F));
 							    auto scaleDependency = b.create<arith::MulFOp>(l, args[1], zero).getResult();
@@ -3445,7 +3445,7 @@ namespace litenn
 					    ValueRange{ getVal(valueMap, node.input), getVal(valueMap, *node.positions) },
 					    ValueRange{ output }, SmallVector<AffineMap>{ inputMap, positionMap, outputMap },
 					    SmallVector<utils::IteratorType>{ utils::IteratorType::parallel,
-					                                      utils::IteratorType::parallel },
+						                                  utils::IteratorType::parallel },
 					    [&](OpBuilder& b, Location l, ValueRange args) { b.create<linalg::YieldOp>(l, args[0]); });
 					generic->setAttr("litenn.rope_at_positions_base", builder_.getF64FloatAttr(node.base));
 					generic->setAttr("litenn.rope_at_positions_frequency_scale",
@@ -3612,7 +3612,7 @@ namespace litenn
 					    b.create<linalg::YieldOp>(l, sum);
 				    });
 				valueMap[nodeId] = { emitMaybeCastValue(generic.getResult(0), computeDType, outputDType,
-					                                    outputInfos[0].shape) };
+				                                        outputInfos[0].shape) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId, const OutProdNode&, std::span<const OutputInfo>,
@@ -3672,7 +3672,7 @@ namespace litenn
 					    auto scale = b.create<arith::ConstantFloatOp>(
 					        l, b.getF32Type(),
 					        llvm::APFloat(static_cast<float>(-std::log(static_cast<double>(node.maxPeriod)) /
-					                                         static_cast<double>(half))));
+							                                 static_cast<double>(half))));
 					    auto exponent = b.create<arith::MulFOp>(l, freqIndexFloat, scale).getResult();
 					    auto frequency = b.create<math::ExpOp>(l, exponent).getResult();
 					    auto timestep = emitScalarToF32(b, l, args[0]);
@@ -3728,7 +3728,7 @@ namespace litenn
 				auto scaledUpdate = emitBinaryValue(LiteNN::BinaryOp::Multiply, regularizedGradient, learningRate,
 				                                    DataType::Float32, shape);
 				valueMap[nodeId] = { emitBinaryValue(LiteNN::BinaryOp::Subtract, parameter, scaledUpdate,
-					                                 DataType::Float32, shape) };
+				                                     DataType::Float32, shape) };
 			}
 
 			void emitNode(const PlanSubgraphView&, NodeId nodeId, const AdamWStepNode& node,
@@ -3791,7 +3791,7 @@ namespace litenn
 
 					    auto updatedFirst =
 					        b.create<arith::AddFOp>(l, b.create<arith::MulFOp>(l, beta1, args[2]).getResult(),
-					                                b.create<arith::MulFOp>(l, oneMinusBeta1, args[1]).getResult())
+							                        b.create<arith::MulFOp>(l, oneMinusBeta1, args[1]).getResult())
 					            .getResult();
 					    auto gradientSquared = b.create<arith::MulFOp>(l, args[1], args[1]).getResult();
 					    auto updatedSecond =
@@ -3806,7 +3806,7 @@ namespace litenn
 					            .getResult();
 					    auto decayScale =
 					        b.create<arith::SubFOp>(l, one,
-					                                b.create<arith::MulFOp>(l, learningRate, weightDecay).getResult())
+							                        b.create<arith::MulFOp>(l, learningRate, weightDecay).getResult())
 					            .getResult();
 					    auto decayedParameter = b.create<arith::MulFOp>(l, args[0], decayScale).getResult();
 					    auto normalizedUpdate = b.create<arith::DivFOp>(l, firstHat, denom).getResult();
@@ -3953,13 +3953,13 @@ namespace litenn
 					    auto yInLow =
 					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, inputY, zeroI64).getResult();
 					    auto yInHigh = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, inputY,
-					                                           emitI64Constant(b, l, inputType.getDimSize(2)))
-					                       .getResult();
+						                                       emitI64Constant(b, l, inputType.getDimSize(2)))
+						                   .getResult();
 					    auto xInLow =
 					        b.create<arith::CmpIOp>(l, arith::CmpIPredicate::sge, inputX, zeroI64).getResult();
 					    auto xInHigh = b.create<arith::CmpIOp>(l, arith::CmpIPredicate::slt, inputX,
-					                                           emitI64Constant(b, l, inputType.getDimSize(3)))
-					                       .getResult();
+						                                       emitI64Constant(b, l, inputType.getDimSize(3)))
+						                   .getResult();
 					    auto inBounds = b.create<arith::AndIOp>(l, yInLow, yInHigh).getResult();
 					    inBounds = b.create<arith::AndIOp>(l, inBounds, xInLow).getResult();
 					    inBounds = b.create<arith::AndIOp>(l, inBounds, xInHigh).getResult();
@@ -3974,7 +3974,7 @@ namespace litenn
 					    auto product = emitScalarMultiply(b, l, inputElement, args[0], resultType.getElementType());
 					    auto maskedProduct =
 					        b.create<arith::SelectOp>(l, inBounds, product,
-					                                  emitScalarZero(b, l, resultType.getElementType()))
+							                          emitScalarZero(b, l, resultType.getElementType()))
 					            .getResult();
 					    auto sum = emitScalarAdd(b, l, args[1], maskedProduct, resultType.getElementType());
 					    b.create<linalg::YieldOp>(l, sum);
@@ -3995,7 +3995,7 @@ namespace litenn
 					else if (biasType.getRank() == 4)
 					{
 						biasExprs = { getAffineConstantExpr(0, &ctx_), getAffineDimExpr(1, &ctx_),
-							          getAffineConstantExpr(0, &ctx_), getAffineConstantExpr(0, &ctx_) };
+						              getAffineConstantExpr(0, &ctx_), getAffineConstantExpr(0, &ctx_) };
 					}
 					else
 					{

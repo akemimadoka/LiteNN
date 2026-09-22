@@ -113,7 +113,7 @@ namespace LiteNN
 					    [&](const auto& node) -> NodeVariant {
 						    using T = std::decay_t<decltype(node)>;
 						    if constexpr (std::same_as<T, ConstantNode> || std::same_as<T, QuantizedConstantNode> ||
-						                  std::same_as<T, VariableRefNode>)
+							              std::same_as<T, VariableRefNode>)
 						    {
 							    return node;
 						    }
@@ -258,7 +258,7 @@ namespace LiteNN
 							    return RoPENode{ remapOutput(node.input),
 								                 node.positions
 								                     ? std::optional<NodeOutput>{ remapOutput(*node.positions) }
-								                     : std::nullopt,
+													 : std::nullopt,
 								                 node.layout,
 								                 node.base,
 								                 node.frequencyScale,
@@ -308,7 +308,7 @@ namespace LiteNN
 								                    remapOutput(node.gradient),
 								                    node.velocity
 								                        ? std::optional<NodeOutput>{ remapOutput(*node.velocity) }
-								                        : std::nullopt,
+														: std::nullopt,
 								                    node.learningRate,
 								                    node.momentum,
 								                    node.weightDecay,
@@ -350,7 +350,7 @@ namespace LiteNN
 								                            remapOutput(node.weight),
 								                            node.bias
 								                                ? std::optional<NodeOutput>{ remapOutput(*node.bias) }
-								                                : std::nullopt,
+																: std::nullopt,
 								                            node.strides,
 								                            node.dilations,
 								                            node.lowPads,

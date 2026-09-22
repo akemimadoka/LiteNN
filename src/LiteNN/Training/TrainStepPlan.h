@@ -389,7 +389,7 @@ namespace LiteNN::Training
 		{
 			train.runtimeStates.push_back(Runtime::MakeTrainingState(
 			    module.plan.variables[i].region.name.empty() ? std::format("parameter.{}", i)
-			                                                 : module.plan.variables[i].region.name,
+				                                             : module.plan.variables[i].region.name,
 			    "mutable-parameter", module.plan.variables[i].type));
 		}
 		train.abiBindings = BuildTrainStepABIBindings(module, train.runtimeStates, train.updates);
@@ -493,7 +493,7 @@ namespace LiteNN::Training
 				auto writeIt = diagnostics.begin() + static_cast<std::ptrdiff_t>(beforeCount);
 				diagnostics.erase(
 				    std::remove_if(writeIt, diagnostics.end(),
-				                   [&](const TrainStepAOTReadinessDiagnostic& diagnostic) {
+					               [&](const TrainStepAOTReadinessDiagnostic& diagnostic) {
 					                   if (diagnostic.opKind != "LoadActivationNode")
 					                   {
 						                   return false;
@@ -503,14 +503,14 @@ namespace LiteNN::Training
 						                       return subgraph.sourceSubgraph == subgraphId;
 					                       });
 					                   if (subgraphIt == plan.module.plan.subgraphs.end() ||
-					                       diagnostic.node >= subgraphIt->nodes.size())
+									       diagnostic.node >= subgraphIt->nodes.size())
 					                   {
 						                   return false;
 					                   }
 					                   const auto* load =
 					                       std::get_if<LoadActivationNode>(&subgraphIt->nodes[diagnostic.node].node);
 					                   return load != nullptr && load->slotId < forwardSavedActivationSlots.size() &&
-					                          forwardSavedActivationSlots[load->slotId];
+									          forwardSavedActivationSlots[load->slotId];
 				                   }),
 				    diagnostics.end());
 			}

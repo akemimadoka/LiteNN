@@ -123,8 +123,8 @@ namespace
 			const auto iterators = generic.getIteratorTypesArray();
 			hasMatmulGeneric =
 			    hasMatmulGeneric || (iterators.size() == 3 && iterators[0] == mlir::utils::IteratorType::parallel &&
-			                         iterators[1] == mlir::utils::IteratorType::reduction &&
-			                         iterators[2] == mlir::utils::IteratorType::parallel);
+				                     iterators[1] == mlir::utils::IteratorType::reduction &&
+				                     iterators[2] == mlir::utils::IteratorType::parallel);
 		});
 		EXPECT_TRUE(hasMatmulGeneric) << "Expected linalg.generic M,K,N from MatMul";
 

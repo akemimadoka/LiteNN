@@ -109,12 +109,12 @@ namespace LiteNN
 		TensorView View() const
 		{
 			return { .type = type,
-				     .quantization = quantization,
-				     .storageOffsetBytes = storageOffsetBytes,
-				     .strides = viewStrides,
-				     .layoutTag = layoutTag,
-				     .aliasSet = aliasSet,
-				     .mutability = viewMutability };
+			         .quantization = quantization,
+			         .storageOffsetBytes = storageOffsetBytes,
+			         .strides = viewStrides,
+			         .layoutTag = layoutTag,
+			         .aliasSet = aliasSet,
+			         .mutability = viewMutability };
 		}
 	};
 
@@ -142,21 +142,21 @@ namespace LiteNN
 	                                                   std::size_t memoryBuffer)
 	{
 		return { .name = std::move(name),
-			     .type = storage.type,
-			     .quantization = storage.quantization,
-			     .ownership = storage.region.ownership,
-			     .externalKind = storage.region.externalKind,
-			     .memorySpace = storage.region.memorySpace,
-			     .memoryBuffer = memoryBuffer,
-			     .byteOffset = storage.region.byteOffset + storage.storageOffsetBytes,
-			     .byteSize = storage.LogicalByteSize().value_or(storage.region.byteSize),
-			     .alignment = storage.region.alignment,
-			     .checksum = storage.region.checksum,
-			     .mutability = storage.region.mutability,
-			     .rebindPolicy = storage.region.rebindPolicy,
-			     .strides = storage.viewStrides,
-			     .layoutTag = storage.layoutTag,
-			     .aliasSet = storage.aliasSet };
+		         .type = storage.type,
+		         .quantization = storage.quantization,
+		         .ownership = storage.region.ownership,
+		         .externalKind = storage.region.externalKind,
+		         .memorySpace = storage.region.memorySpace,
+		         .memoryBuffer = memoryBuffer,
+		         .byteOffset = storage.region.byteOffset + storage.storageOffsetBytes,
+		         .byteSize = storage.LogicalByteSize().value_or(storage.region.byteSize),
+		         .alignment = storage.region.alignment,
+		         .checksum = storage.region.checksum,
+		         .mutability = storage.region.mutability,
+		         .rebindPolicy = storage.region.rebindPolicy,
+		         .strides = storage.viewStrides,
+		         .layoutTag = storage.layoutTag,
+		         .aliasSet = storage.aliasSet };
 	}
 
 	inline void ValidateRuntimeBufferBinding(const RuntimeBufferBinding& binding)
@@ -194,11 +194,11 @@ namespace LiteNN
 	                                             TensorMemorySpace memorySpace = TensorMemorySpace::Host)
 	{
 		return { .ownership = BufferOwnership::Borrowed,
-			     .externalKind = ExternalBufferKind::None,
-			     .memorySpace = memorySpace,
-			     .data = data,
-			     .byteOffset = 0,
-			     .byteSize = byteSize };
+		         .externalKind = ExternalBufferKind::None,
+		         .memorySpace = memorySpace,
+		         .data = data,
+		         .byteOffset = 0,
+		         .byteSize = byteSize };
 	}
 
 	inline BufferRegion MakeExternalBufferRegion(std::string name, const void* data, std::size_t byteSize,
@@ -206,12 +206,12 @@ namespace LiteNN
 	                                             TensorMemorySpace memorySpace = TensorMemorySpace::External)
 	{
 		return { .ownership = BufferOwnership::External,
-			     .externalKind = kind,
-			     .memorySpace = memorySpace,
-			     .name = std::move(name),
-			     .data = data,
-			     .byteOffset = 0,
-			     .byteSize = byteSize };
+		         .externalKind = kind,
+		         .memorySpace = memorySpace,
+		         .name = std::move(name),
+		         .data = data,
+		         .byteOffset = 0,
+		         .byteSize = byteSize };
 	}
 } // namespace LiteNN
 

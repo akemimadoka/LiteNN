@@ -101,7 +101,7 @@ namespace LiteNN::GGUF
 			{
 				throw std::runtime_error(
 				    std::format("GGUF tensor '{}' expressed shape is incompatible with the {} block size", name,
-				                QuantizedBlockFormatName(params.blockFormat)));
+					            QuantizedBlockFormatName(params.blockFormat)));
 			}
 			const auto rowCount = totalElements / rowSize;
 			const auto rowBytes = ggml_row_size(*ggmlType, static_cast<std::int64_t>(rowSize));

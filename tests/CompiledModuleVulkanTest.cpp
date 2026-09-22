@@ -2246,9 +2246,9 @@ TEST(CompiledModuleVulkanTest, WritesVulkanNativePayloadForConv2D)
 	const auto payload = DeserializeVulkanNativeInstructionPayload(artifact.Instructions());
 	const auto generated =
 	    VulkanNativeConv2DF32SPIRV(std::array<std::size_t, 4>{ 1, 1, 3, 3 }, std::array<std::size_t, 4>{ 1, 1, 2, 2 },
-	                               std::array<std::size_t, 4>{ 1, 1, 2, 2 }, std::array<std::size_t, 2>{ 1, 1 },
-	                               std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 0, 0 },
-	                               std::array<std::size_t, 2>{ 0, 0 }, 1, true);
+		                           std::array<std::size_t, 4>{ 1, 1, 2, 2 }, std::array<std::size_t, 2>{ 1, 1 },
+		                           std::array<std::size_t, 2>{ 1, 1 }, std::array<std::size_t, 2>{ 0, 0 },
+		                           std::array<std::size_t, 2>{ 0, 0 }, 1, true);
 	EXPECT_EQ(payload.spirv, generated.words);
 	EXPECT_NE(payload.featureSet.flags & (1ull << static_cast<std::uint32_t>(VulkanNativeFeature::Conv2DF32)), 0ull);
 	ASSERT_EQ(payload.kernels.size(), 1u);
@@ -3685,7 +3685,7 @@ TEST(CompiledModuleVulkanTest, RunsNearestUpsampleArithmetic)
 
 	const auto actual = CopyToHostVector(outputs[0]);
 	const std::array expected{ 1.0f, 1.0f, 2.0f, 2.0f, 1.0f, 1.0f, 2.0f, 2.0f,
-		                       3.0f, 3.0f, 4.0f, 4.0f, 3.0f, 3.0f, 4.0f, 4.0f };
+	                           3.0f, 3.0f, 4.0f, 4.0f, 3.0f, 3.0f, 4.0f, 4.0f };
 	ASSERT_EQ(actual.size(), expected.size());
 	for (std::size_t i = 0; i < actual.size(); ++i)
 	{

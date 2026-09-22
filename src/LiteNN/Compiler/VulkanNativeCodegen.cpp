@@ -415,17 +415,17 @@ namespace LiteNN
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto valueType = SPIRVScalarType(bodyBuilder, dtype);
 				    auto lhsValue = bodyBuilder
-				                        .create<mlir::spirv::LoadOp>(
+					                    .create<mlir::spirv::LoadOp>(
 				                            loc, valueType,
 				                            EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, lhs, index),
 				                            nullptr, nullptr)
-				                        .getValue();
+					                    .getValue();
 				    auto rhsValue = bodyBuilder
-				                        .create<mlir::spirv::LoadOp>(
+					                    .create<mlir::spirv::LoadOp>(
 				                            loc, valueType,
 				                            EmitStorageBufferElementPointer(bodyBuilder, loc, valueType, rhs, index),
 				                            nullptr, nullptr)
-				                        .getValue();
+					                    .getValue();
 
 				    mlir::Value result;
 				    if (VulkanSPIRVScalarIsFloat(dtype))
@@ -469,20 +469,20 @@ namespace LiteNN
 						    break;
 					    case BinaryOp::Divide:
 						    result = VulkanSPIRVScalarIsUnsignedInteger(dtype)
-						                 ? bodyBuilder.create<mlir::spirv::UDivOp>(loc, lhsValue, rhsValue).getResult()
-						                 : bodyBuilder.create<mlir::spirv::SDivOp>(loc, lhsValue, rhsValue).getResult();
+							             ? bodyBuilder.create<mlir::spirv::UDivOp>(loc, lhsValue, rhsValue).getResult()
+							             : bodyBuilder.create<mlir::spirv::SDivOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    case BinaryOp::Max:
 						    result =
 						        VulkanSPIRVScalarIsUnsignedInteger(dtype)
-						            ? bodyBuilder.create<mlir::spirv::GLUMaxOp>(loc, lhsValue, rhsValue).getResult()
-						            : bodyBuilder.create<mlir::spirv::GLSMaxOp>(loc, lhsValue, rhsValue).getResult();
+							        ? bodyBuilder.create<mlir::spirv::GLUMaxOp>(loc, lhsValue, rhsValue).getResult()
+							        : bodyBuilder.create<mlir::spirv::GLSMaxOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    case BinaryOp::Min:
 						    result =
 						        VulkanSPIRVScalarIsUnsignedInteger(dtype)
-						            ? bodyBuilder.create<mlir::spirv::GLUMinOp>(loc, lhsValue, rhsValue).getResult()
-						            : bodyBuilder.create<mlir::spirv::GLSMinOp>(loc, lhsValue, rhsValue).getResult();
+							        ? bodyBuilder.create<mlir::spirv::GLUMinOp>(loc, lhsValue, rhsValue).getResult()
+							        : bodyBuilder.create<mlir::spirv::GLSMinOp>(loc, lhsValue, rhsValue).getResult();
 						    break;
 					    default:
 						    throw std::runtime_error("Unsupported Vulkan native MLIR same-shape integer binary op");
@@ -520,11 +520,11 @@ namespace LiteNN
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto valueType = SPIRVScalarType(bodyBuilder, dtype);
 				    auto inputValue = bodyBuilder
-				                          .create<mlir::spirv::LoadOp>(loc, valueType,
-				                                                       EmitStorageBufferElementPointer(
+					                      .create<mlir::spirv::LoadOp>(loc, valueType,
+					                                                   EmitStorageBufferElementPointer(
 				                                                           bodyBuilder, loc, valueType, input, index),
-				                                                       nullptr, nullptr)
-				                          .getValue();
+					                                                   nullptr, nullptr)
+					                      .getValue();
 
 				    mlir::Value result;
 				    if (VulkanSPIRVScalarIsFloat(dtype))
@@ -875,17 +875,17 @@ namespace LiteNN
 					        bodyBuilder.create<mlir::spirv::IAddOp>(loc, EmitI32Constant(bodyBuilder, loc, kk * n), col)
 					            .getResult();
 					    auto lhsValue = bodyBuilder
-					                        .create<mlir::spirv::LoadOp>(
+						                    .create<mlir::spirv::LoadOp>(
 					                            loc, bodyBuilder.getF32Type(),
 					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, lhs, lhsIndex),
 					                            nullptr, nullptr)
-					                        .getValue();
+						                    .getValue();
 					    auto rhsValue = bodyBuilder
-					                        .create<mlir::spirv::LoadOp>(
+						                    .create<mlir::spirv::LoadOp>(
 					                            loc, bodyBuilder.getF32Type(),
 					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rhs, rhsIndex),
 					                            nullptr, nullptr)
-					                        .getValue();
+						                    .getValue();
 					    auto product = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
 					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, product).getResult();
 				    }
@@ -978,17 +978,17 @@ namespace LiteNN
 					        bodyBuilder.create<mlir::spirv::IAddOp>(loc, EmitI32Constant(bodyBuilder, loc, kk * n), col)
 					            .getResult();
 					    auto lhsValue = bodyBuilder
-					                        .create<mlir::spirv::LoadOp>(
+						                    .create<mlir::spirv::LoadOp>(
 					                            loc, bodyBuilder.getF32Type(),
 					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, lhs, lhsIndex),
 					                            nullptr, nullptr)
-					                        .getValue();
+						                    .getValue();
 					    auto rhsValue = bodyBuilder
-					                        .create<mlir::spirv::LoadOp>(
+						                    .create<mlir::spirv::LoadOp>(
 					                            loc, bodyBuilder.getF32Type(),
 					                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rhs, rhsIndex),
 					                            nullptr, nullptr)
-					                        .getValue();
+						                    .getValue();
 					    auto product = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
 					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, product).getResult();
 				    }
@@ -1093,11 +1093,11 @@ namespace LiteNN
 						    biasIndex = bodyBuilder.create<mlir::spirv::IAddOp>(loc, biasRowBase, col).getResult();
 					    }
 					    auto sum = bodyBuilder
-					                   .create<mlir::spirv::LoadOp>(
+						               .create<mlir::spirv::LoadOp>(
 					                       loc, bodyBuilder.getF32Type(),
 					                       EmitF32StorageBufferElementPointer(bodyBuilder, loc, bias, biasIndex),
 					                       nullptr, nullptr)
-					                   .getValue();
+						               .getValue();
 
 					    for (std::uint32_t kk = 0; kk < spec.k; ++kk)
 					    {
@@ -1106,29 +1106,29 @@ namespace LiteNN
 						            .create<mlir::spirv::IAddOp>(loc, rowBase, EmitI32Constant(bodyBuilder, loc, kk))
 						            .getResult();
 						    auto rhsIndex = bodyBuilder
-						                        .create<mlir::spirv::IAddOp>(
+							                    .create<mlir::spirv::IAddOp>(
 						                            loc, EmitI32Constant(bodyBuilder, loc, kk * spec.n), col)
-						                        .getResult();
+							                    .getResult();
 						    auto lhsValue = bodyBuilder
-						                        .create<mlir::spirv::LoadOp>(
+							                    .create<mlir::spirv::LoadOp>(
 						                            loc, bodyBuilder.getF32Type(),
 						                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, lhs, lhsIndex),
 						                            nullptr, nullptr)
-						                        .getValue();
+							                    .getValue();
 						    auto rhsValue = bodyBuilder
-						                        .create<mlir::spirv::LoadOp>(
+							                    .create<mlir::spirv::LoadOp>(
 						                            loc, bodyBuilder.getF32Type(),
 						                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rhs, rhsIndex),
 						                            nullptr, nullptr)
-						                        .getValue();
+							                    .getValue();
 						    auto product = bodyBuilder.create<mlir::spirv::FMulOp>(loc, lhsValue, rhsValue).getResult();
 						    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, product).getResult();
 					    }
 					    if (spec.relu)
 					    {
 						    sum = bodyBuilder
-						              .create<mlir::spirv::GLFMaxOp>(loc, sum, EmitF32Constant(bodyBuilder, loc, 0.0f))
-						              .getResult();
+							          .create<mlir::spirv::GLFMaxOp>(loc, sum, EmitF32Constant(bodyBuilder, loc, 0.0f))
+							          .getResult();
 					    }
 
 					    bodyBuilder.create<mlir::spirv::StoreOp>(
@@ -1215,28 +1215,28 @@ namespace LiteNN
 				    auto innerIndex = bodyBuilder.create<mlir::spirv::UModOp>(loc, outputIndex, inner).getResult();
 				    auto outerAxis = bodyBuilder.create<mlir::spirv::IMulOp>(loc, outerIndex, axisValue).getResult();
 				    auto base = bodyBuilder
-				                    .create<mlir::spirv::IAddOp>(
+					                .create<mlir::spirv::IAddOp>(
 				                        loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, outerAxis, inner).getResult(),
 				                        innerIndex)
-				                    .getResult();
+					                .getResult();
 
 				    mlir::Value accumulator;
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
 				    {
 					    auto offset = bodyBuilder
-					                      .create<mlir::spirv::IAddOp>(
+						                  .create<mlir::spirv::IAddOp>(
 					                          loc, base,
 					                          bodyBuilder
 					                              .create<mlir::spirv::IMulOp>(
 					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
 					                              .getResult())
-					                      .getResult();
+						                  .getResult();
 					    auto value = bodyBuilder
-					                     .create<mlir::spirv::LoadOp>(
+						                 .create<mlir::spirv::LoadOp>(
 					                         loc, bodyBuilder.getF32Type(),
 					                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset),
 					                         nullptr, nullptr)
-					                     .getValue();
+						                 .getValue();
 					    if (reduceIndex == 0)
 					    {
 						    accumulator = value;
@@ -1263,10 +1263,10 @@ namespace LiteNN
 				    if (op == ReduceOp::Mean)
 				    {
 					    accumulator = bodyBuilder
-					                      .create<mlir::spirv::FMulOp>(
+						                  .create<mlir::spirv::FMulOp>(
 					                          loc, accumulator,
 					                          EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(axisSize)))
-					                      .getResult();
+						                  .getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
@@ -1400,7 +1400,7 @@ namespace LiteNN
 				            .getResult();
 
 				    auto accumulator = mode == PoolMode::Max ? EmitF32Constant(bodyBuilder, loc, -3.402823466e38f)
-				                                             : EmitF32Constant(bodyBuilder, loc, 0.0f);
+					                                         : EmitF32Constant(bodyBuilder, loc, 0.0f);
 				    auto validCount = EmitI32Constant(bodyBuilder, loc, 0);
 				    auto one = EmitI32Constant(bodyBuilder, loc, 1);
 				    auto invalidMax = EmitF32Constant(bodyBuilder, loc, -3.402823466e38f);
@@ -1459,11 +1459,11 @@ namespace LiteNN
 						                    .getResult())
 						            .getResult();
 						    auto value = bodyBuilder
-						                     .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-						                                                  EmitF32StorageBufferElementPointer(
+							                 .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+							                                              EmitF32StorageBufferElementPointer(
 						                                                      bodyBuilder, loc, input, inputOffset),
-						                                                  nullptr, nullptr)
-						                     .getValue();
+							                                              nullptr, nullptr)
+							                 .getValue();
 						    if (mode == PoolMode::Max)
 						    {
 							    auto candidate =
@@ -1504,9 +1504,9 @@ namespace LiteNN
 					        bodyBuilder.create<mlir::spirv::ConvertSToFOp>(loc, bodyBuilder.getF32Type(), validCount)
 					            .getResult();
 					    auto safeDivisor = bodyBuilder
-					                           .create<mlir::spirv::SelectOp>(
+						                       .create<mlir::spirv::SelectOp>(
 					                               loc, countIsZero, EmitF32Constant(bodyBuilder, loc, 1.0f), divisor)
-					                           .getResult();
+						                       .getResult();
 					    auto average =
 					        bodyBuilder.create<mlir::spirv::FDivOp>(loc, accumulator, safeDivisor).getResult();
 					    accumulator =
@@ -1515,7 +1515,7 @@ namespace LiteNN
 				    else
 				    {
 					    accumulator = bodyBuilder.create<mlir::spirv::SelectOp>(loc, countIsZero, zeroF32, accumulator)
-					                      .getResult();
+						                  .getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), accumulator,
@@ -1659,23 +1659,23 @@ namespace LiteNN
 				                loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, batch, inC).getResult(), inPlane)
 				            .getResult();
 				    auto group = bodyBuilder
-				                     .create<mlir::spirv::UDivOp>(
+					                 .create<mlir::spirv::UDivOp>(
 				                         loc, oc, EmitI32Constant(bodyBuilder, loc, outChannelsPerGroup))
-				                     .getResult();
+					                 .getResult();
 				    auto inputChannelBase = bodyBuilder
-				                                .create<mlir::spirv::IMulOp>(
+					                            .create<mlir::spirv::IMulOp>(
 				                                    loc, group, EmitI32Constant(bodyBuilder, loc, inChannelsPerGroup))
-				                                .getResult();
+					                            .getResult();
 				    auto kernelPlane = EmitI32Constant(bodyBuilder, loc, kernelH * kernelW);
 				    auto weightOcBase = bodyBuilder
-				                            .create<mlir::spirv::IMulOp>(
+					                        .create<mlir::spirv::IMulOp>(
 				                                loc,
 				                                bodyBuilder
 				                                    .create<mlir::spirv::IMulOp>(
 				                                        loc, oc, EmitI32Constant(bodyBuilder, loc, inChannelsPerGroup))
 				                                    .getResult(),
 				                                kernelPlane)
-				                            .getResult();
+					                        .getResult();
 				    auto startH =
 				        bodyBuilder.create<mlir::spirv::IMulOp>(loc, oh, EmitI32Constant(bodyBuilder, loc, strideH))
 				            .getResult();
@@ -1696,9 +1696,9 @@ namespace LiteNN
 				    for (std::uint32_t icg = 0; icg < inChannelsPerGroup; ++icg)
 				    {
 					    auto ic = bodyBuilder
-					                  .create<mlir::spirv::IAddOp>(loc, inputChannelBase,
-					                                               EmitI32Constant(bodyBuilder, loc, icg))
-					                  .getResult();
+						              .create<mlir::spirv::IAddOp>(loc, inputChannelBase,
+						                                           EmitI32Constant(bodyBuilder, loc, icg))
+						              .getResult();
 					    auto inputChannelOffset =
 					        bodyBuilder
 					            .create<mlir::spirv::IAddOp>(
@@ -1711,15 +1711,15 @@ namespace LiteNN
 					                loc, weightOcBase,
 					                bodyBuilder
 					                    .create<mlir::spirv::IMulOp>(loc, EmitI32Constant(bodyBuilder, loc, icg),
-					                                                 kernelPlane)
+										                             kernelPlane)
 					                    .getResult())
 					            .getResult();
 					    for (std::uint32_t kh = 0; kh < kernelH; ++kh)
 					    {
 						    auto paddedH = bodyBuilder
-						                       .create<mlir::spirv::IAddOp>(
+							                   .create<mlir::spirv::IAddOp>(
 						                           loc, startH, EmitI32Constant(bodyBuilder, loc, kh * dilationH))
-						                       .getResult();
+							                   .getResult();
 						    auto validH =
 						        bodyBuilder
 						            .create<mlir::spirv::LogicalAndOp>(
@@ -1736,9 +1736,9 @@ namespace LiteNN
 						    for (std::uint32_t kw = 0; kw < kernelW; ++kw)
 						    {
 							    auto paddedW = bodyBuilder
-							                       .create<mlir::spirv::IAddOp>(
+								                   .create<mlir::spirv::IAddOp>(
 							                           loc, startW, EmitI32Constant(bodyBuilder, loc, kw * dilationW))
-							                       .getResult();
+								                   .getResult();
 							    auto validW =
 							        bodyBuilder
 							            .create<mlir::spirv::LogicalAndOp>(
@@ -1768,10 +1768,10 @@ namespace LiteNN
 							                    .getResult())
 							            .getResult();
 							    auto weightOffset = bodyBuilder
-							                            .create<mlir::spirv::IAddOp>(
+								                        .create<mlir::spirv::IAddOp>(
 							                                loc, weightChannelOffset,
 							                                EmitI32Constant(bodyBuilder, loc, kh * kernelW + kw))
-							                            .getResult();
+								                        .getResult();
 							    auto inputValue =
 							        bodyBuilder
 							            .create<mlir::spirv::LoadOp>(
@@ -1927,28 +1927,28 @@ namespace LiteNN
 				    auto batch = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp1, outC).getResult();
 
 				    auto group = bodyBuilder
-				                     .create<mlir::spirv::UDivOp>(
+					                 .create<mlir::spirv::UDivOp>(
 				                         loc, oc, EmitI32Constant(bodyBuilder, loc, outputChannelsPerGroup))
-				                     .getResult();
+					                 .getResult();
 				    auto ocg = bodyBuilder
-				                   .create<mlir::spirv::UModOp>(
+					               .create<mlir::spirv::UModOp>(
 				                       loc, oc, EmitI32Constant(bodyBuilder, loc, outputChannelsPerGroup))
-				                   .getResult();
+					               .getResult();
 				    auto inputChannelBase =
 				        bodyBuilder
 				            .create<mlir::spirv::IMulOp>(loc, group,
-				                                         EmitI32Constant(bodyBuilder, loc, inputChannelsPerGroup))
+							                             EmitI32Constant(bodyBuilder, loc, inputChannelsPerGroup))
 				            .getResult();
 				    auto inPlane = bodyBuilder.create<mlir::spirv::IMulOp>(loc, inH, inW).getResult();
 				    auto batchBase = bodyBuilder
-				                         .create<mlir::spirv::IMulOp>(
+					                     .create<mlir::spirv::IMulOp>(
 				                             loc,
 				                             bodyBuilder
 				                                 .create<mlir::spirv::IMulOp>(
 				                                     loc, batch, EmitI32Constant(bodyBuilder, loc, inputChannels))
 				                                 .getResult(),
 				                             inPlane)
-				                         .getResult();
+					                     .getResult();
 				    auto paddedOh =
 				        bodyBuilder.create<mlir::spirv::IAddOp>(loc, oh, EmitI32Constant(bodyBuilder, loc, lowPadH))
 				            .getResult();
@@ -1970,9 +1970,9 @@ namespace LiteNN
 				    for (std::uint32_t icg = 0; icg < inputChannelsPerGroup; ++icg)
 				    {
 					    auto ic = bodyBuilder
-					                  .create<mlir::spirv::IAddOp>(loc, inputChannelBase,
-					                                               EmitI32Constant(bodyBuilder, loc, icg))
-					                  .getResult();
+						              .create<mlir::spirv::IAddOp>(loc, inputChannelBase,
+						                                           EmitI32Constant(bodyBuilder, loc, icg))
+						              .getResult();
 					    auto inputChannelOffset =
 					        bodyBuilder
 					            .create<mlir::spirv::IAddOp>(
@@ -2032,7 +2032,7 @@ namespace LiteNN
 							    auto diffWRaw =
 							        bodyBuilder.create<mlir::spirv::ISubOp>(loc, paddedOw, kernelWValue).getResult();
 							    auto diffW = bodyBuilder.create<mlir::spirv::SelectOp>(loc, validWStart, diffWRaw, zero)
-							                     .getResult();
+								                 .getResult();
 							    auto validWStride =
 							        bodyBuilder
 							            .create<mlir::spirv::IEqualOp>(
@@ -2069,10 +2069,10 @@ namespace LiteNN
 							                    .getResult())
 							            .getResult();
 							    auto weightOffset = bodyBuilder
-							                            .create<mlir::spirv::IAddOp>(
+								                        .create<mlir::spirv::IAddOp>(
 							                                loc, weightChannelOffset,
 							                                EmitI32Constant(bodyBuilder, loc, kh * kernelW + kw))
-							                            .getResult();
+								                        .getResult();
 							    auto inputValue =
 							        bodyBuilder
 							            .create<mlir::spirv::LoadOp>(
@@ -2190,13 +2190,13 @@ namespace LiteNN
 				    auto batch = bodyBuilder.create<mlir::spirv::UDivOp>(loc, tmp1, channelCount).getResult();
 
 				    auto iy = bodyBuilder
-				                  .create<mlir::spirv::UDivOp>(
+					              .create<mlir::spirv::UDivOp>(
 				                      loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, oh, inH).getResult(), outH)
-				                  .getResult();
+					              .getResult();
 				    auto ix = bodyBuilder
-				                  .create<mlir::spirv::UDivOp>(
+					              .create<mlir::spirv::UDivOp>(
 				                      loc, bodyBuilder.create<mlir::spirv::IMulOp>(loc, ow, inW).getResult(), outW)
-				                  .getResult();
+					              .getResult();
 				    auto inPlane = bodyBuilder.create<mlir::spirv::IMulOp>(loc, inH, inW).getResult();
 				    auto inputOffset =
 				        bodyBuilder
@@ -2220,11 +2220,11 @@ namespace LiteNN
 				                    .getResult())
 				            .getResult();
 				    auto value = bodyBuilder
-				                     .create<mlir::spirv::LoadOp>(
+					                 .create<mlir::spirv::LoadOp>(
 				                         loc, bodyBuilder.getF32Type(),
 				                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, inputOffset),
 				                         nullptr, nullptr)
-				                     .getValue();
+					                 .getValue();
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), value, nullptr,
 				        nullptr);
@@ -2342,11 +2342,11 @@ namespace LiteNN
 				                innerIndex)
 				            .getResult();
 				    auto value = bodyBuilder
-				                     .create<mlir::spirv::LoadOp>(
+					                 .create<mlir::spirv::LoadOp>(
 				                         loc, bodyBuilder.getF32Type(),
 				                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, inputIndex),
 				                         nullptr, nullptr)
-				                     .getValue();
+					                 .getValue();
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, out, outputIndex), value, nullptr,
 				        nullptr);
@@ -2474,11 +2474,11 @@ namespace LiteNN
 					                    innerIndex)
 					                .getResult();
 					        auto value = lhsBuilder
-					                         .create<mlir::spirv::LoadOp>(
+							                 .create<mlir::spirv::LoadOp>(
 					                             loc, lhsBuilder.getF32Type(),
 					                             EmitF32StorageBufferElementPointer(lhsBuilder, loc, lhs, lhsIndex),
 					                             nullptr, nullptr)
-					                         .getValue();
+							                 .getValue();
 					        lhsBuilder.create<mlir::spirv::StoreOp>(
 					            loc, EmitF32StorageBufferElementPointer(lhsBuilder, loc, out, outputIndex), value,
 					            nullptr, nullptr);
@@ -2510,11 +2510,11 @@ namespace LiteNN
 					                    innerIndex)
 					                .getResult();
 					        auto value = rhsBuilder
-					                         .create<mlir::spirv::LoadOp>(
+							                 .create<mlir::spirv::LoadOp>(
 					                             loc, rhsBuilder.getF32Type(),
 					                             EmitF32StorageBufferElementPointer(rhsBuilder, loc, rhs, rhsIndex),
 					                             nullptr, nullptr)
-					                         .getValue();
+							                 .getValue();
 					        rhsBuilder.create<mlir::spirv::StoreOp>(
 					            loc, EmitF32StorageBufferElementPointer(rhsBuilder, loc, out, outputIndex), value,
 					            nullptr, nullptr);
@@ -2624,19 +2624,19 @@ namespace LiteNN
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
 				    {
 					    auto offset = bodyBuilder
-					                      .create<mlir::spirv::IAddOp>(
+						                  .create<mlir::spirv::IAddOp>(
 					                          loc, base,
 					                          bodyBuilder
 					                              .create<mlir::spirv::IMulOp>(
 					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
 					                              .getResult())
-					                      .getResult();
+						                  .getResult();
 					    auto value = bodyBuilder
-					                     .create<mlir::spirv::LoadOp>(
+						                 .create<mlir::spirv::LoadOp>(
 					                         loc, bodyBuilder.getF32Type(),
 					                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset),
 					                         nullptr, nullptr)
-					                     .getValue();
+						                 .getValue();
 					    if (reduceIndex == 0)
 					    {
 						    maxValue = value;
@@ -2665,28 +2665,28 @@ namespace LiteNN
 				    auto inner = EmitI32Constant(bodyBuilder, loc, *innerSize);
 				    auto base = emitRowBase(bodyBuilder, rowIndex);
 				    auto maxValue = bodyBuilder
-				                        .create<mlir::spirv::LoadOp>(
+					                    .create<mlir::spirv::LoadOp>(
 				                            loc, bodyBuilder.getF32Type(),
 				                            EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowMax, rowIndex),
 				                            nullptr, nullptr)
-				                        .getValue();
+					                    .getValue();
 				    auto sum = EmitF32Constant(bodyBuilder, loc, 0.0f);
 				    for (std::uint32_t reduceIndex = 0; reduceIndex < axisSize; ++reduceIndex)
 				    {
 					    auto offset = bodyBuilder
-					                      .create<mlir::spirv::IAddOp>(
+						                  .create<mlir::spirv::IAddOp>(
 					                          loc, base,
 					                          bodyBuilder
 					                              .create<mlir::spirv::IMulOp>(
 					                                  loc, EmitI32Constant(bodyBuilder, loc, reduceIndex), inner)
 					                              .getResult())
-					                      .getResult();
+						                  .getResult();
 					    auto value = bodyBuilder
-					                     .create<mlir::spirv::LoadOp>(
+						                 .create<mlir::spirv::LoadOp>(
 					                         loc, bodyBuilder.getF32Type(),
 					                         EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, offset),
 					                         nullptr, nullptr)
-					                     .getValue();
+						                 .getValue();
 					    auto shifted = bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, maxValue).getResult();
 					    auto expValue = bodyBuilder.create<mlir::spirv::GLExpOp>(loc, shifted).getResult();
 					    sum = bodyBuilder.create<mlir::spirv::FAddOp>(loc, sum, expValue).getResult();
@@ -2709,23 +2709,23 @@ namespace LiteNN
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    auto rowIndexForElement = emitRowIndexFromElement(bodyBuilder, outputIndex);
 				    auto maxValue = bodyBuilder
-				                        .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-				                                                     EmitF32StorageBufferElementPointer(
+					                    .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+					                                                 EmitF32StorageBufferElementPointer(
 				                                                         bodyBuilder, loc, rowMax, rowIndexForElement),
-				                                                     nullptr, nullptr)
-				                        .getValue();
+					                                                 nullptr, nullptr)
+					                    .getValue();
 				    auto sum = bodyBuilder
-				                   .create<mlir::spirv::LoadOp>(
+					               .create<mlir::spirv::LoadOp>(
 				                       loc, bodyBuilder.getF32Type(),
 				                       EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowSum, rowIndexForElement),
 				                       nullptr, nullptr)
-				                   .getValue();
+					               .getValue();
 				    auto current = bodyBuilder
-				                       .create<mlir::spirv::LoadOp>(
+					                   .create<mlir::spirv::LoadOp>(
 				                           loc, bodyBuilder.getF32Type(),
 				                           EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, outputIndex),
 				                           nullptr, nullptr)
-				                       .getValue();
+					                   .getValue();
 				    auto shifted = bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, maxValue).getResult();
 				    auto numerator = bodyBuilder.create<mlir::spirv::GLExpOp>(loc, shifted).getResult();
 				    auto probability = bodyBuilder.create<mlir::spirv::FDivOp>(loc, numerator, sum).getResult();
@@ -2875,16 +2875,16 @@ namespace LiteNN
 					    for (std::uint32_t reduceIndex = 0; reduceIndex < reductionSize; ++reduceIndex)
 					    {
 						    mean = bodyBuilder
-						               .create<mlir::spirv::FAddOp>(
+							           .create<mlir::spirv::FAddOp>(
 						                   loc, mean,
 						                   loadInput(bodyBuilder, emitMemberOffset(bodyBuilder, base, reduceIndex)))
-						               .getResult();
+							           .getResult();
 					    }
 					    mean = bodyBuilder
-					               .create<mlir::spirv::FMulOp>(
+						           .create<mlir::spirv::FMulOp>(
 					                   loc, mean,
 					                   EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
-					               .getResult();
+						           .getResult();
 					    bodyBuilder.create<mlir::spirv::StoreOp>(
 					        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, *rowMean, rowIndex), mean,
 					        nullptr, nullptr);
@@ -2900,18 +2900,18 @@ namespace LiteNN
 					    variance = bodyBuilder.create<mlir::spirv::FAddOp>(loc, variance, squared).getResult();
 				    }
 				    variance = bodyBuilder
-				                   .create<mlir::spirv::FMulOp>(
+					               .create<mlir::spirv::FMulOp>(
 				                       loc, variance,
 				                       EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
-				                   .getResult();
+					               .getResult();
 				    auto denom = bodyBuilder
-				                     .create<mlir::spirv::GLSqrtOp>(
+					                 .create<mlir::spirv::GLSqrtOp>(
 				                         loc, bodyBuilder
 				                                  .create<mlir::spirv::FAddOp>(
 				                                      loc, variance,
 				                                      EmitF32Constant(bodyBuilder, loc, static_cast<float>(epsilon)))
 				                                  .getResult())
-				                     .getResult();
+					                 .getResult();
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
 				        loc, EmitF32StorageBufferElementPointer(bodyBuilder, loc, rowDenom, rowIndex), denom, nullptr,
 				        nullptr);
@@ -2944,32 +2944,32 @@ namespace LiteNN
 					    centered = bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult();
 				    }
 				    auto denom = bodyBuilder
-				                     .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-				                                                  EmitF32StorageBufferElementPointer(
+					                 .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+					                                              EmitF32StorageBufferElementPointer(
 				                                                      bodyBuilder, loc, rowDenom, rowIndexForElement),
-				                                                  nullptr, nullptr)
-				                     .getValue();
+					                                              nullptr, nullptr)
+					                 .getValue();
 				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
 				    if (scale)
 				    {
 					    auto axisIndex = emitAxisIndexFromElement(bodyBuilder, outputIndex);
 					    auto scaleValue = bodyBuilder
-					                          .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-					                                                       EmitF32StorageBufferElementPointer(
+						                      .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+						                                                   EmitF32StorageBufferElementPointer(
 					                                                           bodyBuilder, loc, *scale, axisIndex),
-					                                                       nullptr, nullptr)
-					                          .getValue();
+						                                                   nullptr, nullptr)
+						                      .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FMulOp>(loc, normalized, scaleValue).getResult();
 				    }
 				    if (bias)
 				    {
 					    auto axisIndex = emitAxisIndexFromElement(bodyBuilder, outputIndex);
 					    auto biasValue = bodyBuilder
-					                         .create<mlir::spirv::LoadOp>(
+						                     .create<mlir::spirv::LoadOp>(
 					                             loc, bodyBuilder.getF32Type(),
 					                             EmitF32StorageBufferElementPointer(bodyBuilder, loc, *bias, axisIndex),
 					                             nullptr, nullptr)
-					                         .getValue();
+						                     .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FAddOp>(loc, normalized, biasValue).getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
@@ -3092,10 +3092,10 @@ namespace LiteNN
 			    [&](mlir::OpBuilder& bodyBuilder) {
 				    const auto loadAtOffset = [&](mlir::OpBuilder& b, mlir::Value offset) {
 					    return b
-					        .create<mlir::spirv::LoadOp>(loc, b.getF32Type(),
-					                                     EmitF32StorageBufferElementPointer(b, loc, input, offset),
-					                                     nullptr, nullptr)
-					        .getValue();
+						    .create<mlir::spirv::LoadOp>(loc, b.getF32Type(),
+						                                 EmitF32StorageBufferElementPointer(b, loc, input, offset),
+						                                 nullptr, nullptr)
+						    .getValue();
 				    };
 				    auto inner = EmitI32Constant(bodyBuilder, loc, innerSizeValue);
 				    auto reductionValue = EmitI32Constant(bodyBuilder, loc, reductionSize);
@@ -3114,11 +3114,11 @@ namespace LiteNN
 					        bodyBuilder.create<mlir::spirv::IMulOp>(loc, groupIndex, reductionValue).getResult();
 					    affineIndex = groupedIndex;
 					    base = bodyBuilder
-					               .create<mlir::spirv::IAddOp>(
+						           .create<mlir::spirv::IAddOp>(
 					                   loc,
 					                   bodyBuilder.create<mlir::spirv::IMulOp>(loc, groupBase, batchValue).getResult(),
 					                   batchIndex)
-					               .getResult();
+						           .getResult();
 				    }
 				    else
 				    {
@@ -3131,19 +3131,19 @@ namespace LiteNN
 					            .getResult();
 					    affineIndex = axisIndex;
 					    base = bodyBuilder
-					               .create<mlir::spirv::ISubOp>(
+						           .create<mlir::spirv::ISubOp>(
 					                   loc, outputIndex,
 					                   bodyBuilder.create<mlir::spirv::IMulOp>(loc, axisIndex, inner).getResult())
-					               .getResult();
+						           .getResult();
 				    }
 				    const auto memberOffset = [&](mlir::OpBuilder& b, std::uint32_t reduceIndex) {
 					    const auto step = isGroupNorm ? batchValue : inner;
 					    return b
-					        .create<mlir::spirv::IAddOp>(
+						    .create<mlir::spirv::IAddOp>(
 					            loc, base,
 					            b.create<mlir::spirv::IMulOp>(loc, EmitI32Constant(b, loc, reduceIndex), step)
 					                .getResult())
-					        .getResult();
+						    .getResult();
 				    };
 
 				    auto mean = EmitF32Constant(bodyBuilder, loc, 0.0f);
@@ -3155,10 +3155,10 @@ namespace LiteNN
 						    mean = bodyBuilder.create<mlir::spirv::FAddOp>(loc, mean, value).getResult();
 					    }
 					    mean = bodyBuilder
-					               .create<mlir::spirv::FMulOp>(
+						           .create<mlir::spirv::FMulOp>(
 					                   loc, mean,
 					                   EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
-					               .getResult();
+						           .getResult();
 				    }
 
 				    auto variance = EmitF32Constant(bodyBuilder, loc, 0.0f);
@@ -3166,52 +3166,52 @@ namespace LiteNN
 				    {
 					    auto value = loadAtOffset(bodyBuilder, memberOffset(bodyBuilder, reduceIndex));
 					    auto centered = (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::GroupNorm)
-					                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult()
-					                        : value;
+						                    ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, value, mean).getResult()
+						                    : value;
 					    auto squared = bodyBuilder.create<mlir::spirv::FMulOp>(loc, centered, centered).getResult();
 					    variance = bodyBuilder.create<mlir::spirv::FAddOp>(loc, variance, squared).getResult();
 				    }
 				    variance = bodyBuilder
-				                   .create<mlir::spirv::FMulOp>(
+					               .create<mlir::spirv::FMulOp>(
 				                       loc, variance,
 				                       EmitF32Constant(bodyBuilder, loc, 1.0f / static_cast<float>(reductionSize)))
-				                   .getResult();
+					               .getResult();
 				    auto denom = bodyBuilder
-				                     .create<mlir::spirv::GLSqrtOp>(
+					                 .create<mlir::spirv::GLSqrtOp>(
 				                         loc, bodyBuilder
 				                                  .create<mlir::spirv::FAddOp>(
 				                                      loc, variance,
 				                                      EmitF32Constant(bodyBuilder, loc, static_cast<float>(epsilon)))
 				                                  .getResult())
-				                     .getResult();
+					                 .getResult();
 				    auto current = bodyBuilder
-				                       .create<mlir::spirv::LoadOp>(
+					                   .create<mlir::spirv::LoadOp>(
 				                           loc, bodyBuilder.getF32Type(),
 				                           EmitF32StorageBufferElementPointer(bodyBuilder, loc, input, outputIndex),
 				                           nullptr, nullptr)
-				                       .getValue();
+					                   .getValue();
 				    auto centered = (mode == NormalizationMode::LayerNorm || mode == NormalizationMode::GroupNorm)
-				                        ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult()
-				                        : current;
+					                    ? bodyBuilder.create<mlir::spirv::FSubOp>(loc, current, mean).getResult()
+					                    : current;
 				    auto normalized = bodyBuilder.create<mlir::spirv::FDivOp>(loc, centered, denom).getResult();
 				    if (scale)
 				    {
 					    auto scaleValue = bodyBuilder
-					                          .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-					                                                       EmitF32StorageBufferElementPointer(
+						                      .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+						                                                   EmitF32StorageBufferElementPointer(
 					                                                           bodyBuilder, loc, *scale, affineIndex),
-					                                                       nullptr, nullptr)
-					                          .getValue();
+						                                                   nullptr, nullptr)
+						                      .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FMulOp>(loc, normalized, scaleValue).getResult();
 				    }
 				    if (bias)
 				    {
 					    auto biasValue = bodyBuilder
-					                         .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
-					                                                      EmitF32StorageBufferElementPointer(
+						                     .create<mlir::spirv::LoadOp>(loc, bodyBuilder.getF32Type(),
+						                                                  EmitF32StorageBufferElementPointer(
 					                                                          bodyBuilder, loc, *bias, affineIndex),
-					                                                      nullptr, nullptr)
-					                         .getValue();
+						                                                  nullptr, nullptr)
+						                     .getValue();
 					    normalized = bodyBuilder.create<mlir::spirv::FAddOp>(loc, normalized, biasValue).getResult();
 				    }
 				    bodyBuilder.create<mlir::spirv::StoreOp>(
@@ -3289,9 +3289,9 @@ namespace LiteNN
 				    if (VulkanSPIRVScalarIsFloat(srcType) && VulkanSPIRVScalarIsFloat(dstType))
 				    {
 					    result = srcElementType == dstElementType
-					                 ? inputValue
-					                 : bodyBuilder.create<mlir::spirv::FConvertOp>(loc, dstElementType, inputValue)
-					                       .getResult();
+						             ? inputValue
+						             : bodyBuilder.create<mlir::spirv::FConvertOp>(loc, dstElementType, inputValue)
+						                   .getResult();
 				    }
 				    else if (VulkanSPIRVScalarIsFloat(srcType) && VulkanSPIRVScalarIsSignedInteger(dstType))
 				    {
@@ -3320,15 +3320,15 @@ namespace LiteNN
 						    result = inputValue;
 					    }
 					    else if (VulkanSPIRVScalarIsUnsignedInteger(srcType) ||
-					             VulkanSPIRVScalarIsUnsignedInteger(dstType))
+						         VulkanSPIRVScalarIsUnsignedInteger(dstType))
 					    {
 						    result = bodyBuilder.create<mlir::spirv::UConvertOp>(loc, dstElementType, inputValue)
-						                 .getResult();
+							             .getResult();
 					    }
 					    else
 					    {
 						    result = bodyBuilder.create<mlir::spirv::SConvertOp>(loc, dstElementType, inputValue)
-						                 .getResult();
+							             .getResult();
 					    }
 				    }
 				    else

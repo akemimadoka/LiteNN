@@ -87,7 +87,7 @@ TEST(GGUFAOTCache, ConcurrentSharedWeightPopulationPublishesOneCompletePayload)
 	const auto root =
 	    std::filesystem::temp_directory_path() /
 	    std::format("litenn-shared-weights-{:016x}",
-	                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+		            static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
 	const auto weightsPath = root / "payload" / "weights.bin";
 	constexpr std::array payload{ std::byte{ 1 }, std::byte{ 2 }, std::byte{ 3 }, std::byte{ 4 } };
 	std::atomic<std::uint32_t> published{};
@@ -124,7 +124,7 @@ TEST(GGUFAOTCache, FailedSharedWeightPopulationCleansStagingAndCanRetry)
 	const auto root =
 	    std::filesystem::temp_directory_path() /
 	    std::format("litenn-shared-weights-failure-{:016x}",
-	                static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+		            static_cast<std::uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
 	const auto weightsPath = root / "payload" / "weights.bin";
 	constexpr std::array payload{ std::byte{ 5 }, std::byte{ 6 }, std::byte{ 7 } };
 
@@ -610,7 +610,7 @@ namespace
 		    { "tokenizer.ggml.eos_token_id", std::int64_t{ 2 } },
 		    { "tokenizer.ggml.unknown_token_id", std::int64_t{ 1 } },
 		    { "tokenizer.chat_template",
-		      std::string("{% for message in messages %}{{ message.content }}{% endfor %}") },
+			  std::string("{% for message in messages %}{{ message.content }}{% endfor %}") },
 		});
 		return graph;
 	}
@@ -778,7 +778,7 @@ namespace
 				const auto isDown = name == "blk.0.ffn_down.weight";
 				copiedVariable =
 				    QuantizeGGMLVariable(*outputMajorVariable, isDown ? GGML_TYPE_Q6_K : GGML_TYPE_Q4_K,
-				                         isDown ? QuantizedBlockFormat::GGML_Q6_K : QuantizedBlockFormat::GGML_Q4_K);
+					                     isDown ? QuantizedBlockFormat::GGML_Q6_K : QuantizedBlockFormat::GGML_Q4_K);
 			}
 			const auto index = copy.AddVariable(std::move(copiedVariable));
 			copy.SetVariableName(index, name);
@@ -1706,11 +1706,11 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesQ4KTokenEmbeddingGatherWithoutInterpre
 	const auto indices = forward.AddParam(DataType::Int32, { 2 });
 	const auto storage =
 	    forward.AddNode(VariableRefNode{ tableVariable },
-	                    std::vector<OutputInfo>{
+		                std::vector<OutputInfo>{
 	                        OutputInfo{ quantizedTable->Data().DType(), quantizedTable->Data().Shape().ToOwned() } });
 	const auto rows =
 	    forward.AddNode(QuantizedGetRowsNode{ { storage, 0 }, { indices, 0 }, *quantizedTable->Quantization() },
-	                    std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { 2, rowWidth } } });
+		                std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { 2, rowWidth } } });
 	forward.SetResults(std::vector<NodeOutput>{ { rows, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(forward)));
 	graph.SetInputNames({ "token_ids" });
@@ -1858,7 +1858,7 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesOutputMajorKQuantAndQ8_0MatMulWithoutM
 			const auto fieldInterleavedWeight =
 			    std::ranges::find_if(fieldInterleavedExternalInfos, [](const auto& info) {
 				    return info.region == "weights" &&
-				           info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
+					       info.name.find(".prepacked.field_interleaved_v4.") != std::string::npos;
 			    });
 			ASSERT_NE(fieldInterleavedWeight, fieldInterleavedExternalInfos.end());
 			auto fieldInterleavedCompiled = fieldInterleavedArtifact.Load();
@@ -2215,7 +2215,7 @@ TEST(GGUFLLaMAQuantizedExecution, CompilesGroupedKQuantProjectionToQ8KStagedHelp
 			    Compiler<CPU>::CompileArtifact(Detail::BuildExecutablePlanFromGraph(graph), options);
 			const auto fieldInterleavedHelper =
 			    outFeatures.size() == 2 ? "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32"
-			                            : "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32";
+				                        : "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32";
 			EXPECT_TRUE(ByteSpanContains(fieldInterleavedArtifact.Instructions(), fieldInterleavedHelper));
 			const auto fieldInterleavedWeightCount =
 			    std::ranges::count_if(fieldInterleavedArtifact.ExternalTensorInfos(), [](const auto& info) {
@@ -2741,7 +2741,7 @@ TEST(GGUFLLaMAQuantizedExecution, CPUAOTFusesSwiGLUIntoFieldInterleavedV4DownPro
 			const auto up = forward.AddParam(DataType::Float32, { broadcastUp ? 1 : rows, inFeatures });
 			const auto gated =
 			    forward.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, { gate, 0 }, { up, 0 } },
-			                    std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { rows, inFeatures } } });
+				                std::vector<OutputInfo>{ OutputInfo{ DataType::Float32, { rows, inFeatures } } });
 			const auto down = Layer::AddLinear(forward, downLayer, { gated, 0 });
 			std::vector<NodeOutput> results;
 			if (preserveSwiGLUOutput)
@@ -3758,7 +3758,7 @@ TEST(GGUFLLaMACausalLM, ReusesCapacityDecodeGraphAcrossRuntimePositions)
 	const auto& capacityForward = capacityDecode.GetSubgraph(capacityDecode.Forward());
 	EXPECT_EQ(
 	    std::ranges::count_if(capacityForward.Nodes(),
-	                          [](const NodeEntry& entry) { return std::holds_alternative<CallNode>(entry.node); }),
+		                      [](const NodeEntry& entry) { return std::holds_alternative<CallNode>(entry.node); }),
 	    hyperparameters.blockCount);
 	const auto fullPrefill = GGUF::LowerLLaMACausalLM(archive, 2);
 	const auto capacityPlan = Detail::BuildExecutablePlanFromGraph(capacityDecode);
@@ -3882,12 +3882,12 @@ TEST(GGUFLLaMACausalLM, GroupedPagedAttentionReferenceMatchesDenseActivePrefix)
 	const auto densePosition = denseForward.AddParam(DataType::Int64, { 1 });
 	const auto denseAttention =
 	    denseForward.AddNode(GroupedActivePrefixAttentionNode{ .queries = { denseQueries, 0 },
-	                                                           .keys = { denseKeys, 0 },
-	                                                           .values = { denseValues, 0 },
-	                                                           .currentPosition = { densePosition, 0 },
-	                                                           .scale = 1.0,
-	                                                           .queryGroupsPerKVHead = 2 },
-	                         { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                                                       .keys = { denseKeys, 0 },
+		                                                       .values = { denseValues, 0 },
+		                                                       .currentPosition = { densePosition, 0 },
+		                                                       .scale = 1.0,
+		                                                       .queryGroupsPerKVHead = 2 },
+		                     { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	denseForward.SetResults({ { denseAttention, 0 } });
 	denseGraph.SetForward(denseGraph.AddSubgraph(std::move(denseForward)));
 	denseGraph.SetInputNames({ "queries", "keys", "values", "position" });
@@ -3902,13 +3902,13 @@ TEST(GGUFLLaMACausalLM, GroupedPagedAttentionReferenceMatchesDenseActivePrefix)
 	const auto activeLength = pagedForward.AddParam(DataType::Int64, { 1 });
 	const auto pagedAttention =
 	    pagedForward.AddNode(GroupedPagedAttentionNode{ .queries = { pagedQueries, 0 },
-	                                                    .kvState = { kvState, 0 },
-	                                                    .pageTable = { pageTable, 0 },
-	                                                    .pageDescriptors = { pageDescriptors, 0 },
-	                                                    .activeLength = { activeLength, 0 },
-	                                                    .scale = 1.0,
-	                                                    .queryGroupsPerKVHead = 2 },
-	                         { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		                                                .kvState = { kvState, 0 },
+		                                                .pageTable = { pageTable, 0 },
+		                                                .pageDescriptors = { pageDescriptors, 0 },
+		                                                .activeLength = { activeLength, 0 },
+		                                                .scale = 1.0,
+		                                                .queryGroupsPerKVHead = 2 },
+		                     { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	pagedForward.SetResults({ { pagedAttention, 0 } });
 	pagedGraph.SetForward(pagedGraph.AddSubgraph(std::move(pagedForward)));
 	pagedGraph.SetInputNames({ "queries", "kv_state", "page_table", "page_descriptors", "active_length" });
@@ -4095,10 +4095,10 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeScheduleBindsPagedKVInputs)
 {
 	const auto schedule =
 	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
-	                                                                     .decodePastLength = 0,
-	                                                                     .maxCacheLength = 4,
-	                                                                     .dynamicDecodePosition = true,
-	                                                                     .usePagedReferenceDecode = true });
+		                                                                 .decodePastLength = 0,
+		                                                                 .maxCacheLength = 4,
+		                                                                 .dynamicDecodePosition = true,
+		                                                                 .usePagedReferenceDecode = true });
 	ASSERT_EQ(schedule.states.size(), 5u);
 	const auto forward = schedule.module.plan.forward;
 	ASSERT_EQ(schedule.module.functions[forward].inputs.size(), 6u);
@@ -4149,11 +4149,11 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeSeparatesLogicalAndResidentKVCapaci
 {
 	const auto schedule =
 	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
-	                                                                     .decodePastLength = 0,
-	                                                                     .maxCacheLength = 512,
-	                                                                     .dynamicDecodePosition = true,
-	                                                                     .usePagedReferenceDecode = true,
-	                                                                     .pagedResidentPageCount = 1 });
+		                                                                 .decodePastLength = 0,
+		                                                                 .maxCacheLength = 512,
+		                                                                 .dynamicDecodePosition = true,
+		                                                                 .usePagedReferenceDecode = true,
+		                                                                 .pagedResidentPageCount = 1 });
 	ASSERT_EQ(schedule.states.size(), 5u);
 	ASSERT_TRUE(schedule.states[0].layout.has_value());
 	EXPECT_EQ(schedule.states[0].layout->maxLogicalTokens, 512u);
@@ -4176,12 +4176,12 @@ TEST(GGUFLLaMAArtifacts, PagedReferenceDecodeExposesSelectedSubLayerCheckpoints)
 {
 	const auto schedule =
 	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyQwen2Archive(), { .prefillSequenceLength = 1,
-	                                                                     .decodePastLength = 0,
-	                                                                     .maxCacheLength = 4,
-	                                                                     .dynamicDecodePosition = true,
-	                                                                     .usePagedReferenceDecode = true,
-	                                                                     .exposeLayerCheckpoints = true,
-	                                                                     .subLayerCheckpointBlocks = { 0 } });
+		                                                                 .decodePastLength = 0,
+		                                                                 .maxCacheLength = 4,
+		                                                                 .dynamicDecodePosition = true,
+		                                                                 .usePagedReferenceDecode = true,
+		                                                                 .exposeLayerCheckpoints = true,
+		                                                                 .subLayerCheckpointBlocks = { 0 } });
 	const auto& plan = schedule.module.plan;
 	ASSERT_EQ(plan.outputs.size(), 22u);
 	EXPECT_EQ(plan.outputs[0].name, "logits");
@@ -4554,12 +4554,12 @@ TEST(GGUFLLaMACausalLM, ConditionalLogitsSkipsProjectionWhileUpdatingState)
 
 	auto pagedSchedule =
 	    GGUF::BuildLLaMADecodeRuntimeSchedule(BuildTinyLLaMAArchive(), { .prefillSequenceLength = 1,
-	                                                                     .decodePastLength = 0,
-	                                                                     .maxCacheLength = 4,
-	                                                                     .dynamicDecodePosition = true,
-	                                                                     .conditionalLogits = true,
-	                                                                     .usePagedReferenceDecode = true,
-	                                                                     .pagedResidentPageCount = 1 });
+		                                                                 .decodePastLength = 0,
+		                                                                 .maxCacheLength = 4,
+		                                                                 .dynamicDecodePosition = true,
+		                                                                 .conditionalLogits = true,
+		                                                                 .usePagedReferenceDecode = true,
+		                                                                 .pagedResidentPageCount = 1 });
 	EXPECT_NO_THROW(Runtime::ValidateRuntimeSchedule(pagedSchedule));
 	ASSERT_GE(pagedSchedule.module.plan.inputs.size(), 3u);
 	EXPECT_EQ(pagedSchedule.module.plan.inputs[0].name, "token_ids");

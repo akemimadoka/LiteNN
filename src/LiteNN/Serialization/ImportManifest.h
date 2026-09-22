@@ -78,8 +78,8 @@ namespace LiteNN::Serialization
 			{
 				manifest.diagnostics.push_back(
 				    MakeImportDiagnostic(ImportDiagnosticKind::UnsupportedBackendCapability,
-				                         std::format("{}:{}:{}", issue.subgraph, issue.node, issue.opKind),
-				                         std::format("backend '{}' cannot lower op '{}'", backend, issue.opKind)));
+					                     std::format("{}:{}:{}", issue.subgraph, issue.node, issue.opKind),
+					                     std::format("backend '{}' cannot lower op '{}'", backend, issue.opKind)));
 			}
 		}
 	}

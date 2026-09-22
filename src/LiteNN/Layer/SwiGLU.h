@@ -81,7 +81,7 @@ namespace LiteNN::Layer
 		const auto up = grouped[1];
 		const auto gated =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::SwiGLU, gate, up },
-		                     { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gate).shape } } });
+			                 { OutputInfo{ layer.gateProjection.dtype, { subgraph.GetOutputInfo(gate).shape } } });
 		return {
 			.gate = gate,
 			.up = up,

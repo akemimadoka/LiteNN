@@ -303,7 +303,7 @@ namespace LiteNN::Debug
 
 			return std::format("({})", JoinIndexed(outputInfos.size(), ", ", [&](std::size_t port) {
 				                   return std::format("{}: {}", FormatValueRef({ nodeId, port }),
-				                                      FormatInfo(outputInfos[port]));
+								                      FormatInfo(outputInfos[port]));
 			                   }));
 		}
 
@@ -329,13 +329,13 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, QuantizedConstantNode>)
 				    {
 					    return std::format("QuantizedConstantNode(storage={}, scheme={}, format={}, packed={}, "
-					                       "order={}, scaleLayout={})",
-					                       FormatTensorSummary(value.storage, options),
-					                       QuantizationSchemeName(value.params.scheme),
-					                       QuantizedBlockFormatName(value.params.blockFormat),
-					                       PackedNibbleFormatName(value.params.packedFormat),
-					                       PackedNibbleOrderName(value.params.packedOrder),
-					                       BlockScaleLayoutName(value.params.blockScaleLayout));
+						                   "order={}, scaleLayout={})",
+						                   FormatTensorSummary(value.storage, options),
+						                   QuantizationSchemeName(value.params.scheme),
+						                   QuantizedBlockFormatName(value.params.blockFormat),
+						                   PackedNibbleFormatName(value.params.packedFormat),
+						                   PackedNibbleOrderName(value.params.packedOrder),
+						                   BlockScaleLayoutName(value.params.blockScaleLayout));
 				    }
 				    else if constexpr (std::same_as<T, VariableRefNode>)
 				    {
@@ -344,12 +344,12 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, UnaryOpNode>)
 				    {
 					    return std::format("UnaryOpNode(op={}, input={})", UnaryOpToString(value.op),
-					                       FormatValueRef(value.input));
+						                   FormatValueRef(value.input));
 				    }
 				    else if constexpr (std::same_as<T, BinaryOpNode>)
 				    {
 					    return std::format("BinaryOpNode(op={}, lhs={}, rhs={})", BinaryOpToString(value.op),
-					                       FormatValueRef(value.lhs), FormatValueRef(value.rhs));
+						                   FormatValueRef(value.lhs), FormatValueRef(value.rhs));
 				    }
 				    else if constexpr (std::same_as<T, CallNode>)
 				    {
@@ -358,25 +358,25 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, CastNode>)
 				    {
 					    return std::format("CastNode(input={}, targetType={})", FormatValueRef(value.input),
-					                       Validation::DataTypeToString(value.targetType));
+						                   Validation::DataTypeToString(value.targetType));
 				    }
 				    else if constexpr (std::same_as<T, QuantizeNode>)
 				    {
 					    return std::format("QuantizeNode(input={}, storageType={}, granularity={})",
-					                       FormatValueRef(value.input),
-					                       Validation::DataTypeToString(value.params.storageType),
-					                       QuantizationGranularityName(value.params.granularity));
+						                   FormatValueRef(value.input),
+						                   Validation::DataTypeToString(value.params.storageType),
+						                   QuantizationGranularityName(value.params.granularity));
 				    }
 				    else if constexpr (std::same_as<T, DequantizeNode>)
 				    {
 					    return std::format("DequantizeNode(input={}, targetType={}, scheme={}, format={}, packed={}, "
-					                       "order={}, scaleLayout={})",
-					                       FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
-					                       QuantizationSchemeName(value.params.scheme),
-					                       QuantizedBlockFormatName(value.params.blockFormat),
-					                       PackedNibbleFormatName(value.params.packedFormat),
-					                       PackedNibbleOrderName(value.params.packedOrder),
-					                       BlockScaleLayoutName(value.params.blockScaleLayout));
+						                   "order={}, scaleLayout={})",
+						                   FormatValueRef(value.input), Validation::DataTypeToString(value.targetType),
+						                   QuantizationSchemeName(value.params.scheme),
+						                   QuantizedBlockFormatName(value.params.blockFormat),
+						                   PackedNibbleFormatName(value.params.packedFormat),
+						                   PackedNibbleOrderName(value.params.packedOrder),
+						                   BlockScaleLayoutName(value.params.blockScaleLayout));
 				    }
 				    else if constexpr (std::same_as<T, QuantizedMatMulNode>)
 				    {
@@ -389,24 +389,24 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, QuantizedGetRowsNode>)
 				    {
 					    return std::format("QuantizedGetRowsNode(storage={}, indices={}, format={})",
-					                       FormatValueRef(value.storage), FormatValueRef(value.indices),
-					                       QuantizedBlockFormatName(value.params.blockFormat));
+						                   FormatValueRef(value.storage), FormatValueRef(value.indices),
+						                   QuantizedBlockFormatName(value.params.blockFormat));
 				    }
 				    else if constexpr (std::same_as<T, CondNode>)
 				    {
 					    return std::format("CondNode(condition={}, then=@{}, else=@{}, args={})",
-					                       FormatValueRef(value.condition), value.thenBranch, value.elseBranch,
-					                       FormatNodeArgs(value.args));
+						                   FormatValueRef(value.condition), value.thenBranch, value.elseBranch,
+						                   FormatNodeArgs(value.args));
 				    }
 				    else if constexpr (std::same_as<T, WhileNode>)
 				    {
 					    return std::format("WhileNode(cond=@{}, body=@{}, initArgs={})", value.condBranch,
-					                       value.bodyBranch, FormatNodeArgs(value.initArgs));
+						                   value.bodyBranch, FormatNodeArgs(value.initArgs));
 				    }
 				    else if constexpr (std::same_as<T, SaveActivationNode>)
 				    {
 					    return std::format("SaveActivationNode(input={}, slot={})", FormatValueRef(value.input),
-					                       value.slotId);
+						                   value.slotId);
 				    }
 				    else if constexpr (std::same_as<T, LoadActivationNode>)
 				    {
@@ -415,7 +415,7 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, TapeSaveActivationNode>)
 				    {
 					    return std::format("TapeSaveActivationNode(input={}, tapeSlot={})", FormatValueRef(value.input),
-					                       value.tapeSlotId);
+						                   value.tapeSlotId);
 				    }
 				    else if constexpr (std::same_as<T, TapeLoadActivationNode>)
 				    {
@@ -424,59 +424,59 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, ReduceOpNode>)
 				    {
 					    return std::format("ReduceOpNode(op={}, input={}, axis={})", ReduceOpToString(value.op),
-					                       FormatValueRef(value.input), value.axis);
+						                   FormatValueRef(value.input), value.axis);
 				    }
 				    else if constexpr (std::same_as<T, ReshapeNode>)
 				    {
 					    return std::format("ReshapeNode(input={}, targetShape={})", FormatValueRef(value.input),
-					                       Validation::ShapeToString(value.targetShape));
+						                   Validation::ShapeToString(value.targetShape));
 				    }
 				    else if constexpr (std::same_as<T, PermuteNode>)
 				    {
 					    return std::format("PermuteNode(input={}, permutation={})", FormatValueRef(value.input),
-					                       Validation::ShapeToString(value.permutation));
+						                   Validation::ShapeToString(value.permutation));
 				    }
 				    else if constexpr (std::same_as<T, BroadcastToNode>)
 				    {
 					    return std::format("BroadcastToNode(input={}, targetShape={})", FormatValueRef(value.input),
-					                       Validation::ShapeToString(value.targetShape));
+						                   Validation::ShapeToString(value.targetShape));
 				    }
 				    else if constexpr (std::same_as<T, PadNode>)
 				    {
 					    return std::format("PadNode(input={}, lowPads={}, highPads={}, mode={}, constantValue={})",
-					                       FormatValueRef(value.input), Validation::ShapeToString(value.lowPads),
-					                       Validation::ShapeToString(value.highPads), PadModeToString(value.mode),
-					                       value.constantValue);
+						                   FormatValueRef(value.input), Validation::ShapeToString(value.lowPads),
+						                   Validation::ShapeToString(value.highPads), PadModeToString(value.mode),
+						                   value.constantValue);
 				    }
 				    else if constexpr (std::same_as<T, GatherNode>)
 				    {
 					    return std::format("GatherNode(data={}, indices={}, axis={})", FormatValueRef(value.data),
-					                       FormatValueRef(value.indices), value.axis);
+						                   FormatValueRef(value.indices), value.axis);
 				    }
 				    else if constexpr (std::same_as<T, ScatterNode>)
 				    {
 					    return std::format("ScatterNode(data={}, indices={}, updates={}, axis={}, mode={})",
-					                       FormatValueRef(value.data), FormatValueRef(value.indices),
-					                       FormatValueRef(value.updates), value.axis, ScatterModeToString(value.mode));
+						                   FormatValueRef(value.data), FormatValueRef(value.indices),
+						                   FormatValueRef(value.updates), value.axis, ScatterModeToString(value.mode));
 				    }
 				    else if constexpr (std::same_as<T, ScanNode>)
 				    {
 					    return std::format("ScanNode(input={}, axis={}, op={})", FormatValueRef(value.input),
-					                       value.axis, ScanOpToString(value.op));
+						                   value.axis, ScanOpToString(value.op));
 				    }
 				    else if constexpr (std::same_as<T, SSMScanNode>)
 				    {
 					    return std::format("SSMScanNode(state={}, dt={}, a={}, b={}, c={}, d={})",
-					                       FormatValueRef(value.state), FormatValueRef(value.dt),
-					                       FormatValueRef(value.a), FormatValueRef(value.b), FormatValueRef(value.c),
-					                       FormatOptionalValueRef(value.d));
+						                   FormatValueRef(value.state), FormatValueRef(value.dt),
+						                   FormatValueRef(value.a), FormatValueRef(value.b), FormatValueRef(value.c),
+						                   FormatOptionalValueRef(value.d));
 				    }
 				    else if constexpr (std::same_as<T, RWKVWKVNode>)
 				    {
 					    return std::format("RWKVWKVNode(key={}, value={}, receptance={}, timeDecay={}, timeFirst={})",
-					                       FormatValueRef(value.key), FormatValueRef(value.value),
-					                       FormatValueRef(value.receptance), FormatValueRef(value.timeDecay),
-					                       FormatValueRef(value.timeFirst));
+						                   FormatValueRef(value.key), FormatValueRef(value.value),
+						                   FormatValueRef(value.receptance), FormatValueRef(value.timeDecay),
+						                   FormatValueRef(value.timeFirst));
 				    }
 				    else if constexpr (std::same_as<T, SoftmaxNode>)
 				    {
@@ -485,67 +485,67 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
 				    {
 					    return std::format("CrossEntropyLossNode(logits={}, labels={})", FormatValueRef(value.logits),
-					                       FormatValueRef(value.labels));
+						                   FormatValueRef(value.labels));
 				    }
 				    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
 				    {
 					    return std::format("CrossEntropyLossBackwardNode(grad={}, logits={}, labels={})",
-					                       FormatValueRef(value.grad), FormatValueRef(value.logits),
-					                       FormatValueRef(value.labels));
+						                   FormatValueRef(value.grad), FormatValueRef(value.logits),
+						                   FormatValueRef(value.labels));
 				    }
 				    else if constexpr (std::same_as<T, NormalizationNode>)
 				    {
 					    return std::format("NormalizationNode(input={}, scale={}, bias={}, mode={}, axis={}, "
-					                       "groupCount={}, epsilon={})",
-					                       FormatValueRef(value.input), FormatOptionalValueRef(value.scale),
-					                       FormatOptionalValueRef(value.bias), NormalizationModeToString(value.mode),
-					                       value.axis, value.groupCount, value.epsilon);
+						                   "groupCount={}, epsilon={})",
+						                   FormatValueRef(value.input), FormatOptionalValueRef(value.scale),
+						                   FormatOptionalValueRef(value.bias), NormalizationModeToString(value.mode),
+						                   value.axis, value.groupCount, value.epsilon);
 				    }
 				    else if constexpr (std::same_as<T, RoPENode>)
 				    {
 					    return std::format("RoPENode(input={}, positions={}, layout={}, base={}, frequencyScale={}, "
-					                       "positionOffset={})",
-					                       FormatValueRef(value.input), FormatOptionalValueRef(value.positions),
-					                       EnumToString<EnumToStringStyle::Unqualified>(value.layout), value.base,
-					                       value.frequencyScale, value.positionOffset);
+						                   "positionOffset={})",
+						                   FormatValueRef(value.input), FormatOptionalValueRef(value.positions),
+						                   EnumToString<EnumToStringStyle::Unqualified>(value.layout), value.base,
+						                   value.frequencyScale, value.positionOffset);
 				    }
 				    else if constexpr (std::same_as<T, BatchMatMulNode>)
 				    {
 					    return std::format("BatchMatMulNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
-					                       FormatValueRef(value.rhs));
+						                   FormatValueRef(value.rhs));
 				    }
 				    else if constexpr (std::same_as<T, OutProdNode>)
 				    {
 					    return std::format("OutProdNode(lhs={}, rhs={})", FormatValueRef(value.lhs),
-					                       FormatValueRef(value.rhs));
+						                   FormatValueRef(value.rhs));
 				    }
 				    else if constexpr (std::same_as<T, TimestepEmbeddingNode>)
 				    {
 					    return std::format("TimestepEmbeddingNode(timesteps={}, dim={}, maxPeriod={})",
-					                       FormatValueRef(value.timesteps), value.dim, value.maxPeriod);
+						                   FormatValueRef(value.timesteps), value.dim, value.maxPeriod);
 				    }
 				    else if constexpr (std::same_as<T, SolveTriNode>)
 				    {
 					    return std::format("SolveTriNode(a={}, b={}, lower={}, unitDiagonal={})",
-					                       FormatValueRef(value.a), FormatValueRef(value.b), value.lower,
-					                       value.unitDiagonal);
+						                   FormatValueRef(value.a), FormatValueRef(value.b), value.lower,
+						                   value.unitDiagonal);
 				    }
 				    else if constexpr (std::same_as<T, SGDStepNode>)
 				    {
 					    return std::format("SGDStepNode(parameter={}, gradient={}, velocity={}, learningRate={}, "
-					                       "momentum={}, weightDecay={}, nesterov={})",
-					                       FormatValueRef(value.parameter), FormatValueRef(value.gradient),
-					                       FormatOptionalValueRef(value.velocity), value.learningRate, value.momentum,
-					                       value.weightDecay, value.nesterov);
+						                   "momentum={}, weightDecay={}, nesterov={})",
+						                   FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+						                   FormatOptionalValueRef(value.velocity), value.learningRate, value.momentum,
+						                   value.weightDecay, value.nesterov);
 				    }
 				    else if constexpr (std::same_as<T, AdamWStepNode>)
 				    {
 					    return std::format("AdamWStepNode(parameter={}, gradient={}, firstMoment={}, secondMoment={}, "
-					                       "learningRate={}, beta1={}, beta2={}, epsilon={}, weightDecay={}, step={})",
-					                       FormatValueRef(value.parameter), FormatValueRef(value.gradient),
-					                       FormatValueRef(value.firstMoment), FormatValueRef(value.secondMoment),
-					                       value.learningRate, value.beta1, value.beta2, value.epsilon,
-					                       value.weightDecay, value.step);
+						                   "learningRate={}, beta1={}, beta2={}, epsilon={}, weightDecay={}, step={})",
+						                   FormatValueRef(value.parameter), FormatValueRef(value.gradient),
+						                   FormatValueRef(value.firstMoment), FormatValueRef(value.secondMoment),
+						                   value.learningRate, value.beta1, value.beta2, value.epsilon,
+						                   value.weightDecay, value.step);
 				    }
 				    else if constexpr (std::same_as<T, Im2ColNode>)
 				    {
@@ -558,39 +558,39 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, Conv2DNode>)
 				    {
 					    return std::format("Conv2DNode(input={}, weight={}, bias={}, strides={}, dilations={}, "
-					                       "lowPads={}, highPads={}, groupCount={})",
-					                       FormatValueRef(value.input), FormatValueRef(value.weight),
-					                       FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
-					                       Validation::ShapeToString(value.dilations),
-					                       Validation::ShapeToString(value.lowPads),
-					                       Validation::ShapeToString(value.highPads), value.groupCount);
+						                   "lowPads={}, highPads={}, groupCount={})",
+						                   FormatValueRef(value.input), FormatValueRef(value.weight),
+						                   FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
+						                   Validation::ShapeToString(value.dilations),
+						                   Validation::ShapeToString(value.lowPads),
+						                   Validation::ShapeToString(value.highPads), value.groupCount);
 				    }
 				    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 				    {
 					    return std::format("ConvTranspose2DNode(input={}, weight={}, bias={}, strides={}, "
-					                       "dilations={}, lowPads={}, highPads={}, outputPads={}, groupCount={})",
-					                       FormatValueRef(value.input), FormatValueRef(value.weight),
-					                       FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
-					                       Validation::ShapeToString(value.dilations),
-					                       Validation::ShapeToString(value.lowPads),
-					                       Validation::ShapeToString(value.highPads),
-					                       Validation::ShapeToString(value.outputPads), value.groupCount);
+						                   "dilations={}, lowPads={}, highPads={}, outputPads={}, groupCount={})",
+						                   FormatValueRef(value.input), FormatValueRef(value.weight),
+						                   FormatOptionalValueRef(value.bias), Validation::ShapeToString(value.strides),
+						                   Validation::ShapeToString(value.dilations),
+						                   Validation::ShapeToString(value.lowPads),
+						                   Validation::ShapeToString(value.highPads),
+						                   Validation::ShapeToString(value.outputPads), value.groupCount);
 				    }
 				    else if constexpr (std::same_as<T, Pool2DNode>)
 				    {
 					    return std::format("Pool2DNode(input={}, mode={}, kernelShape={}, strides={}, lowPads={}, "
-					                       "highPads={}, countIncludePad={})",
-					                       FormatValueRef(value.input), PoolModeToString(value.mode),
-					                       Validation::ShapeToString(value.kernelShape),
-					                       Validation::ShapeToString(value.strides),
-					                       Validation::ShapeToString(value.lowPads),
-					                       Validation::ShapeToString(value.highPads), value.countIncludePad);
+						                   "highPads={}, countIncludePad={})",
+						                   FormatValueRef(value.input), PoolModeToString(value.mode),
+						                   Validation::ShapeToString(value.kernelShape),
+						                   Validation::ShapeToString(value.strides),
+						                   Validation::ShapeToString(value.lowPads),
+						                   Validation::ShapeToString(value.highPads), value.countIncludePad);
 				    }
 				    else if constexpr (std::same_as<T, UpsampleNode>)
 				    {
 					    return std::format("UpsampleNode(input={}, mode={}, outputSpatialShape={}, alignCorners={})",
-					                       FormatValueRef(value.input), UpsampleModeToString(value.mode),
-					                       Validation::ShapeToString(value.outputSpatialShape), value.alignCorners);
+						                   FormatValueRef(value.input), UpsampleModeToString(value.mode),
+						                   Validation::ShapeToString(value.outputSpatialShape), value.alignCorners);
 				    }
 				    else if constexpr (std::same_as<T, ConcatNode>)
 				    {
@@ -599,28 +599,28 @@ namespace LiteNN::Debug
 				    else if constexpr (std::same_as<T, SliceNode>)
 				    {
 					    return std::format("SliceNode(input={}, axis={}, start={}, length={})",
-					                       FormatValueRef(value.input), value.axis, value.start, value.length);
+						                   FormatValueRef(value.input), value.axis, value.start, value.length);
 				    }
 				    else if constexpr (std::same_as<T, GetRowsNode>)
 				    {
 					    return std::format("GetRowsNode(data={}, indices={})", FormatValueRef(value.data),
-					                       FormatValueRef(value.indices));
+						                   FormatValueRef(value.indices));
 				    }
 				    else if constexpr (std::same_as<T, ArgsortNode>)
 				    {
 					    return std::format("ArgsortNode(input={}, axis={}, order={})", FormatValueRef(value.input),
-					                       value.axis, SortOrderToString(value.order));
+						                   value.axis, SortOrderToString(value.order));
 				    }
 				    else if constexpr (std::same_as<T, MulMatIdNode>)
 				    {
 					    return std::format("MulMatIdNode(as={}, b={}, ids={})", FormatValueRef(value.as),
-					                       FormatValueRef(value.b), FormatValueRef(value.ids));
+						                   FormatValueRef(value.b), FormatValueRef(value.ids));
 				    }
 				    else if constexpr (std::same_as<T, FusedOpNode>)
 				    {
 					    return std::format("FusedOpNode(pattern={}, body=@{}, args={})",
-					                       FusionPatternToString(value.pattern), value.body,
-					                       FormatNodeArgs(value.args));
+						                   FusionPatternToString(value.pattern), value.body,
+						                   FormatNodeArgs(value.args));
 				    }
 				    else
 				    {
@@ -651,7 +651,7 @@ namespace LiteNN::Debug
 				                   const auto result = subgraph.Results()[index];
 				                   const auto& info = subgraph.GetOutputInfo(result);
 				                   const auto name = subgraphId == graph.Forward() ? graph.OutputName(index)
-				                                                                   : std::format("result{}", index);
+								                                                   : std::format("result{}", index);
 				                   return std::format("{}={}: {}", name, FormatValueRef(result), FormatInfo(info));
 			                   }));
 		}

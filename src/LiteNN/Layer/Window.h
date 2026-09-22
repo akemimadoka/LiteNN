@@ -65,7 +65,7 @@ namespace LiteNN::Compatibility::GGML
 		const auto split = Layer::AddReshape(subgraph, padded, splitShape);
 		const auto partitioned = Layer::AddPermute(subgraph, split, { 0uz, 2uz, 4uz, 1uz, 3uz, 5uz });
 		const std::vector<std::size_t> outputShape{ channels, windowSize, windowSize,
-			                                        windowsWide * windowsHigh * batch };
+		                                            windowsWide * windowsHigh * batch };
 		return Layer::AddReshape(subgraph, partitioned, outputShape);
 	}
 

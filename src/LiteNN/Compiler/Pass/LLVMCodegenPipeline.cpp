@@ -434,18 +434,18 @@ namespace litenn
 			    mlirContext, mlir::ShapedType::kDynamic, { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
 			auto dynamicGateType =
 			    fuseSwiGLU ? mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
-			                                       gateType.getElementType(), dynamicLayoutRank2)
-			               : mlir::MemRefType{};
+				                                   gateType.getElementType(), dynamicLayoutRank2)
+				           : mlir::MemRefType{};
 			auto funcType =
 			    fuseSwiGLU ? builder.getFunctionType(mlir::TypeRange{ dynamicGateType, dynamicGateType, dynamicRhsType,
-			                                                          dynamicOutType, i64, i64, i64 },
-			                                         mlir::TypeRange{})
-			    : usesExpandedPreparedLayout ? builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
-			                                                                            dynamicOutType, i64, i64 },
-			                                                           mlir::TypeRange{})
-			                                 : builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
-			                                                                            dynamicOutType, i64, i64, i64 },
-			                                                           mlir::TypeRange{});
+				                                                      dynamicOutType, i64, i64, i64 },
+				                                     mlir::TypeRange{})
+				: usesExpandedPreparedLayout ? builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
+				                                                                        dynamicOutType, i64, i64 },
+				                                                       mlir::TypeRange{})
+				                             : builder.getFunctionType(mlir::TypeRange{ dynamicLhsType, dynamicRhsType,
+				                                                                        dynamicOutType, i64, i64, i64 },
+				                                                       mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(helperName);
 			if (!helper)
 			{
@@ -597,7 +597,7 @@ namespace litenn
 			                                            lhsType.getElementType());
 			auto dynamicRhsType =
 			    mlir::MemRefType::get({ mlir::ShapedType::kDynamic },
-			                          llvm::cast<mlir::MemRefType>(rhsValues.front().getType()).getElementType());
+				                      llvm::cast<mlir::MemRefType>(rhsValues.front().getType()).getElementType());
 			auto dynamicOutType = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                            outType.getElementType());
 			const auto blockFormat = static_cast<LiteNN::QuantizedBlockFormat>(formatValues.front());
@@ -1117,7 +1117,7 @@ namespace litenn
 			                                             dynamicLayoutRank1);
 			auto funcType = builder.getFunctionType(
 			    mlir::TypeRange{ dynamicF32Rank2, dynamicF32Rank3, dynamicF32Rank3, dynamicI64Rank1, dynamicF32Rank2,
-			                     f64, builder.getI64Type(), builder.getI64Type(), builder.getI64Type() },
+				                 f64, builder.getI64Type(), builder.getI64Type(), builder.getI64Type() },
 			    mlir::TypeRange{});
 			auto helper = module.lookupSymbol<mlir::func::FuncOp>(kGroupedActivePrefixAttentionRank3Helper);
 			if (!helper)
@@ -1196,7 +1196,7 @@ namespace litenn
 			auto dynamicLayoutRank5 = mlir::StridedLayoutAttr::get(
 			    mlirContext, mlir::ShapedType::kDynamic,
 			    { mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic,
-			      mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
+				  mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic });
 			auto dynamicF32Rank2 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic },
 			                                             queriesType.getElementType(), dynamicLayoutRank2);
 			auto dynamicF32Rank5 = mlir::MemRefType::get({ mlir::ShapedType::kDynamic, mlir::ShapedType::kDynamic,
@@ -1699,7 +1699,7 @@ namespace litenn
 							                       .create<mlir::vector::LoadOp>(
 							                           loc, vecType, out,
 							                           mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                                             nIndices[static_cast<size_t>(lane)] })
+													                     nIndices[static_cast<size_t>(lane)] })
 							                       .getResult());
 						}
 					}
@@ -1707,7 +1707,7 @@ namespace litenn
 					auto kPanelLoop = builder.create<mlir::scf::ForOp>(
 					    loc, c0, kPanelUpper, c1, initAccs,
 					    [&](mlir::OpBuilder& nested, mlir::Location nestedLoc, mlir::Value kPanelIndex,
-					        mlir::ValueRange accs) {
+						    mlir::ValueRange accs) {
 						    llvm::SmallVector<mlir::Value, 16> currentAccs(accs.begin(), accs.end());
 						    auto kBase =
 						        nested.create<mlir::arith::MulIOp>(nestedLoc, kPanelIndex, cKPanel).getResult();
@@ -1729,7 +1729,7 @@ namespace litenn
 								            .create<mlir::vector::LoadOp>(
 								                nestedLoc, vecType, packedRhs,
 								                mlir::ValueRange{ nTile, kPanelIndex, kInnerOffset,
-								                                  packedNOffsets[static_cast<size_t>(lane)] })
+												                  packedNOffsets[static_cast<size_t>(lane)] })
 								            .getResult());
 							    }
 
@@ -1738,20 +1738,20 @@ namespace litenn
 							    for (int64_t row = 0; row < rowTile; ++row)
 							    {
 								    auto a = nested
-								                 .create<mlir::memref::LoadOp>(
+									             .create<mlir::memref::LoadOp>(
 								                     nestedLoc, lhs,
 								                     mlir::ValueRange{ mIndices[static_cast<size_t>(row)], k })
-								                 .getResult();
+									             .getResult();
 								    auto aVec =
 								        nested.create<mlir::vector::BroadcastOp>(nestedLoc, vecType, a).getResult();
 								    for (int64_t lane = 0; lane < tileVectors; ++lane)
 								    {
 									    const size_t accIndex = static_cast<size_t>(row * tileVectors + lane);
 									    auto next = nested
-									                    .create<mlir::vector::FMAOp>(nestedLoc, aVec,
-									                                                 bVecs[static_cast<size_t>(lane)],
-									                                                 currentAccs[accIndex])
-									                    .getResult();
+										                .create<mlir::vector::FMAOp>(nestedLoc, aVec,
+										                                             bVecs[static_cast<size_t>(lane)],
+										                                             currentAccs[accIndex])
+										                .getResult();
 									    nextAccs.push_back(next);
 								    }
 							    }
@@ -1769,7 +1769,7 @@ namespace litenn
 							builder.create<mlir::vector::StoreOp>(
 							    loc, value, out,
 							    mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                      nIndices[static_cast<size_t>(lane)] });
+								                  nIndices[static_cast<size_t>(lane)] });
 						}
 					}
 				}
@@ -1882,7 +1882,7 @@ namespace litenn
 							                       .create<mlir::vector::LoadOp>(
 							                           loc, vecType, out,
 							                           mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                                             nIndices[static_cast<size_t>(lane)] })
+													                     nIndices[static_cast<size_t>(lane)] })
 							                       .getResult());
 						}
 					}
@@ -1916,10 +1916,10 @@ namespace litenn
 							    {
 								    const size_t accIndex = static_cast<size_t>(row * tileVectors + lane);
 								    auto next = nested
-								                    .create<mlir::vector::FMAOp>(nestedLoc, aVec,
-								                                                 bVecs[static_cast<size_t>(lane)],
-								                                                 accs[accIndex])
-								                    .getResult();
+									                .create<mlir::vector::FMAOp>(nestedLoc, aVec,
+									                                             bVecs[static_cast<size_t>(lane)],
+									                                             accs[accIndex])
+									                .getResult();
 								    nextAccs.push_back(next);
 							    }
 						    }
@@ -1935,7 +1935,7 @@ namespace litenn
 							builder.create<mlir::vector::StoreOp>(
 							    loc, value, out,
 							    mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                      nIndices[static_cast<size_t>(lane)] });
+								                  nIndices[static_cast<size_t>(lane)] });
 						}
 					}
 				}
@@ -2032,7 +2032,7 @@ namespace litenn
 							                       .create<mlir::vector::LoadOp>(
 							                           loc, vecType, out,
 							                           mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                                             nIndices[static_cast<size_t>(lane)] })
+													                     nIndices[static_cast<size_t>(lane)] })
 							                       .getResult());
 						}
 					}
@@ -2045,10 +2045,10 @@ namespace litenn
 						    for (int64_t lane = 0; lane < tileVectors; ++lane)
 						    {
 							    bVecs.push_back(nested
-							                        .create<mlir::vector::LoadOp>(
+								                    .create<mlir::vector::LoadOp>(
 							                            nestedLoc, vecType, rhs,
 							                            mlir::ValueRange{ k, nIndices[static_cast<size_t>(lane)] })
-							                        .getResult());
+								                    .getResult());
 						    }
 
 						    llvm::SmallVector<mlir::Value, 16> nextAccs;
@@ -2065,10 +2065,10 @@ namespace litenn
 							    {
 								    const size_t accIndex = static_cast<size_t>(row * tileVectors + lane);
 								    auto next = nested
-								                    .create<mlir::vector::FMAOp>(nestedLoc, aVec,
-								                                                 bVecs[static_cast<size_t>(lane)],
-								                                                 accs[accIndex])
-								                    .getResult();
+									                .create<mlir::vector::FMAOp>(nestedLoc, aVec,
+									                                             bVecs[static_cast<size_t>(lane)],
+									                                             accs[accIndex])
+									                .getResult();
 								    nextAccs.push_back(next);
 							    }
 						    }
@@ -2084,7 +2084,7 @@ namespace litenn
 							builder.create<mlir::vector::StoreOp>(
 							    loc, value, out,
 							    mlir::ValueRange{ mIndices[static_cast<size_t>(row)],
-							                      nIndices[static_cast<size_t>(lane)] });
+								                  nIndices[static_cast<size_t>(lane)] });
 						}
 					}
 				}
@@ -2164,7 +2164,7 @@ namespace litenn
 					    loc, c0, kUpper, c1, initAccs,
 					    [&](mlir::OpBuilder& nested, mlir::Location nestedLoc, mlir::Value k, mlir::ValueRange accs) {
 						    auto a = nested.create<mlir::memref::LoadOp>(nestedLoc, lhs, mlir::ValueRange{ m, k })
-						                 .getResult();
+							             .getResult();
 						    auto aVec = nested.create<mlir::vector::BroadcastOp>(nestedLoc, vecType, a).getResult();
 
 						    llvm::SmallVector<mlir::Value, 8> nextAccs;
@@ -2172,14 +2172,14 @@ namespace litenn
 						    for (int64_t lane = 0; lane < tileVectors; ++lane)
 						    {
 							    auto bVec = nested
-							                    .create<mlir::vector::LoadOp>(
+								                .create<mlir::vector::LoadOp>(
 							                        nestedLoc, vecType, rhs,
 							                        mlir::ValueRange{ k, nIndices[static_cast<size_t>(lane)] })
-							                    .getResult();
+								                .getResult();
 							    auto next = nested
-							                    .create<mlir::vector::FMAOp>(nestedLoc, aVec, bVec,
-							                                                 accs[static_cast<size_t>(lane)])
-							                    .getResult();
+								                .create<mlir::vector::FMAOp>(nestedLoc, aVec, bVec,
+								                                             accs[static_cast<size_t>(lane)])
+								                .getResult();
 							    nextAccs.push_back(next);
 						    }
 						    nested.create<mlir::scf::YieldOp>(nestedLoc, nextAccs);
@@ -2305,7 +2305,7 @@ namespace litenn
 					initAccs.push_back(
 					    builder
 					        .create<mlir::vector::LoadOp>(loc, vecType, out,
-					                                      mlir::ValueRange{ mIndices[static_cast<size_t>(row)], c0 })
+							                              mlir::ValueRange{ mIndices[static_cast<size_t>(row)], c0 })
 					        .getResult());
 				}
 
@@ -2321,9 +2321,9 @@ namespace litenn
 					    for (int64_t row = 0; row < rowTile; ++row)
 					    {
 						    auto a = nested
-						                 .create<mlir::memref::LoadOp>(
+							             .create<mlir::memref::LoadOp>(
 						                     nestedLoc, lhs, mlir::ValueRange{ mIndices[static_cast<size_t>(row)], k })
-						                 .getResult();
+							             .getResult();
 						    auto aVec = nested.create<mlir::vector::BroadcastOp>(nestedLoc, vecType, a).getResult();
 						    auto next =
 						        nested
@@ -2403,13 +2403,13 @@ namespace litenn
 					    for (int64_t col = 0; col < n; ++col)
 					    {
 						    auto b = nested
-						                 .create<mlir::memref::LoadOp>(
+							             .create<mlir::memref::LoadOp>(
 						                     nestedLoc, rhs, mlir::ValueRange{ k, nIndices[static_cast<size_t>(col)] })
-						                 .getResult();
+							             .getResult();
 						    auto productOp = nested.create<mlir::arith::MulFOp>(nestedLoc, a, b);
 						    productOp->setAttr(productOp.getFastMathAttrName(), fastMath);
 						    auto sumOp = nested.create<mlir::arith::AddFOp>(nestedLoc, accs[static_cast<size_t>(col)],
-						                                                    productOp.getResult());
+							                                                productOp.getResult());
 						    sumOp->setAttr(sumOp.getFastMathAttrName(), fastMath);
 						    nextAccs.push_back(sumOp.getResult());
 					    }

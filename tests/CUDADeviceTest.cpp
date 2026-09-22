@@ -227,8 +227,8 @@ TEST(CUDADevice, LowPrecisionConversionPathsMatchCPUReference)
 	{
 		const std::vector<float> sourceValues =
 		    dataType == DataType::UInt8  ? std::vector<float>{ 0.0F, 1.0F, 2.0F, 3.0F, 7.0F }
-		    : dataType == DataType::Int8 ? std::vector<float>{ -5.0F, -1.0F, 0.0F, 3.0F, 7.0F }
-		                                 : std::vector<float>{ -2.25F, -1.0F, 0.0F, 1.5F, 3.75F };
+			: dataType == DataType::Int8 ? std::vector<float>{ -5.0F, -1.0F, 0.0F, 3.0F, 7.0F }
+			                             : std::vector<float>{ -2.25F, -1.0F, 0.0F, 1.5F, 3.75F };
 		const auto expected = QuantizeAsFloat32(sourceValues, dataType);
 		const auto roundTrip = RoundTripFloat32ThroughCUDA(sourceValues, dataType);
 		const auto converted = ConvertCUDADeviceToFloat32(sourceValues, dataType);

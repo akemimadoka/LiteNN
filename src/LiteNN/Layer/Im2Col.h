@@ -18,8 +18,8 @@ namespace LiteNN::Layer
 		    ::LiteNN::Detail::Im2ColOutputShape(info.shape, kernelShape, strides, dilations, lowPads, highPads);
 		const auto result =
 		    subgraph.AddNode(Im2ColNode{ input, std::move(kernelShape), std::move(strides), std::move(dilations),
-		                                 std::move(lowPads), std::move(highPads) },
-		                     { OutputInfo{ info.dtype, outputShape } });
+			                             std::move(lowPads), std::move(highPads) },
+			                 { OutputInfo{ info.dtype, outputShape } });
 		return { result, 0 };
 	}
 

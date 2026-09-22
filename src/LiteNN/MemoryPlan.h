@@ -167,7 +167,7 @@ namespace LiteNN
 				{
 					throw std::runtime_error(
 					    std::format("Memory planner requires static byte size for subgraph {} param {}",
-					                subgraph.sourceSubgraph, paramIndex));
+						            subgraph.sourceSubgraph, paramIndex));
 				}
 				paramBuffers.push_back(addBuffer(MemoryBufferKind::External, subgraph.params[paramIndex].memorySpace,
 				                                 *byteSize, 1, memoryPlan.buffers.size()));
@@ -213,7 +213,7 @@ namespace LiteNN
 					{
 						throw std::runtime_error(
 						    std::format("Memory planner requires static byte size for subgraph {} node {} port {}",
-						                lifetime.subgraph, lifetime.value.node, lifetime.value.port));
+							            lifetime.subgraph, lifetime.value.node, lifetime.value.port));
 					}
 
 					const auto& node = subgraph.nodes[lifetime.value.node];
@@ -278,10 +278,10 @@ namespace LiteNN
 						                 bufferId);
 					}
 					MemoryAssignment assignment{ .subgraph = lifetime.subgraph,
-						                         .value = lifetime.value,
-						                         .buffer = bufferId,
-						                         .offset = 0,
-						                         .lifetime = lifetime };
+					                             .value = lifetime.value,
+					                             .buffer = bufferId,
+					                             .offset = 0,
+					                             .lifetime = lifetime };
 					activeAssignments.push_back(assignment);
 					memoryPlan.assignments.push_back(std::move(assignment));
 				}
@@ -369,7 +369,7 @@ namespace LiteNN
 			const auto needsUpload =
 			    requiresDeviceLocal &&
 			    (buffer.kind == MemoryBufferKind::Constant || buffer.kind == MemoryBufferKind::Persistent ||
-			     (buffer.kind == MemoryBufferKind::External && MemoryBufferIsGraphInput(memoryPlan, buffer.id)));
+				 (buffer.kind == MemoryBufferKind::External && MemoryBufferIsGraphInput(memoryPlan, buffer.id)));
 			const auto needsDownload = requiresDeviceLocal && MemoryBufferIsPublicOutput(memoryPlan, buffer.id);
 			const auto requiresHostStaging = needsUpload || needsDownload;
 
@@ -406,9 +406,9 @@ namespace LiteNN
 			{
 				devicePlan.stagingSteps.push_back(
 				    { .buffer = buffer.id,
-				      .direction = DeviceMemoryStagingDirection::Download,
-				      .byteSize = buffer.byteSize,
-				      .reason = "public device-local output requires device-to-host staging" });
+					  .direction = DeviceMemoryStagingDirection::Download,
+					  .byteSize = buffer.byteSize,
+					  .reason = "public device-local output requires device-to-host staging" });
 				devicePlan.stagingBytes += buffer.byteSize;
 				devicePlan.requiresStagingAllocator = true;
 			}
@@ -483,7 +483,7 @@ namespace LiteNN
 						{
 							throw std::runtime_error(
 							    std::format("Hidden memory-space copy is not allowed in subgraph {} node {} ({})",
-							                subgraph.sourceSubgraph, node.sourceNode, node.opKind));
+								            subgraph.sourceSubgraph, node.sourceNode, node.opKind));
 						}
 					}
 				}
@@ -495,7 +495,7 @@ namespace LiteNN
 					{
 						throw std::runtime_error(
 						    std::format("Missing memory assignment for subgraph {} node {} port {}",
-						                subgraph.sourceSubgraph, output.node, output.port));
+							            subgraph.sourceSubgraph, output.node, output.port));
 					}
 					if (assignment->buffer >= memoryPlan.buffers.size())
 					{

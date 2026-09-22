@@ -605,7 +605,7 @@ namespace
 		auto& graph = builder.UnsafeMutableGraph();
 		const auto base =
 		    Layer::CreateLinear(builder, Initializer::XavierUniform({ kInputWidth, kLoRAOutputWidth }, rng),
-		                        Initializer::Zeros({ 1, kLoRAOutputWidth }));
+			                    Initializer::Zeros({ 1, kLoRAOutputWidth }));
 		const auto adapter = Layer::CreateLinearLoRA(builder,
 		                                             Layer::LoRAAdapterMetadata{ .targetName = "linear",
 		                                                                         .rank = kLoRARank,
@@ -744,7 +744,7 @@ namespace
 			const auto storage = quantized.Storage();
 			const auto params = quantized.Params();
 			return { storage, params,   PrepareQuantizedLinearWeight(storage, params), DequantizeAffine(quantized),
-				     bias,    spec.relu };
+			         bias,    spec.relu };
 		}
 		case QuantizedWeightKind::PackedInt4: {
 			const auto quantized = QuantizeAffine(weight, PerTensorAffineQuantization(DataType::Int8, 1.0F / 4.0F));
@@ -1807,8 +1807,8 @@ namespace
 		}
 
 		const std::array specialGate{ 0.0F, -0.0F, std::numeric_limits<float>::infinity(),
-			                          -std::numeric_limits<float>::infinity(),
-			                          std::numeric_limits<float>::quiet_NaN() };
+		                              -std::numeric_limits<float>::infinity(),
+		                              std::numeric_limits<float>::quiet_NaN() };
 		const std::array specialUp{ 1.0F, -1.0F, 1.0F, 1.0F, 1.0F };
 		std::array<float, specialGate.size()> specialOutput{};
 		if (mathPolicy == SwiGLUBenchmarkMathPolicy::StrictStdExp)
@@ -3238,7 +3238,7 @@ namespace
 		auto inputs = MakeCUDAInputs(inputData, batch);
 		auto outputs = AllocateCUDAOutputs(module);
 		const CompiledModuleCUDARunOptions runOptions{ .graphReplay = enableGraphReplay
-			                                                              ? CUDAGraphReplayMode::Enabled
+		                                                                  ? CUDAGraphReplayMode::Enabled
 			                                                              : CUDAGraphReplayMode::Disabled };
 
 		for (int i = 0; i < kWarmupIterations; ++i)
@@ -3636,7 +3636,7 @@ namespace
 			                                    makeBiasData(layer.outputWidth, seed), { 1, layer.outputWidth });
 			const auto weight =
 			    sg.AddNode(VariableRefNode{ weightIndex },
-			               { OutputInfo{ DataType::Float32, { layer.inputWidth, layer.outputWidth } } });
+				           { OutputInfo{ DataType::Float32, { layer.inputWidth, layer.outputWidth } } });
 			const auto bias =
 			    sg.AddNode(VariableRefNode{ biasIndex }, { OutputInfo{ DataType::Float32, { 1, layer.outputWidth } } });
 			const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, activation, { weight, 0 } },
@@ -3894,7 +3894,7 @@ namespace
 		const auto rhs = sg.AddParam(DataType::Float32, { batch, rhsChannels, height, width });
 		const auto out =
 		    sg.AddNode(ConcatNode{ { { lhs, 0 }, { rhs, 0 } }, 1 },
-		               { OutputInfo{ DataType::Float32, { batch, lhsChannels + rhsChannels, height, width } } });
+			           { OutputInfo{ DataType::Float32, { batch, lhsChannels + rhsChannels, height, width } } });
 		sg.SetResults({ { out, 0 } });
 		graph.SetForward(graph.AddSubgraph(std::move(sg)));
 		graph.SetInputNames({ "lhs", "rhs" });
@@ -5307,11 +5307,11 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                            static_cast<std::uint64_t>(threadCount), false);
+							                        static_cast<std::uint64_t>(threadCount), false);
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5325,11 +5325,11 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulQ8KStagedHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLBlockMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                            static_cast<std::uint64_t>(threadCount), true);
+							                        static_cast<std::uint64_t>(threadCount), true);
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5347,11 +5347,11 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulCompactInterleavedHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLCompactInterleavedMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                                         static_cast<std::uint64_t>(threadCount));
+							                                     static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5365,11 +5365,11 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulFieldInterleavedV4Helper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLFieldInterleavedV4MatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                                         static_cast<std::uint64_t>(threadCount));
+							                                     static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5384,19 +5384,19 @@ namespace
 			{
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("SwiGLUF32ProductionSequence/strict_std_exp/{}/calls:{}/width:13824", layoutName,
-				                callCount),
+					            callCount),
 				    [callCount, columnStride](benchmark::State& state) {
 					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride,
-					                                  SwiGLUBenchmarkMathPolicy::StrictStdExp);
+						                              SwiGLUBenchmarkMathPolicy::StrictStdExp);
 				    });
 				benchmarkCase->Unit(benchmark::kMillisecond);
 
 				auto* builtInComparison = benchmark::RegisterBenchmark(
 				    std::format("SwiGLUF32ProductionSequence/builtin_bounded_2ulp/{}/calls:{}/width:13824", layoutName,
-				                callCount),
+					            callCount),
 				    [callCount, columnStride](benchmark::State& state) {
 					    BMSwiGLUF32ProductionSequence(state, 13824, callCount, columnStride,
-					                                  SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate);
+						                              SwiGLUBenchmarkMathPolicy::BuiltInBoundedApproximate);
 				    });
 				builtInComparison->Unit(benchmark::kMillisecond);
 			}
@@ -5406,19 +5406,19 @@ namespace
 			        callCount),
 			    [callCount](benchmark::State& state) {
 				    BMSwiGLUF32ProductionSequence(state, 13824, callCount, 1,
-				                                  SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate);
+					                              SwiGLUBenchmarkMathPolicy::GGMLBoundedApproximate);
 			    });
 			ggmlComparison->Unit(benchmark::kMillisecond);
 		}
 		const auto registerProjectionStream =
 		    [projectionStreamThreadCount](std::string_view name, std::span<const QuantizedBlockFormat> formats,
-		                                  GGMLProjectionStreamActivationMode activationMode) {
+			                              GGMLProjectionStreamActivationMode activationMode) {
 			    auto* benchmarkCase = benchmark::RegisterBenchmark(
 			        std::format("GGMLFieldInterleavedV4ColdProjectionStream/{}/T{}/batch:1/in:13824/out:5120", name,
-			                    projectionStreamThreadCount),
+					            projectionStreamThreadCount),
 			        [formats, activationMode, projectionStreamThreadCount](benchmark::State& state) {
 				        BMGGMLFieldInterleavedV4ColdProjectionStream(state, formats, 13824, 5120,
-				                                                     projectionStreamThreadCount, activationMode);
+						                                             projectionStreamThreadCount, activationMode);
 			        });
 			    benchmarkCase->UseManualTime();
 			    benchmarkCase->Unit(benchmark::kMillisecond);
@@ -5454,12 +5454,12 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulQ8KPreparedActivationHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLBlockMatMulPreparedQ8KActivationHelper(state, format, 1, shape.inputWidth,
-						                                                 shape.outputWidth,
-						                                                 static_cast<std::uint64_t>(threadCount));
+							                                             shape.outputWidth,
+							                                             static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5477,11 +5477,11 @@ namespace
 				{
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLBlockMatMulPrepackedHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                shape.outputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            shape.outputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLPrepackedMatMulHelper(state, format, 1, shape.inputWidth, shape.outputWidth,
-						                                static_cast<std::uint64_t>(threadCount));
+							                            static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5490,7 +5490,7 @@ namespace
 			{
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("GGMLBlockMatMulPrepackWeight/{}/{}/batch:1/in:{}/out:{}",
-				                GGMLBlockFormatBenchmarkName(format), shape.name, shape.inputWidth, shape.outputWidth),
+					            GGMLBlockFormatBenchmarkName(format), shape.name, shape.inputWidth, shape.outputWidth),
 				    [=](benchmark::State& state) {
 					    BMGGMLPrepackWeightHelper(state, format, shape.inputWidth, shape.outputWidth);
 				    });
@@ -5507,11 +5507,11 @@ namespace
 					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLGroupedProjectionPrepackedHelper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                totalOutputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            totalOutputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLGroupedPrepackedProjectionHelper(state, format, shape,
-						                                           static_cast<std::uint64_t>(threadCount));
+							                                       static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5527,11 +5527,11 @@ namespace
 					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLGroupedProjectionFieldInterleavedV4Helper/{}/{}/T{}/batch:1/in:{}/out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
-					                totalOutputWidth),
+						            GGMLBlockFormatBenchmarkName(format), shape.name, threadCount, shape.inputWidth,
+						            totalOutputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLGroupedFieldInterleavedV4ProjectionHelper(state, format, shape,
-						                                                    static_cast<std::uint64_t>(threadCount));
+							                                                static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5550,12 +5550,12 @@ namespace
 					{
 						auto* benchmarkCase = benchmark::RegisterBenchmark(
 						    std::format("GGMLGroupedProjectionHelper/{}/{}/{}/T{}/batch:1/in:{}/out:{}",
-						                GGMLBlockFormatBenchmarkName(format), shape.name,
-						                GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
-						                totalOutputWidth),
+							            GGMLBlockFormatBenchmarkName(format), shape.name,
+							            GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
+							            totalOutputWidth),
 						    [=](benchmark::State& state) {
 							    BMGGMLGroupedProjectionHelper(state, format, shape,
-							                                  static_cast<std::uint64_t>(threadCount), mode, false);
+								                              static_cast<std::uint64_t>(threadCount), mode, false);
 						    });
 						benchmarkCase->Unit(benchmark::kMillisecond);
 					}
@@ -5575,12 +5575,12 @@ namespace
 					{
 						auto* benchmarkCase = benchmark::RegisterBenchmark(
 						    std::format("GGMLGroupedProjectionQ8KStagedHelper/{}/{}/{}/T{}/batch:1/in:{}/out:{}",
-						                GGMLBlockFormatBenchmarkName(format), shape.name,
-						                GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
-						                totalOutputWidth),
+							            GGMLBlockFormatBenchmarkName(format), shape.name,
+							            GGMLGroupedProjectionModeName(mode), threadCount, shape.inputWidth,
+							            totalOutputWidth),
 						    [=](benchmark::State& state) {
 							    BMGGMLGroupedProjectionHelper(state, format, shape,
-							                                  static_cast<std::uint64_t>(threadCount), mode, true);
+								                              static_cast<std::uint64_t>(threadCount), mode, true);
 						    });
 						benchmarkCase->Unit(benchmark::kMillisecond);
 					}
@@ -5597,13 +5597,13 @@ namespace
 					    std::span<const std::size_t>(shape.outputWidths.data(), shape.projectionCount));
 					auto* benchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("GGMLGroupedProjectionQ8KPreparedActivationHelper/{}/{}/{}/T{}/batch:1/in:{}/"
-					                "out:{}",
-					                GGMLBlockFormatBenchmarkName(format), shape.name,
-					                GGMLGroupedProjectionModeName(GGMLGroupedProjectionMode::Grouped), threadCount,
-					                shape.inputWidth, totalOutputWidth),
+						            "out:{}",
+						            GGMLBlockFormatBenchmarkName(format), shape.name,
+						            GGMLGroupedProjectionModeName(GGMLGroupedProjectionMode::Grouped), threadCount,
+						            shape.inputWidth, totalOutputWidth),
 					    [=](benchmark::State& state) {
 						    BMGGMLGroupedPreparedQ8KActivationProjectionHelper(state, format, shape,
-						                                                       static_cast<std::uint64_t>(threadCount));
+							                                                   static_cast<std::uint64_t>(threadCount));
 					    });
 					benchmarkCase->Unit(benchmark::kMillisecond);
 				}
@@ -5615,7 +5615,7 @@ namespace
 			{
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("KVScatterUpdateHelper/{}/{}/capacity:{}/heads:{}/dim:{}", shape.name,
-				                aliasOutput ? "alias" : "copy", shape.capacity, shape.kvHeads, shape.headDim),
+					            aliasOutput ? "alias" : "copy", shape.capacity, shape.kvHeads, shape.headDim),
 				    [=](benchmark::State& state) { BMKVScatterUpdateHelper(state, shape, aliasOutput); });
 				benchmarkCase->Unit(benchmark::kMillisecond);
 			}
@@ -5624,7 +5624,7 @@ namespace
 		{
 			auto* benchmarkCase = benchmark::RegisterBenchmark(
 			    std::format("ActivePrefixAttentionRank3Helper/{}/rows:{}/heads:{}/dim:{}", shape.name, shape.activeRows,
-			                shape.kvHeads, shape.headDim),
+				            shape.kvHeads, shape.headDim),
 			    [=](benchmark::State& state) { BMActivePrefixAttentionRank3Helper(state, shape); });
 			benchmarkCase->Unit(benchmark::kMillisecond);
 		}
@@ -5641,8 +5641,8 @@ namespace
 			{
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("ActivePrefixAttentionGroupedRank3Helper/{}/{}/rows:{}/qheads:{}/kvheads:{}/dim:{}",
-				                shape.name, mode.name, shape.activeRows, shape.queryHeads, shape.kvHeads,
-				                shape.headDim),
+					            shape.name, mode.name, shape.activeRows, shape.queryHeads, shape.kvHeads,
+					            shape.headDim),
 				    [=](benchmark::State& state) {
 					    BMGroupedActivePrefixAttentionRank3Helper(state, shape, mode.grouped, mode.requestedThreads);
 				    });
@@ -5716,7 +5716,7 @@ namespace
 					RegisterBenchmarkCase("VulkanNativeGraphDeviceLocalRunInto", kind, batch,
 					                      [=](benchmark::State& state) {
 						                      BMVulkanNativeGraphMLPRunTensorsInto(state, kind, batch,
-						                                                           VulkanBufferResidency::DeviceLocal);
+											                                       VulkanBufferResidency::DeviceLocal);
 					                      });
 					if (kind == ModelKind::MLP128)
 					{
@@ -5892,12 +5892,12 @@ namespace
 				}
 
 				constexpr std::array vulkanNativeReduceOps{ ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max,
-					                                        ReduceOp::Min };
+				                                            ReduceOp::Min };
 				for (const auto op : vulkanNativeReduceOps)
 				{
 					auto* reduceBenchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("VulkanNativeReduce/F32/{}/batch:{}/width:{}", ReduceOpBenchmarkName(op), batch,
-					                vulkanNativeMatMulWidth),
+						            vulkanNativeMatMulWidth),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativeReduceRunTensorsInto(state, op, batch, vulkanNativeMatMulWidth);
 					    });
@@ -5912,12 +5912,12 @@ namespace
 				softmaxBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				constexpr std::array vulkanNativeNormalizationModes{ NormalizationMode::LayerNorm,
-					                                                 NormalizationMode::RMSNorm };
+				                                                     NormalizationMode::RMSNorm };
 				for (const auto mode : vulkanNativeNormalizationModes)
 				{
 					auto* normalizationBenchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("VulkanNativeNormalization/F32/{}/batch:{}/width:{}",
-					                NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
+						            NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativeNormalizationRunTensorsInto(state, mode, batch, vulkanNativeMatMulWidth);
 					    });
@@ -5925,10 +5925,10 @@ namespace
 
 					auto* affineNormalizationBenchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("VulkanNativeNormalizationAffine/F32/{}/batch:{}/width:{}",
-					                NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
+						            NormalizationModeBenchmarkName(mode), batch, vulkanNativeMatMulWidth),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativeAffineNormalizationRunTensorsInto(state, mode, batch,
-						                                                    vulkanNativeMatMulWidth);
+							                                                vulkanNativeMatMulWidth);
 					    });
 					affineNormalizationBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
@@ -5936,7 +5936,7 @@ namespace
 				constexpr std::size_t vulkanNativeGroupNormGroups = 8;
 				auto* groupNormBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeGroupNorm/F32/groups:{}/elements:{}", vulkanNativeGroupNormGroups,
-				                elementCount),
+					            elementCount),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
 				    });
@@ -5944,7 +5944,7 @@ namespace
 
 				auto* affineGroupNormBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeGroupNormAffine/F32/groups:{}/elements:{}", vulkanNativeGroupNormGroups,
-				                elementCount),
+					            elementCount),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeAffineGroupNormRunTensorsInto(state, elementCount, vulkanNativeGroupNormGroups);
 				    });
@@ -5956,82 +5956,82 @@ namespace
 				{
 					auto* poolBenchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("VulkanNativePool2D/F32/{}/batch:{}/channels:{}/spatial:{}",
-					                PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
-					                vulkanNativePoolSpatial),
+						            PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
+						            vulkanNativePoolSpatial),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativePool2DRunTensorsInto(state, poolMode, batch, vulkanNativePoolChannels,
-						                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial);
+							                                   vulkanNativePoolSpatial, vulkanNativePoolSpatial);
 					    });
 					poolBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 					auto* paddedPoolBenchmarkCase = benchmark::RegisterBenchmark(
 					    std::format("VulkanNativePool2D/F32/{}Padded/batch:{}/channels:{}/spatial:{}",
-					                PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
-					                vulkanNativePoolSpatial),
+						            PoolModeBenchmarkName(poolMode), batch, vulkanNativePoolChannels,
+						            vulkanNativePoolSpatial),
 					    [=](benchmark::State& state) {
 						    BMVulkanNativePool2DRunTensorsInto(state, poolMode, batch, vulkanNativePoolChannels,
-						                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial,
-						                                       { 1, 1 }, { 1, 1 }, false);
+							                                   vulkanNativePoolSpatial, vulkanNativePoolSpatial,
+							                                   { 1, 1 }, { 1, 1 }, false);
 					    });
 					paddedPoolBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 				}
 				auto* paddedAverageIncludePadBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativePool2D/F32/AveragePaddedIncludePad/batch:{}/channels:{}/spatial:{}", batch,
-				                vulkanNativePoolChannels, vulkanNativePoolSpatial),
+					            vulkanNativePoolChannels, vulkanNativePoolSpatial),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativePool2DRunTensorsInto(state, PoolMode::Average, batch, vulkanNativePoolChannels,
-					                                       vulkanNativePoolSpatial, vulkanNativePoolSpatial, { 1, 1 },
-					                                       { 1, 1 }, true);
+						                                   vulkanNativePoolSpatial, vulkanNativePoolSpatial, { 1, 1 },
+						                                   { 1, 1 }, true);
 				    });
 				paddedAverageIncludePadBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* conv2DBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeConv2D/F32/batch:{}/channels:{}/outChannels:{}/spatial:{}", batch,
-				                vulkanNativePoolChannels, vulkanNativePoolChannels, vulkanNativePoolSpatial),
+					            vulkanNativePoolChannels, vulkanNativePoolChannels, vulkanNativePoolSpatial),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeConv2DRunTensorsInto(state, batch, vulkanNativePoolChannels,
-					                                       vulkanNativePoolChannels, vulkanNativePoolSpatial,
-					                                       vulkanNativePoolSpatial);
+						                                   vulkanNativePoolChannels, vulkanNativePoolSpatial,
+						                                   vulkanNativePoolSpatial);
 				    });
 				conv2DBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* nearestUpsampleBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeUpsampleNearest/F32/batch:{}/channels:{}/spatial:{}x{}", batch,
-				                vulkanNativePoolChannels, vulkanNativePoolSpatial, vulkanNativePoolSpatial * 2),
+					            vulkanNativePoolChannels, vulkanNativePoolSpatial, vulkanNativePoolSpatial * 2),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeNearestUpsampleRunTensorsInto(state, batch, vulkanNativePoolChannels,
-					                                                vulkanNativePoolSpatial, vulkanNativePoolSpatial,
-					                                                2);
+						                                            vulkanNativePoolSpatial, vulkanNativePoolSpatial,
+						                                            2);
 				    });
 				nearestUpsampleBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* sliceBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeSlice/F32/batch:{}/channels:{}to{}/spatial:{}", batch,
-				                vulkanNativePoolChannels, vulkanNativePoolChannels / 2, vulkanNativePoolSpatial),
+					            vulkanNativePoolChannels, vulkanNativePoolChannels / 2, vulkanNativePoolSpatial),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeSliceRunTensorsInto(state, batch, vulkanNativePoolChannels,
-					                                      vulkanNativePoolSpatial, vulkanNativePoolSpatial);
+						                                  vulkanNativePoolSpatial, vulkanNativePoolSpatial);
 				    });
 				sliceBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* concatBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeConcat/F32/batch:{}/channels:{}plus{}/spatial:{}", batch,
-				                vulkanNativePoolChannels / 2, vulkanNativePoolChannels / 2, vulkanNativePoolSpatial),
+					            vulkanNativePoolChannels / 2, vulkanNativePoolChannels / 2, vulkanNativePoolSpatial),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeConcatRunTensorsInto(state, batch, vulkanNativePoolChannels / 2,
-					                                       vulkanNativePoolChannels / 2, vulkanNativePoolSpatial,
-					                                       vulkanNativePoolSpatial);
+						                                   vulkanNativePoolChannels / 2, vulkanNativePoolSpatial,
+						                                   vulkanNativePoolSpatial);
 				    });
 				concatBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
 				auto* convTranspose2DBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeConvTranspose2D/F32/batch:{}/channels:{}/outChannels:{}/spatial:{}x{}",
-				                batch, vulkanNativePoolChannels, vulkanNativePoolChannels, vulkanNativePoolSpatial,
-				                (vulkanNativePoolSpatial - 1) * 2 + 1),
+					            batch, vulkanNativePoolChannels, vulkanNativePoolChannels, vulkanNativePoolSpatial,
+					            (vulkanNativePoolSpatial - 1) * 2 + 1),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeConvTranspose2DRunTensorsInto(state, batch, vulkanNativePoolChannels,
-					                                                vulkanNativePoolChannels, vulkanNativePoolSpatial,
-					                                                vulkanNativePoolSpatial);
+						                                            vulkanNativePoolChannels, vulkanNativePoolSpatial,
+						                                            vulkanNativePoolSpatial);
 				    });
 				convTranspose2DBenchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 
@@ -6051,7 +6051,7 @@ namespace
 
 				auto* linearChainBenchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("VulkanNativeLinearChain/F32/layers:2/batch:{}/width:{}", batch,
-				                vulkanNativeMatMulWidth),
+					            vulkanNativeMatMulWidth),
 				    [=](benchmark::State& state) {
 					    BMVulkanNativeHomogeneousLinearChainRunTensorsInto(state, batch, vulkanNativeMatMulWidth);
 				    });
@@ -6077,7 +6077,7 @@ namespace
 				}
 				auto* benchmarkCase = benchmark::RegisterBenchmark(
 				    std::format("CUDADeviceMatMul/{}/batch:{}/width:{}", DataTypeName(dtype), batch,
-				                cudaDeviceMatMulWidth),
+					            cudaDeviceMatMulWidth),
 				    [=](benchmark::State& state) { BMCUDADeviceMatMul(state, batch, cudaDeviceMatMulWidth, dtype); });
 				benchmarkCase->UseRealTime()->Unit(benchmark::kMillisecond);
 			}

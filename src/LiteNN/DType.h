@@ -376,9 +376,9 @@ namespace LiteNN
 
 	constexpr bool operator>(auto lhs, auto rhs)
 	    requires(std::same_as<std::remove_cvref_t<decltype(lhs)>, Float16> ||
-	             std::same_as<std::remove_cvref_t<decltype(lhs)>, BFloat16> ||
-	             std::same_as<std::remove_cvref_t<decltype(lhs)>, Float8E4M3> ||
-	             std::same_as<std::remove_cvref_t<decltype(lhs)>, Float8E5M2>)
+		         std::same_as<std::remove_cvref_t<decltype(lhs)>, BFloat16> ||
+		         std::same_as<std::remove_cvref_t<decltype(lhs)>, Float8E4M3> ||
+		         std::same_as<std::remove_cvref_t<decltype(lhs)>, Float8E5M2>)
 	{
 		return rhs < lhs;
 	}

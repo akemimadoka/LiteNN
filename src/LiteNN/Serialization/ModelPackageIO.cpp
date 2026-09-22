@@ -868,8 +868,8 @@ namespace LiteNN::Serialization
 			layout.strides = SizeList(Member(layoutObject, "strides", label), label);
 			layout.tag = AsString(Member(layoutObject, "tag", label), label);
 			return { static_cast<DataType>(AsUInt(Member(object, "dtype", label), label)), std::move(shape),
-				     std::move(layout),
-				     static_cast<TensorMemorySpace>(AsUInt(Member(object, "memorySpace", label), label)) };
+			         std::move(layout),
+			         static_cast<TensorMemorySpace>(AsUInt(Member(object, "memorySpace", label), label)) };
 		}
 
 		std::vector<TensorType> TensorTypeList(simdjson::dom::element value, std::string_view label)
@@ -886,7 +886,7 @@ namespace LiteNN::Serialization
 		{
 			const auto object = AsObject(value, label);
 			return { static_cast<NodeId>(AsUInt(Member(object, "node", label), label)),
-				     static_cast<std::size_t>(AsUInt(Member(object, "port", label), label)) };
+			         static_cast<std::size_t>(AsUInt(Member(object, "port", label), label)) };
 		}
 
 		std::vector<NodeOutput> NodeOutputList(simdjson::dom::element value, std::string_view label)
@@ -979,8 +979,8 @@ namespace LiteNN::Serialization
 		{
 			const auto tensor = ParseTensorRef(value, label);
 			return { .type = tensor.type,
-				     .quantization = tensor.quantization,
-				     .region = { .ownership = tensor.kind == ExternalBufferKind::None ? BufferOwnership::Owned
+			         .quantization = tensor.quantization,
+			         .region = { .ownership = tensor.kind == ExternalBufferKind::None ? BufferOwnership::Owned
 				                                                                      : BufferOwnership::External,
 				                 .externalKind = tensor.kind,
 				                 .memorySpace = tensor.type.memorySpace,
@@ -992,7 +992,7 @@ namespace LiteNN::Serialization
 				                 .checksum = tensor.checksum,
 				                 .mutability = tensor.mutability,
 				                 .rebindPolicy = tensor.rebindPolicy },
-				     .viewMutability = tensor.mutability };
+			         .viewMutability = tensor.mutability };
 		}
 
 		std::shared_ptr<const std::vector<std::byte>> ReadExternalTensorFile(const std::filesystem::path& path)
@@ -1271,12 +1271,12 @@ namespace LiteNN::Serialization
 			if (op.kind == "BinaryOpNode")
 			{
 				return BinaryOpNode{ PlanAttributeEnum<BinaryOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),
-					                 RequireNodeInput(inputs, 1, op.kind) };
+				                     RequireNodeInput(inputs, 1, op.kind) };
 			}
 			if (op.kind == "CallNode")
 			{
 				return CallNode{ PlanAttributeSize(op, "callee"),
-					             std::vector<NodeOutput>(inputs.begin(), inputs.end()) };
+				                 std::vector<NodeOutput>(inputs.begin(), inputs.end()) };
 			}
 			if (op.kind == "CastNode")
 			{
@@ -1289,12 +1289,12 @@ namespace LiteNN::Serialization
 			if (op.kind == "DequantizeNode")
 			{
 				return DequantizeNode{ RequireNodeInput(inputs, 0, op.kind), PlanQuantizationParams(op),
-					                   PlanAttributeEnum<DataType>(op, "targetType") };
+				                       PlanAttributeEnum<DataType>(op, "targetType") };
 			}
 			if (op.kind == "QuantizedMatMulNode")
 			{
 				return QuantizedMatMulNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
-					                        PlanQuantizationParams(op), PlanAttributeBool(op, "transposeRhs") };
+				                            PlanQuantizationParams(op), PlanAttributeBool(op, "transposeRhs") };
 			}
 			if (op.kind == "GroupedQuantizedMatMulNode")
 			{
@@ -1321,12 +1321,12 @@ namespace LiteNN::Serialization
 			if (op.kind == "QuantizedGetRowsNode")
 			{
 				return QuantizedGetRowsNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
-					                         PlanQuantizationParams(op) };
+				                             PlanQuantizationParams(op) };
 			}
 			if (op.kind == "ReduceOpNode")
 			{
 				return ReduceOpNode{ PlanAttributeEnum<ReduceOp>(op, "op"), RequireNodeInput(inputs, 0, op.kind),
-					                 PlanAttributeSize(op, "axis") };
+				                     PlanAttributeSize(op, "axis") };
 			}
 			if (op.kind == "ReshapeNode")
 			{
@@ -1339,7 +1339,7 @@ namespace LiteNN::Serialization
 			if (op.kind == "BroadcastToNode")
 			{
 				return BroadcastToNode{ RequireNodeInput(inputs, 0, op.kind),
-					                    PlanAttributeSizeList(op, "targetShape") };
+				                        PlanAttributeSizeList(op, "targetShape") };
 			}
 			if (op.kind == "SoftmaxNode")
 			{
@@ -1352,11 +1352,11 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext ActivePrefixAttentionNode descriptor requires four inputs");
 				}
 				return ActivePrefixAttentionNode{ .query = RequireNodeInput(inputs, 0, op.kind),
-					                              .keys = RequireNodeInput(inputs, 1, op.kind),
-					                              .values = RequireNodeInput(inputs, 2, op.kind),
-					                              .currentPosition = RequireNodeInput(inputs, 3, op.kind),
-					                              .scale = PlanAttributeDouble(op, "scale"),
-					                              .kvHeadIndex = PlanAttributeSize(op, "kvHeadIndex") };
+				                                  .keys = RequireNodeInput(inputs, 1, op.kind),
+				                                  .values = RequireNodeInput(inputs, 2, op.kind),
+				                                  .currentPosition = RequireNodeInput(inputs, 3, op.kind),
+				                                  .scale = PlanAttributeDouble(op, "scale"),
+				                                  .kvHeadIndex = PlanAttributeSize(op, "kvHeadIndex") };
 			}
 			if (op.kind == "GroupedActivePrefixAttentionNode")
 			{
@@ -1365,12 +1365,12 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext GroupedActivePrefixAttentionNode descriptor requires four inputs");
 				}
 				return GroupedActivePrefixAttentionNode{ .queries = RequireNodeInput(inputs, 0, op.kind),
-					                                     .keys = RequireNodeInput(inputs, 1, op.kind),
-					                                     .values = RequireNodeInput(inputs, 2, op.kind),
-					                                     .currentPosition = RequireNodeInput(inputs, 3, op.kind),
-					                                     .scale = PlanAttributeDouble(op, "scale"),
-					                                     .queryGroupsPerKVHead =
-					                                         PlanAttributeSize(op, "queryGroupsPerKVHead") };
+				                                         .keys = RequireNodeInput(inputs, 1, op.kind),
+				                                         .values = RequireNodeInput(inputs, 2, op.kind),
+				                                         .currentPosition = RequireNodeInput(inputs, 3, op.kind),
+				                                         .scale = PlanAttributeDouble(op, "scale"),
+				                                         .queryGroupsPerKVHead =
+				                                             PlanAttributeSize(op, "queryGroupsPerKVHead") };
 			}
 			if (op.kind == "GroupedPagedAttentionNode")
 			{
@@ -1379,13 +1379,13 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext GroupedPagedAttentionNode descriptor requires five inputs");
 				}
 				return GroupedPagedAttentionNode{ .queries = RequireNodeInput(inputs, 0, op.kind),
-					                              .kvState = RequireNodeInput(inputs, 1, op.kind),
-					                              .pageTable = RequireNodeInput(inputs, 2, op.kind),
-					                              .pageDescriptors = RequireNodeInput(inputs, 3, op.kind),
-					                              .activeLength = RequireNodeInput(inputs, 4, op.kind),
-					                              .scale = PlanAttributeDouble(op, "scale"),
-					                              .queryGroupsPerKVHead =
-					                                  PlanAttributeSize(op, "queryGroupsPerKVHead") };
+				                                  .kvState = RequireNodeInput(inputs, 1, op.kind),
+				                                  .pageTable = RequireNodeInput(inputs, 2, op.kind),
+				                                  .pageDescriptors = RequireNodeInput(inputs, 3, op.kind),
+				                                  .activeLength = RequireNodeInput(inputs, 4, op.kind),
+				                                  .scale = PlanAttributeDouble(op, "scale"),
+				                                  .queryGroupsPerKVHead =
+				                                      PlanAttributeSize(op, "queryGroupsPerKVHead") };
 			}
 			if (op.kind == "PagedKVAppendNode")
 			{
@@ -1394,12 +1394,12 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext PagedKVAppendNode descriptor requires seven inputs");
 				}
 				return PagedKVAppendNode{ .kvState = RequireNodeInput(inputs, 0, op.kind),
-					                      .pageTable = RequireNodeInput(inputs, 1, op.kind),
-					                      .pageDescriptors = RequireNodeInput(inputs, 2, op.kind),
-					                      .activeLength = RequireNodeInput(inputs, 3, op.kind),
-					                      .keys = RequireNodeInput(inputs, 4, op.kind),
-					                      .values = RequireNodeInput(inputs, 5, op.kind),
-					                      .position = RequireNodeInput(inputs, 6, op.kind) };
+				                          .pageTable = RequireNodeInput(inputs, 1, op.kind),
+				                          .pageDescriptors = RequireNodeInput(inputs, 2, op.kind),
+				                          .activeLength = RequireNodeInput(inputs, 3, op.kind),
+				                          .keys = RequireNodeInput(inputs, 4, op.kind),
+				                          .values = RequireNodeInput(inputs, 5, op.kind),
+				                          .position = RequireNodeInput(inputs, 6, op.kind) };
 			}
 			if (op.kind == "RoPENode")
 			{
@@ -1409,13 +1409,13 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext RoPENode descriptor has unexpected inputs");
 				}
 				return RoPENode{ .input = RequireNodeInput(inputs, 0, op.kind),
-					             .positions = hasPositions
+				                 .positions = hasPositions
 					                              ? std::optional<NodeOutput>{ RequireNodeInput(inputs, 1, op.kind) }
 					                              : std::nullopt,
-					             .layout = PlanAttributeEnum<RoPELayout>(op, "layout"),
-					             .base = PlanAttributeDouble(op, "base"),
-					             .frequencyScale = PlanAttributeDouble(op, "frequencyScale"),
-					             .positionOffset = PlanAttributeSize(op, "positionOffset") };
+				                 .layout = PlanAttributeEnum<RoPELayout>(op, "layout"),
+				                 .base = PlanAttributeDouble(op, "base"),
+				                 .frequencyScale = PlanAttributeDouble(op, "frequencyScale"),
+				                 .positionOffset = PlanAttributeSize(op, "positionOffset") };
 			}
 			if (op.kind == "GetRowsNode")
 			{
@@ -1424,8 +1424,8 @@ namespace LiteNN::Serialization
 			if (op.kind == "ScatterNode")
 			{
 				return ScatterNode{ RequireNodeInput(inputs, 0, op.kind), RequireNodeInput(inputs, 1, op.kind),
-					                RequireNodeInput(inputs, 2, op.kind), PlanAttributeSize(op, "axis"),
-					                PlanAttributeEnum<ScatterMode>(op, "mode") };
+				                    RequireNodeInput(inputs, 2, op.kind), PlanAttributeSize(op, "axis"),
+				                    PlanAttributeEnum<ScatterMode>(op, "mode") };
 			}
 			if (op.kind == "NormalizationNode")
 			{
@@ -1442,22 +1442,22 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext NormalizationNode descriptor has unexpected inputs");
 				}
 				return NormalizationNode{ .input = RequireNodeInput(inputs, 0, op.kind),
-					                      .scale = scale,
-					                      .bias = bias,
-					                      .mode = PlanAttributeEnum<NormalizationMode>(op, "mode"),
-					                      .axis = PlanAttributeSize(op, "axis"),
-					                      .groupCount = PlanAttributeSize(op, "groupCount"),
-					                      .epsilon = PlanAttributeDouble(op, "epsilon") };
+				                          .scale = scale,
+				                          .bias = bias,
+				                          .mode = PlanAttributeEnum<NormalizationMode>(op, "mode"),
+				                          .axis = PlanAttributeSize(op, "axis"),
+				                          .groupCount = PlanAttributeSize(op, "groupCount"),
+				                          .epsilon = PlanAttributeDouble(op, "epsilon") };
 			}
 			if (op.kind == "ConcatNode")
 			{
 				return ConcatNode{ std::vector<NodeOutput>(inputs.begin(), inputs.end()),
-					               PlanAttributeSize(op, "axis") };
+				                   PlanAttributeSize(op, "axis") };
 			}
 			if (op.kind == "SliceNode")
 			{
 				return SliceNode{ RequireNodeInput(inputs, 0, op.kind), PlanAttributeSize(op, "axis"),
-					              PlanAttributeSize(op, "start"), PlanAttributeSize(op, "length") };
+				                  PlanAttributeSize(op, "start"), PlanAttributeSize(op, "length") };
 			}
 			if (op.kind == "SGDStepNode")
 			{
@@ -1466,12 +1466,12 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext SGDStepNode descriptor requires two or three inputs");
 				}
 				return SGDStepNode{ RequireNodeInput(inputs, 0, op.kind),
-					                RequireNodeInput(inputs, 1, op.kind),
-					                inputs.size() == 3 ? std::optional<NodeOutput>{ inputs[2] } : std::nullopt,
-					                PlanAttributeDouble(op, "learningRate"),
-					                PlanAttributeDouble(op, "momentum"),
-					                PlanAttributeDouble(op, "weightDecay"),
-					                PlanAttributeBool(op, "nesterov") };
+				                    RequireNodeInput(inputs, 1, op.kind),
+				                    inputs.size() == 3 ? std::optional<NodeOutput>{ inputs[2] } : std::nullopt,
+				                    PlanAttributeDouble(op, "learningRate"),
+				                    PlanAttributeDouble(op, "momentum"),
+				                    PlanAttributeDouble(op, "weightDecay"),
+				                    PlanAttributeBool(op, "nesterov") };
 			}
 			if (op.kind == "AdamWStepNode")
 			{
@@ -1480,10 +1480,10 @@ namespace LiteNN::Serialization
 					throw std::runtime_error("vNext AdamWStepNode descriptor requires four inputs");
 				}
 				return AdamWStepNode{ RequireNodeInput(inputs, 0, op.kind),    RequireNodeInput(inputs, 1, op.kind),
-					                  RequireNodeInput(inputs, 2, op.kind),    RequireNodeInput(inputs, 3, op.kind),
-					                  PlanAttributeDouble(op, "learningRate"), PlanAttributeDouble(op, "beta1"),
-					                  PlanAttributeDouble(op, "beta2"),        PlanAttributeDouble(op, "epsilon"),
-					                  PlanAttributeDouble(op, "weightDecay"),  PlanAttributeSize(op, "step") };
+				                      RequireNodeInput(inputs, 2, op.kind),    RequireNodeInput(inputs, 3, op.kind),
+				                      PlanAttributeDouble(op, "learningRate"), PlanAttributeDouble(op, "beta1"),
+				                      PlanAttributeDouble(op, "beta2"),        PlanAttributeDouble(op, "epsilon"),
+				                      PlanAttributeDouble(op, "weightDecay"),  PlanAttributeSize(op, "step") };
 			}
 			throw std::runtime_error("vNext node descriptor cannot hydrate executable payload for op: " + op.kind);
 		}
@@ -1680,7 +1680,7 @@ namespace LiteNN::Serialization
 				ExecutablePlanSubgraph subgraph;
 				subgraph.sourceSubgraph = static_cast<SubgraphId>(
 				    AsUInt(Member(subgraphObject, "sourceSubgraph", "plan.subgraph.sourceSubgraph"),
-				           "plan.subgraph.sourceSubgraph"));
+					       "plan.subgraph.sourceSubgraph"));
 				subgraph.params =
 				    TensorTypeList(Member(subgraphObject, "params", "plan.subgraph.params"), "plan.subgraph.params");
 				for (const auto nodeItem :
@@ -1722,7 +1722,7 @@ namespace LiteNN::Serialization
 			    AsUInt(Member(versions, "layoutSet", "manifest.versions.layoutSet"), "manifest.versions.layoutSet"));
 			manifest.versions.quantizationSet = static_cast<std::uint32_t>(
 			    AsUInt(Member(versions, "quantizationSet", "manifest.versions.quantizationSet"),
-			           "manifest.versions.quantizationSet"));
+				       "manifest.versions.quantizationSet"));
 			manifest.versions.artifactABI = static_cast<std::uint32_t>(AsUInt(
 			    Member(versions, "artifactABI", "manifest.versions.artifactABI"), "manifest.versions.artifactABI"));
 			const auto layout = AsObject(Member(object, "layout", "manifest.layout"), "manifest.layout");
@@ -1731,10 +1731,10 @@ namespace LiteNN::Serialization
 			                                        "manifest.layout.manifestPath");
 			manifest.layout.tensorDirectory =
 			    AsString(Member(layout, "tensorDirectory", "manifest.layout.tensorDirectory"),
-			             "manifest.layout.tensorDirectory");
+				         "manifest.layout.tensorDirectory");
 			manifest.layout.artifactDirectory =
 			    AsString(Member(layout, "artifactDirectory", "manifest.layout.artifactDirectory"),
-			             "manifest.layout.artifactDirectory");
+				         "manifest.layout.artifactDirectory");
 			for (const auto item : AsArray(Member(object, "functions", "manifest.functions"), "manifest.functions"))
 			{
 				const auto f = AsObject(item, "manifest.functions");
@@ -1863,7 +1863,7 @@ namespace LiteNN::Serialization
 					}
 					entry.requiredStateBindings =
 					    StringList(Member(entryObject, "requiredStateBindings", "artifact.entry.requiredStateBindings"),
-					               "artifact.entry.requiredStateBindings");
+						           "artifact.entry.requiredStateBindings");
 					entry.requiredBufferBindings = StringList(
 					    Member(entryObject, "requiredBufferBindings", "artifact.entry.requiredBufferBindings"),
 					    "artifact.entry.requiredBufferBindings");
@@ -1877,7 +1877,7 @@ namespace LiteNN::Serialization
 					    .kind = static_cast<ExternalBufferKind>(
 					        AsUInt(Member(r, "kind", "artifact.region.kind"), "artifact.region.kind")),
 					    .relativePath = AsString(Member(r, "relativePath", "artifact.region.relativePath"),
-					                             "artifact.region.relativePath"),
+						                         "artifact.region.relativePath"),
 					    .byteOffset = static_cast<std::size_t>(AsUInt(
 					        Member(r, "byteOffset", "artifact.region.byteOffset"), "artifact.region.byteOffset")),
 					    .byteSize = static_cast<std::size_t>(
@@ -2015,7 +2015,7 @@ namespace LiteNN::Serialization
 			memoryBuffer.alignment = static_cast<std::size_t>(alignment);
 			schedule.bufferBindings.at(i) =
 			    ToRuntimeBufferBinding(bindingName.empty() ? std::format("variable.{}", i) : bindingName,
-			                           schedule.module.plan.variables[i], i);
+				                       schedule.module.plan.variables[i], i);
 		}
 
 		schedule.memory.workspaceBytes = 0;

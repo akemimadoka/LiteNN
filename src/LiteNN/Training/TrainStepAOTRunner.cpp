@@ -114,8 +114,8 @@ namespace LiteNN::Training
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
-				                  std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+					              std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+					              std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -350,7 +350,7 @@ namespace LiteNN::Training
 			const auto gradient = sg.AddParam(parameterType.dtype, parameterType.StaticShape());
 			const auto outputs =
 			    Optimizer::AddSGDStep(sg, { parameter, 0 }, { gradient, 0 }, std::nullopt, options.learningRate,
-			                          options.momentum, options.weightDecay, options.nesterov);
+				                      options.momentum, options.weightDecay, options.nesterov);
 			sg.SetResults(outputs);
 			graph.SetForward(graph.AddSubgraph(std::move(sg)));
 			ValidateExecutablePlan(Detail::BuildExecutablePlanFromGraph(graph));

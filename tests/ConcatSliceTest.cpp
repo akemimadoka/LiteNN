@@ -305,7 +305,7 @@ TEST(ConcatSlice, ConcatGrad_ThreeInputs)
 	interp.RunForward(Detail::BuildExecutablePlanFromGraph(graph), fwdInputs);
 
 	std::array<Tensor<CPU>, 4> bwdInputs = { std::move(tensorA), std::move(tensorB), std::move(tensorC),
-		                                     std::move(gradOut) };
+	                                         std::move(gradOut) };
 	auto bwdResults = interp.RunBackward(Detail::BuildExecutablePlanFromGraph(graph), bwdInputs);
 
 	ASSERT_EQ(bwdResults.size(), 3);
@@ -406,10 +406,10 @@ TEST(ConcatSlice, ConstFold_Concat)
 	Subgraph sg;
 	const auto a =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3 }, { 1, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 1, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 1, 3 } } });
 	const auto b =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 4, 5, 6 }, { 1, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 1, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 1, 3 } } });
 	const auto y = sg.AddNode(ConcatNode{ { { a, 0 }, { b, 0 } }, 0 }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
@@ -441,7 +441,7 @@ TEST(ConcatSlice, ConstFold_Slice)
 	Subgraph sg;
 	const auto x =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	const auto y = sg.AddNode(SliceNode{ { x, 0 }, 0, 1, 1 }, { OutputInfo{ DataType::Float32, { 1, 3 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));

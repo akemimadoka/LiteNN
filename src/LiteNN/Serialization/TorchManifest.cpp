@@ -420,7 +420,7 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest tensor '{}' layout '{}' expects rank-2 source tensor, got {}",
-					                manifestName, layout, ShapeToString(tensor.Shape())));
+						            manifestName, layout, ShapeToString(tensor.Shape())));
 				}
 				report.foldedConstants.push_back(
 				    std::format("tensor {}: materialized {} via 2D transpose", manifestName, layout));
@@ -435,7 +435,7 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest tensor '{}' layout '{}' expects rank-1 source tensor, got {}",
-					                manifestName, layout, ShapeToString(tensor.Shape())));
+						            manifestName, layout, ShapeToString(tensor.Shape())));
 				}
 				tensor.Reshape({ 1uz, tensor.Shape()[0] });
 				report.foldedConstants.push_back(
@@ -451,7 +451,7 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest tensor '{}' layout '{}' expects rank-1 source tensor, got {}",
-					                manifestName, layout, ShapeToString(tensor.Shape())));
+						            manifestName, layout, ShapeToString(tensor.Shape())));
 				}
 				const auto channels = tensor.Shape()[0];
 				tensor.Reshape({ 1uz, channels, 1uz, 1uz });
@@ -522,7 +522,7 @@ namespace LiteNN::Serialization
 					{
 						throw std::runtime_error(
 						    std::format("Torch manifest tensor '{}' dtype mismatch: expected {}, got {}", name,
-						                DataTypeName(expected), DataTypeName(tensorInfo->type.dtype)));
+							            DataTypeName(expected), DataTypeName(tensorInfo->type.dtype)));
 					}
 				}
 				if (auto sourceShape = FindShape(object, "source_shape", "tensor source_shape"))
@@ -532,7 +532,7 @@ namespace LiteNN::Serialization
 					{
 						throw std::runtime_error(
 						    std::format("Torch manifest tensor '{}' source shape mismatch: expected {}, got {}", name,
-						                ShapeToString(*sourceShape), ShapeToString(tensorShape)));
+							            ShapeToString(*sourceShape), ShapeToString(tensorShape)));
 					}
 				}
 
@@ -633,7 +633,7 @@ namespace LiteNN::Serialization
 			{
 				throw std::runtime_error(
 				    std::format("Torch manifest node '{}' reshape element count mismatch: {} -> {}", nodeName,
-				                ShapeToString(info.shape), ShapeToString(targetShape)));
+					            ShapeToString(info.shape), ShapeToString(targetShape)));
 			}
 			auto outputShape = targetShape;
 			const auto id = context.subgraph.AddNode(ReshapeNode{ input, std::move(targetShape) },
@@ -888,7 +888,7 @@ namespace LiteNN::Serialization
 			const auto output = Layer::AddNormalization(context.subgraph, input, mode, axis, eps, scale, bias);
 			context.report.loweredOps.push_back(
 			    std::format("{}: {} -> NormalizationNode", nodeName,
-			                mode == NormalizationMode::LayerNorm ? "layer_norm" : "rms_norm"));
+				            mode == NormalizationMode::LayerNorm ? "layer_norm" : "rms_norm"));
 			return output;
 		}
 
@@ -975,10 +975,10 @@ namespace LiteNN::Serialization
 			const auto input = RequireValue(context, *inputName, nodeName);
 			const auto dim =
 			    CheckedToSize(RequireUInt(RequireMember(object, "dim", nodeName), "timestep_embedding dim"),
-			                  "timestep_embedding dim");
+				              "timestep_embedding dim");
 			const auto maxPeriod =
 			    FindSizeOr(object, "max_period", FindSizeOr(object, "maxPeriod", 10000, "timestep_embedding maxPeriod"),
-			               "timestep_embedding max_period");
+				           "timestep_embedding max_period");
 			const auto output = Layer::AddTimestepEmbedding(context.subgraph, input, dim, maxPeriod);
 			context.report.loweredOps.push_back(
 			    std::format("{}: timestep_embedding -> TimestepEmbeddingNode", nodeName));
@@ -992,7 +992,7 @@ namespace LiteNN::Serialization
 			const auto mode = ParseUpsampleMode(FindString(object, "mode", "upsample mode").value_or("nearest"));
 			auto outputSpatial =
 			    FindSpatialList(object, { "output_spatial_shape", "output_size", "size", "spatial_shape" }, {},
-			                    "upsample output spatial shape", false);
+				                "upsample output spatial shape", false);
 			if (outputSpatial.empty())
 			{
 				throw std::runtime_error(
@@ -1045,7 +1045,7 @@ namespace LiteNN::Serialization
 
 			auto current =
 			    AddGroupNormSpec(context, input, RequireObjectMember(object, "norm1", "residual_block norm1"), nodeName,
-			                     "residual_block norm1");
+				                 "residual_block norm1");
 			current = AddActivationByName(context, current, activation, nodeName);
 			current = AddConv2DSpec(context, current, RequireObjectMember(object, "conv1", "residual_block conv1"),
 			                        nodeName, "residual_block conv1");
@@ -1168,14 +1168,14 @@ namespace LiteNN::Serialization
 			{
 				throw std::runtime_error(
 				    std::format("Torch manifest node '{}' geglu_feed_forward axis {} out of range for rank {}",
-				                nodeName, axis, projectedInfo.shape.size()));
+					            nodeName, axis, projectedInfo.shape.size()));
 			}
 			const auto width = projectedInfo.shape[axis];
 			if (width % 2 != 0)
 			{
 				throw std::runtime_error(
 				    std::format("Torch manifest node '{}' geglu_feed_forward projection axis width {} must be even",
-				                nodeName, width));
+					            nodeName, width));
 			}
 			const auto inner = width / 2;
 			auto partShape = projectedInfo.shape;
@@ -1302,7 +1302,7 @@ namespace LiteNN::Serialization
 
 			auto current =
 			    AddGroupNormSpec(context, input, RequireObjectMember(object, "norm", "spatial_transformer_2d norm"),
-			                     nodeName, "spatial_transformer_2d norm");
+				                 nodeName, "spatial_transformer_2d norm");
 			std::size_t tokenWidth = inputChannels;
 			if (useLinear)
 			{
@@ -1335,7 +1335,7 @@ namespace LiteNN::Serialization
 				                              nodeName, blockLabel + " norm1");
 				auto attn1 =
 				    AddAttentionBlockSpec(context, norm1, norm1, RequireObjectMember(block, "attn1", blockLabel),
-				                          nodeName, blockLabel + " attn1");
+					                      nodeName, blockLabel + " attn1");
 				current = AddBinary(context, BinaryOp::Add, current, attn1, nodeName,
 				                    blockLabel + " self-attention residual");
 
@@ -1344,7 +1344,7 @@ namespace LiteNN::Serialization
 				auto keyValue = contextValue.value_or(norm2);
 				auto attn2 =
 				    AddAttentionBlockSpec(context, norm2, keyValue, RequireObjectMember(block, "attn2", blockLabel),
-				                          nodeName, blockLabel + " attn2");
+					                      nodeName, blockLabel + " attn2");
 				current = AddBinary(context, BinaryOp::Add, current, attn2, nodeName,
 				                    blockLabel + " cross-attention residual");
 
@@ -1420,7 +1420,7 @@ namespace LiteNN::Serialization
 				    ParseUpsampleMode(FindString(step, "mode", "vae_decode upsample mode").value_or("nearest"));
 				auto outputSpatial =
 				    FindSpatialList(step, { "output_spatial_shape", "output_size", "size", "spatial_shape" }, {},
-				                    "vae_decode upsample output spatial shape", false);
+					                "vae_decode upsample output spatial shape", false);
 				if (outputSpatial.empty())
 				{
 					throw std::runtime_error("Torch manifest vae_decode upsample step requires output_spatial_shape");
@@ -1438,7 +1438,7 @@ namespace LiteNN::Serialization
 				const auto mode = ParsePadMode(FindString(step, "mode", "vae_decode pad mode").value_or("constant"));
 				const auto constantValue =
 				    FindDouble(step, "constant_value", FindDouble(step, "value", 0.0, "vae_decode pad value"),
-				               "vae_decode pad constant_value");
+					           "vae_decode pad constant_value");
 				return Layer::AddPad(context.subgraph, input, lowPads, highPads, mode, constantValue);
 			}
 			throw std::runtime_error("Torch manifest vae_decode unsupported step op: " + opText);
@@ -1468,7 +1468,7 @@ namespace LiteNN::Serialization
 			{
 				current =
 				    AddScalarBinary(context, BinaryOp::Add, current, RequireDouble(*bias, "vae_decode output_bias"),
-				                    nodeName, "vae_decode output bias");
+					                nodeName, "vae_decode output bias");
 			}
 			if (auto clamp = FindObject(object, "clamp", "vae_decode clamp"))
 			{
@@ -1510,13 +1510,13 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest node '{}' concat input {} dtype mismatch: expected {}, got {}",
-					                nodeName, i, DataTypeName(firstInfo.dtype), DataTypeName(info.dtype)));
+						            nodeName, i, DataTypeName(firstInfo.dtype), DataTypeName(info.dtype)));
 				}
 				if (info.shape.size() != firstInfo.shape.size())
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest node '{}' concat input {} rank mismatch: expected {}, got {}",
-					                nodeName, i, firstInfo.shape.size(), info.shape.size()));
+						            nodeName, i, firstInfo.shape.size(), info.shape.size()));
 				}
 				for (std::size_t dim = 0; dim < info.shape.size(); ++dim)
 				{
@@ -1529,7 +1529,7 @@ namespace LiteNN::Serialization
 					{
 						throw std::runtime_error(
 						    std::format("Torch manifest node '{}' concat input {} dim {} mismatch: expected {}, got {}",
-						                nodeName, i, dim, firstInfo.shape[dim], info.shape[dim]));
+							            nodeName, i, dim, firstInfo.shape[dim], info.shape[dim]));
 					}
 				}
 			}
@@ -1714,7 +1714,7 @@ namespace LiteNN::Serialization
 			{
 				const auto output =
 				    Layer::AddReshape(context.subgraph, RequireValue(context, requireInputName(), nodeName),
-				                      ParseShape(RequireMember(object, "shape", nodeName), "reshape shape"));
+					                  ParseShape(RequireMember(object, "shape", nodeName), "reshape shape"));
 				context.report.loweredOps.push_back(std::format("{}: reshape -> ReshapeNode", nodeName));
 				return output;
 			}
@@ -1728,7 +1728,7 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest node '{}' slice axis {} out of range for rank {}", nodeName, axis,
-					                inputInfo.shape.size()));
+						            inputInfo.shape.size()));
 				}
 				const auto start = FindSizeOr(object, "start", 0, "slice start");
 				const auto length = CheckedToSize(
@@ -1737,7 +1737,7 @@ namespace LiteNN::Serialization
 				{
 					throw std::runtime_error(
 					    std::format("Torch manifest node '{}' slice range [{}, {}) is out of bounds for axis dim {}",
-					                nodeName, start, start + length, inputInfo.shape[axis]));
+						            nodeName, start, start + length, inputInfo.shape[axis]));
 				}
 				auto outputShape = inputInfo.shape;
 				outputShape[axis] = length;

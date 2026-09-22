@@ -198,7 +198,7 @@ TEST(G14VNext, VNextModelPackageLoadsSeparatedArtifactRegions)
 
 	const std::vector<std::byte> rodata{ std::byte{ 0x4c }, std::byte{ 0x54 }, std::byte{ 0x4e }, std::byte{ 0x4e } };
 	const std::vector<std::byte> instructions{ std::byte{ 0x01 }, std::byte{ 0x02 }, std::byte{ 0x03 },
-		                                       std::byte{ 0x04 }, std::byte{ 0x05 } };
+	                                           std::byte{ 0x04 }, std::byte{ 0x05 } };
 	WriteBytesForTest(base / "artifacts" / "cpu_forward.rodata.bin", rodata);
 	WriteBytesForTest(base / "artifacts" / "cpu_forward.instructions.bin", instructions);
 
@@ -673,7 +673,7 @@ TEST(G14VNext, VNextModelPackageRoundTripsRoPEWithRuntimePositions)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array inputs{ Tensor<CPU>({ 1.0, 0.0, 1.0, 0.0 }, { 2, 2 }, DataType::Float32),
-		               Tensor<CPU>({ 2.0, 6.0 }, { 2 }, DataType::Int64) };
+	                   Tensor<CPU>({ 2.0, 6.0 }, { 2 }, DataType::Int64) };
 	const auto outputs = interpreter.RunForward(package.plan, inputs);
 	ASSERT_EQ(outputs.size(), 1u);
 	const auto* values = static_cast<const float*>(outputs[0].UnsafeRawData());
@@ -937,9 +937,9 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.artifacts.push_back(
 	    { .name = "broken-kind",
-	      .backend = std::string(BackendCPUAOT),
-	      .entries = { { .name = "forward", .kind = static_cast<VNextArtifactEntryKind>(99), .function = 0 } },
-	      .regions = { { .name = "instructions", .relativePath = "artifacts/broken.o", .byteSize = 1 } } });
+		  .backend = std::string(BackendCPUAOT),
+		  .entries = { { .name = "forward", .kind = static_cast<VNextArtifactEntryKind>(99), .function = 0 } },
+		  .regions = { { .name = "instructions", .relativePath = "artifacts/broken.o", .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
@@ -951,9 +951,9 @@ TEST(G14VNext, ManifestValidationRejectsInvalidVersionsAndArtifacts)
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
 	manifest.artifacts.push_back(
 	    { .name = "missing-binding",
-	      .backend = std::string(BackendCPUAOT),
-	      .entries = { { .name = "forward", .function = 0, .requiredBufferBindings = { "missing.weight" } } },
-	      .regions = { { .name = "instructions", .relativePath = "artifacts/missing.o", .byteSize = 1 } } });
+		  .backend = std::string(BackendCPUAOT),
+		  .entries = { { .name = "forward", .function = 0, .requiredBufferBindings = { "missing.weight" } } },
+		  .regions = { { .name = "instructions", .relativePath = "artifacts/missing.o", .byteSize = 1 } } });
 	EXPECT_THROW(ValidateVNextPackageManifest(manifest), std::runtime_error);
 
 	manifest = BuildVNextPackageManifest(Detail::BuildExecutableModuleFromGraph(BuildLinearAddGraph()));
@@ -1047,7 +1047,7 @@ TEST(G14VNext, RuntimeStateABICoversLLMDiffusionAndTraining)
 	                                                            BufferMutability::Mutable));
 	lora.mergeState =
 	    Runtime::MakeLoRAAdapterState("lora.linear.default.merge", "adapter-merge-state",
-	                                  TensorType::Dense(DataType::Int32, ShapeView{ 1 }), BufferMutability::Mutable);
+		                              TensorType::Dense(DataType::Int32, ShapeView{ 1 }), BufferMutability::Mutable);
 
 	EXPECT_EQ(llm.kvCaches[0].role, "kv-cache");
 	ASSERT_TRUE(llm.currentPosition.has_value());

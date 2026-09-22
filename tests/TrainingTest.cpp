@@ -144,7 +144,7 @@ namespace
 		                                  Tensor<CPU>({ 0.1f, -0.2f, 0.05f }, { 1, 3 }));
 		auto layer1 =
 		    Layer::CreateLinear(builder, Tensor<CPU>({ 0.5f, -0.25f, -0.125f, 0.375f, 0.25f, 0.125f }, { 3, 2 }),
-		                        Tensor<CPU>({ 0.0f, 0.1f }, { 1, 2 }));
+			                    Tensor<CPU>({ 0.0f, 0.1f }, { 1, 2 }));
 		Graph graph = builder.UnsafeTakeGraph();
 
 		Subgraph sg;
@@ -167,7 +167,7 @@ namespace
 		                                  Tensor<CPU>({ 0.1f, -0.2f, 0.05f }, { 1, 3 }));
 		auto layer1 =
 		    Layer::CreateLinear(builder, Tensor<CPU>({ 0.5f, -0.25f, -0.125f, 0.375f, 0.25f, 0.125f }, { 3, 2 }),
-		                        Tensor<CPU>({ 0.0f, 0.1f }, { 1, 2 }));
+			                    Tensor<CPU>({ 0.0f, 0.1f }, { 1, 2 }));
 		Graph graph = builder.UnsafeTakeGraph();
 
 		Subgraph sg;
@@ -204,7 +204,7 @@ TEST(Training, StepRunsForwardBackwardStoresGradientsAndUpdatesVariables)
 	const auto countAbiRole = [&](Training::TrainStepABIRole role) {
 		return static_cast<std::size_t>(
 		    std::ranges::count_if(trainer.Plan().abiBindings,
-		                          [&](const Training::TrainStepABIBinding& binding) { return binding.role == role; }));
+			                      [&](const Training::TrainStepABIBinding& binding) { return binding.role == role; }));
 	};
 	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::MutableParameter), 1u);
 	EXPECT_EQ(countAbiRole(Training::TrainStepABIRole::Gradient), 1u);

@@ -117,7 +117,7 @@ namespace LiteNN::Layer
 			                                      { OutputInfo{ params.storageType, layer.weightStorageShape } });
 			const auto quantizedMatMul =
 			    subgraph.AddNode(QuantizedMatMulNode{ input, { storage, 0 }, params, layer.transposeWeight },
-			                     { OutputInfo{ layer.dtype, outputShape } });
+				                 { OutputInfo{ layer.dtype, outputShape } });
 			matmul = { quantizedMatMul, 0 };
 		}
 		else
@@ -274,8 +274,8 @@ namespace LiteNN::Layer
 				const auto bias = subgraph.AddNode(VariableRefNode{ *layers[i].biasVariable },
 				                                   { OutputInfo{ layers[i].dtype, biasShape } });
 				output = { subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, output, { bias, 0 } },
-					                        { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
-					       0 };
+				                            { OutputInfo{ layers[i].dtype, { inputInfo.shape[0], outputWidths[i] } } }),
+				           0 };
 			}
 			outputs.push_back(output);
 			offset += outputWidths[i];

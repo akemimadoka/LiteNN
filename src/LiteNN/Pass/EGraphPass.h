@@ -335,13 +335,13 @@ namespace LiteNN
 			    [&](const auto& n) {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, UnaryOpNode> || std::same_as<T, CastNode> ||
-				                  std::same_as<T, QuantizeNode> || std::same_as<T, DequantizeNode> ||
-				                  std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
-				                  std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
-				                  std::same_as<T, PadNode> || std::same_as<T, ScanNode> ||
-				                  std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
-				                  std::same_as<T, UpsampleNode> || std::same_as<T, ArgsortNode> ||
-				                  std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode>)
+					              std::same_as<T, QuantizeNode> || std::same_as<T, DequantizeNode> ||
+					              std::same_as<T, ReduceOpNode> || std::same_as<T, ReshapeNode> ||
+					              std::same_as<T, PermuteNode> || std::same_as<T, BroadcastToNode> ||
+					              std::same_as<T, PadNode> || std::same_as<T, ScanNode> ||
+					              std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+					              std::same_as<T, UpsampleNode> || std::same_as<T, ArgsortNode> ||
+					              std::same_as<T, SaveActivationNode> || std::same_as<T, TapeSaveActivationNode>)
 				    {
 					    fn(n.input);
 				    }
@@ -350,7 +350,7 @@ namespace LiteNN
 					    fn(n.timesteps);
 				    }
 				    else if constexpr (std::same_as<T, BinaryOpNode> || std::same_as<T, BatchMatMulNode> ||
-				                       std::same_as<T, OutProdNode>)
+					                   std::same_as<T, OutProdNode>)
 				    {
 					    fn(n.lhs);
 					    fn(n.rhs);
@@ -523,8 +523,8 @@ namespace LiteNN
 					    }
 				    }
 				    else if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                       std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
-				                       std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+					                   std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+					                   std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
 				    {
 					    // no inputs
 				    }
@@ -548,8 +548,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
-				                  std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+					              std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+					              std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -1223,7 +1223,7 @@ namespace LiteNN
 						{
 							changed |=
 							    SetRewrite(sgId, nodeId, BroadcastToNode{ innerInput, broadcast->targetShape },
-							               "broadcast-compose", OutputKey(input), OutputKey(innerInput), rewrites);
+								           "broadcast-compose", OutputKey(input), OutputKey(innerInput), rewrites);
 						}
 					}
 				}

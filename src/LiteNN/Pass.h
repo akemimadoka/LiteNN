@@ -96,7 +96,7 @@ namespace LiteNN
 			virtual std::vector<TransformInvalidation> Invalidates() const
 			{
 				return { TransformInvalidation::GraphTopology, TransformInvalidation::TypeFacts,
-					     TransformInvalidation::ExecutablePlan };
+				         TransformInvalidation::ExecutablePlan };
 			}
 			virtual void Run(Graph& graph) = 0;
 		};
@@ -155,9 +155,9 @@ namespace LiteNN
 		std::string name;
 		std::function<void(ExecutablePlan&)> run;
 		std::vector<TransformInvalidation> invalidates{ TransformInvalidation::ExecutablePlan,
-			                                            TransformInvalidation::MemoryPlan,
-			                                            TransformInvalidation::BackendPlacement,
-			                                            TransformInvalidation::CodegenCache };
+		                                                TransformInvalidation::MemoryPlan,
+		                                                TransformInvalidation::BackendPlacement,
+		                                                TransformInvalidation::CodegenCache };
 	};
 
 	inline TransformStats CollectTransformStats(const Graph& graph)
@@ -259,11 +259,11 @@ namespace LiteNN
 		EmitTransformStep(
 		    steps,
 		    { .stage = TransformStageKind::ModelGraphToExecutablePlan,
-		      .passName = "BuildExecutablePlan",
-		      .invalidates = { TransformInvalidation::ExecutablePlan, TransformInvalidation::MemoryPlan,
-		                       TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
-		      .before = before,
-		      .after = CollectTransformStats(plan) },
+			  .passName = "BuildExecutablePlan",
+			  .invalidates = { TransformInvalidation::ExecutablePlan, TransformInvalidation::MemoryPlan,
+			                   TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
+			  .before = before,
+			  .after = CollectTransformStats(plan) },
 		    options);
 		return { .value = std::move(plan), .steps = std::move(steps) };
 	}
@@ -318,10 +318,10 @@ namespace LiteNN
 		EmitTransformStep(
 		    steps,
 		    { .stage = TransformStageKind::ExecutablePlanToBackendPlan,
-		      .passName = "BuildBackendPlan",
-		      .invalidates = { TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
-		      .before = before,
-		      .after = CollectTransformStats(backendPlan) },
+			  .passName = "BuildBackendPlan",
+			  .invalidates = { TransformInvalidation::BackendPlacement, TransformInvalidation::CodegenCache },
+			  .before = before,
+			  .after = CollectTransformStats(backendPlan) },
 		    options);
 		return { .value = std::move(backendPlan), .steps = std::move(steps) };
 	}

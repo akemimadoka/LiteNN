@@ -67,7 +67,7 @@ namespace LiteNN::Debug
 				    QuantizedStorageLayoutName(spec.quantization->storageLayout),
 				    Validation::FormatInfo(spec.quantization->expressedType, spec.quantization->expressedShape.empty()
 				                                                                 ? shape
-				                                                                 : spec.quantization->expressedShape));
+																				 : spec.quantization->expressedShape));
 			}
 			return text;
 		}

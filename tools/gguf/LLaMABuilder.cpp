@@ -87,7 +87,7 @@ namespace LiteNN::GGUF
 			{
 				throw std::runtime_error(
 				    std::format("GGUF Linear bias '{}' must use the projection's expressed dtype {}", biasName,
-				                DataTypeName(dtype)));
+					            DataTypeName(dtype)));
 			}
 			const auto shape = materialized->Data().Shape().ToOwned();
 			if (shape != std::vector<std::size_t>{ outFeatures } && shape != std::vector<std::size_t>{ 1, outFeatures })
@@ -144,7 +144,7 @@ namespace LiteNN::GGUF
 				{
 					throw std::runtime_error(
 					    std::format("GGUF quantized tensor '{}' must have expressed shape [{}, {}] or [{}, {}]", name,
-					                inFeatures, outFeatures, outFeatures, inFeatures));
+						            inFeatures, outFeatures, outFeatures, inFeatures));
 				}
 				const auto variableIndex = target.AddVariable(source);
 				target.SetVariableName(variableIndex, std::string(name));
@@ -223,7 +223,7 @@ namespace LiteNN::GGUF
 			{
 				throw std::runtime_error(
 				    std::format("GGUF tensor '{}' must have shape [{}] or [1, {}] for current LLaMA block lowering",
-				                name, featureSize, featureSize));
+					            name, featureSize, featureSize));
 			}
 
 			const auto variableIndex = target.AddVariable(std::move(materialized));
@@ -244,8 +244,8 @@ namespace LiteNN::GGUF
 				throw std::runtime_error("Transpose helper expects a 2D tensor");
 			}
 			return { subgraph.AddNode(UnaryOpNode{ UnaryOp::Transpose, input },
-				                      { OutputInfo{ info.dtype, { info.shape[1], info.shape[0] } } }),
-				     0 };
+			                          { OutputInfo{ info.dtype, { info.shape[1], info.shape[0] } } }),
+			         0 };
 		}
 
 		void ValidateSupportedRoPE(const LLaMAHyperparameters& hyperparameters, std::string_view context)
@@ -285,7 +285,7 @@ namespace LiteNN::GGUF
 			}();
 			const auto rotated =
 			    Layer::AddRoPE(subgraph, rotatedPrefix, hyperparameters.ropeLayout, hyperparameters.ropeFrequencyBase,
-			                   positionOffset, hyperparameters.ropeFrequencyScale);
+				               positionOffset, hyperparameters.ropeFrequencyScale);
 			if (hyperparameters.ropeDimensionCount == info.shape[1])
 			{
 				return rotated;
@@ -320,7 +320,7 @@ namespace LiteNN::GGUF
 			          };
 			const auto rotated =
 			    Layer::AddRoPEAtPositions(subgraph, rotatedPrefix, positions, hyperparameters.ropeLayout,
-			                              hyperparameters.ropeFrequencyBase, hyperparameters.ropeFrequencyScale);
+				                          hyperparameters.ropeFrequencyBase, hyperparameters.ropeFrequencyScale);
 			if (hyperparameters.ropeDimensionCount == info.shape[1])
 			{
 				return rotated;
@@ -343,13 +343,13 @@ namespace LiteNN::GGUF
 			    subgraph, Tensor<CPU>(std::span<const double>(positions), { 1, maxCacheLength }, DataType::Int64));
 			const auto inactive =
 			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Greater, { positionTable, 0 }, currentPosition },
-			                     { OutputInfo{ DataType::Bool, { 1, maxCacheLength } } });
+				                 { OutputInfo{ DataType::Bool, { 1, maxCacheLength } } });
 			const auto typedMask =
 			    subgraph.AddNode(CastNode{ { inactive, 0 }, dtype }, { OutputInfo{ dtype, { 1, maxCacheLength } } });
 			const auto negative = Layer::Detail::AddConstant(subgraph, Layer::Detail::MakeScalarTensor(dtype, -1.0e9));
 			return { subgraph.AddNode(BinaryOpNode{ BinaryOp::Multiply, { typedMask, 0 }, { negative, 0 } },
-				                      { OutputInfo{ dtype, { 1, maxCacheLength } } }),
-				     0 };
+			                          { OutputInfo{ dtype, { 1, maxCacheLength } } }),
+			         0 };
 		}
 
 		NodeOutput AddSingleHeadAttention(Subgraph& subgraph, NodeOutput queries, NodeOutput keys, NodeOutput values,
@@ -425,8 +425,8 @@ namespace LiteNN::GGUF
 			const auto rotatedQueries = AddLLaMARoPEAtPositions(subgraph, queries, currentPosition, hyperparameters);
 			const auto output =
 			    subgraph.AddNode(ActivePrefixAttentionNode{ rotatedQueries, rotatedKeys, values, currentPosition,
-			                                                1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1])) },
-			                     { OutputInfo{ queryInfo.dtype, { 1, valueInfo.shape[1] } } });
+				                                            1.0 / std::sqrt(static_cast<double>(queryInfo.shape[1])) },
+				                 { OutputInfo{ queryInfo.dtype, { 1, valueInfo.shape[1] } } });
 			return { output, 0 };
 		}
 
@@ -442,8 +442,8 @@ namespace LiteNN::GGUF
 		{
 			const auto info = subgraph.GetOutputInfo(input);
 			return { subgraph.AddNode(ReshapeNode{ input, { dim0, dim1, dim2 } },
-				                      { OutputInfo{ info.dtype, { dim0, dim1, dim2 } } }),
-				     0 };
+			                          { OutputInfo{ info.dtype, { dim0, dim1, dim2 } } }),
+			         0 };
 		}
 
 		std::vector<ModelMetadataEntry> CopyMetadata(const Graph& graph)
@@ -558,7 +558,7 @@ namespace LiteNN::GGUF
 		const auto stateShape =
 		    options.dynamicDecodePosition
 		        ? std::vector<std::size_t>{ 2, residentPageCount, pageSizeTokens, hyperparameters.attentionHeadCountKV,
-			                                headDim }
+		                                    headDim }
 		        : std::vector<std::size_t>{ 2, maxCacheLength, hyperparameters.attentionHeadCountKV, headDim };
 		const auto stateType = TensorType::Dense(dtype, ShapeView{ stateShape });
 		const auto cacheCapacityPerPlaneBytes =
@@ -946,7 +946,7 @@ namespace LiteNN::GGUF
 		const auto normalizedFeedForwardInput = Layer::AddRMSNorm(subgraph, block.feedForwardNorm, attentionResidual);
 		const auto feedForwardOutput = Layer::AddSwiGLUMLP(subgraph, block.mlp, normalizedFeedForwardInput);
 		return { subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, attentionResidual, feedForwardOutput }, { hiddenInfo }),
-			     0 };
+		         0 };
 	}
 
 	namespace
@@ -1061,8 +1061,8 @@ namespace LiteNN::GGUF
 			rotatedKeys3D = { subgraph.AddNode(
 				                  ConcatNode{ rotatedKeyHeads, 1 },
 				                  { OutputInfo{ hiddenInfo.dtype,
-				                                { sequenceLength, hyperparameters.attentionHeadCountKV, headDim } } }),
-				              0 };
+								                { sequenceLength, hyperparameters.attentionHeadCountKV, headDim } } }),
+			                  0 };
 		}
 		const auto updatedCache = Layer::AddKVCacheAppend(subgraph, pastCache, { rotatedKeys3D, values3D }, 0);
 		const auto totalKeyLength = positionOffset + sequenceLength;
@@ -1094,9 +1094,9 @@ namespace LiteNN::GGUF
 		if (headContexts.size() > 1)
 		{
 			mergedContext = { subgraph.AddNode(ConcatNode{ headContexts, 1 },
-				                               { OutputInfo{ hiddenInfo.dtype,
+			                                   { OutputInfo{ hiddenInfo.dtype,
 				                                             { sequenceLength, hyperparameters.embeddingLength } } }),
-				              0 };
+			                  0 };
 		}
 
 		const auto attentionOutput = Layer::AddLinear(subgraph, block.outputProjection, mergedContext);
@@ -1158,9 +1158,9 @@ namespace LiteNN::GGUF
 		if (rotatedKeyHeads.size() > 1)
 		{
 			rotatedKeys3D = { subgraph.AddNode(ConcatNode{ rotatedKeyHeads, 1 },
-				                               { OutputInfo{ hiddenInfo.dtype,
+			                                   { OutputInfo{ hiddenInfo.dtype,
 				                                             { 1, hyperparameters.attentionHeadCountKV, headDim } } }),
-				              0 };
+			                  0 };
 		}
 		const Layer::KVCachePair updatedCache{
 			Layer::AddScatter(subgraph, cache.keys, currentPosition, rotatedKeys3D, 0),
@@ -1186,7 +1186,7 @@ namespace LiteNN::GGUF
 			groupedQueries = { subgraph.AddNode(
 				                   ConcatNode{ rotatedQueryHeads, 0 },
 				                   { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
-				               0 };
+			                   0 };
 		}
 		const auto groupedAttention = NodeOutput{
 			subgraph.AddNode(GroupedActivePrefixAttentionNode{ groupedQueries, updatedCache.keys, updatedCache.values,
@@ -1303,17 +1303,17 @@ namespace LiteNN::GGUF
 			groupedQueries = { subgraph.AddNode(
 				                   ConcatNode{ rotatedQueryHeads, 0 },
 				                   { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
-				               0 };
+			                   0 };
 		}
 		const auto groupedAttention =
 		    NodeOutput{ subgraph.AddNode(
 			                GroupedPagedAttentionNode{ .queries = groupedQueries,
-			                                           .kvState = updatedKVState,
-			                                           .pageTable = updatedPageTable,
-			                                           .pageDescriptors = updatedPageDescriptors,
-			                                           .activeLength = updatedActiveLength,
-			                                           .scale = 1.0 / std::sqrt(static_cast<double>(headDim)),
-			                                           .queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead() },
+							                           .kvState = updatedKVState,
+							                           .pageTable = updatedPageTable,
+							                           .pageDescriptors = updatedPageDescriptors,
+							                           .activeLength = updatedActiveLength,
+							                           .scale = 1.0 / std::sqrt(static_cast<double>(headDim)),
+							                           .queryGroupsPerKVHead = hyperparameters.QueryGroupsPerKVHead() },
 			                { OutputInfo{ hiddenInfo.dtype, { hyperparameters.attentionHeadCount, headDim } } }),
 			            0 };
 		const auto mergedContext = Reshape2D(subgraph, groupedAttention, 1, hyperparameters.embeddingLength);
@@ -1474,10 +1474,10 @@ namespace LiteNN::GGUF
 			}
 			const auto storage =
 			    subgraph.AddNode(VariableRefNode{ model.tokenEmbeddingVariable },
-			                     { OutputInfo{ params.storageType, model.tokenEmbeddingStorageShape } });
+				                 { OutputInfo{ params.storageType, model.tokenEmbeddingStorageShape } });
 			const auto rows =
 			    subgraph.AddNode(QuantizedGetRowsNode{ { storage, 0 }, tokenIds, params },
-			                     { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
+				                 { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
 			return { rows, 0 };
 		}
 		else
@@ -1490,7 +1490,7 @@ namespace LiteNN::GGUF
 		    model.tokenEmbeddingIsVocabMajor ? tokenEmbedding : AddTranspose(subgraph, tokenEmbedding);
 		const auto hiddenState =
 		    subgraph.AddNode(GetRowsNode{ tokenEmbeddingRows, tokenIds },
-		                     { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
+			                 { OutputInfo{ model.dtype, { info.shape[0], model.outputNorm.featureSize } } });
 		return { hiddenState, 0 };
 	}
 
@@ -1600,7 +1600,7 @@ namespace LiteNN::GGUF
 		{
 			auto blockResult =
 			    AddLLaMADecoderBlockDecodeCapacity(subgraph, model.blocks[blockIndex], hyperparameters, hiddenState,
-			                                       caches[blockIndex], currentPosition, maxCacheLength);
+				                                   caches[blockIndex], currentPosition, maxCacheLength);
 			hiddenState = blockResult.hiddenState;
 			updatedCaches.push_back(blockResult.updatedCache);
 			if (exposeLayerCheckpoints)
@@ -1849,8 +1849,8 @@ namespace LiteNN::GGUF
 			};
 			const auto call =
 			    subgraph.AddNode(CallNode{ blockSubgraphs[blockIndex], std::move(args) },
-			                     { OutputInfo{ model.dtype, { 1, hyperparameters.embeddingLength } },
-			                       OutputInfo{ model.dtype, cacheShape }, OutputInfo{ model.dtype, cacheShape } });
+				                 { OutputInfo{ model.dtype, { 1, hyperparameters.embeddingLength } },
+				                   OutputInfo{ model.dtype, cacheShape }, OutputInfo{ model.dtype, cacheShape } });
 			hiddenState = NodeOutput{ call, 0 };
 			updatedCaches.push_back(Layer::KVCachePair{ { call, 1 }, { call, 2 } });
 			if (options.exposeLayerCheckpoints)
@@ -1869,7 +1869,7 @@ namespace LiteNN::GGUF
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
 		const auto nextPosition =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { currentPosition, 0 }, { oneValue, 0 } },
-		                     { OutputInfo{ DataType::Int64, { 1 } } });
+			                 { OutputInfo{ DataType::Int64, { 1 } } });
 		std::vector<NodeOutput> outputs{ result.hiddenState, NodeOutput{ nextPosition, 0 } };
 		std::vector<std::string> outputNames{ "logits", "next_position" };
 		for (std::size_t blockIndex = 0; blockIndex < result.updatedCaches.size(); ++blockIndex)
@@ -1908,7 +1908,7 @@ namespace LiteNN::GGUF
 			throw std::runtime_error("Paged-reference LLaMA decode resident page count must be greater than zero");
 		}
 		const std::vector<std::size_t> pagedKVShape{ 2, residentPageCount, pageSizeTokens,
-			                                         hyperparameters.attentionHeadCountKV, headDim };
+		                                             hyperparameters.attentionHeadCountKV, headDim };
 		const std::vector<std::size_t> pageDescriptorShape{
 			residentPageCount, static_cast<std::size_t>(Runtime::PagedKVPageDescriptorColumn::Count)
 		};
@@ -1960,7 +1960,7 @@ namespace LiteNN::GGUF
 		    Layer::Detail::AddConstant(subgraph, Tensor<CPU>(std::span<const double>(one), { 1 }, DataType::Int64));
 		const auto nextPosition =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, { currentPosition, 0 }, { oneValue, 0 } },
-		                     { OutputInfo{ DataType::Int64, { 1 } } });
+			                 { OutputInfo{ DataType::Int64, { 1 } } });
 		std::vector<NodeOutput> outputs{ result.hiddenState, { nextPosition, 0 } };
 		std::vector<std::string> outputNames{ "logits", "next_position" };
 		for (std::size_t blockIndex = 0; blockIndex < result.kvStates.size(); ++blockIndex)

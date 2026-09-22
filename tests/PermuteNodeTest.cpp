@@ -177,7 +177,7 @@ TEST(PermuteNode, ConstFold_Transpose)
 	Subgraph sg;
 	const auto c =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	const auto y = sg.AddNode(PermuteNode{ { c, 0 }, { 1, 0 } }, { OutputInfo{ DataType::Float32, { 3, 2 } } });
 	sg.SetResults({ { y, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));

@@ -311,7 +311,7 @@ namespace LiteNN
 #if defined(VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
 			     || HasDeviceExtension(deviceExtensions, VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
 #endif
-			    );
+				);
 			if (canEnableStorage16)
 			{
 #if defined(VK_KHR_16BIT_STORAGE_EXTENSION_NAME)
@@ -365,7 +365,7 @@ namespace LiteNN
 #if defined(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
 			     || HasDeviceExtension(deviceExtensions, VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
 #endif
-			    );
+				);
 			if (canEnableShaderFloat16Int8)
 			{
 #if defined(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME)
@@ -399,15 +399,15 @@ namespace LiteNN
 			};
 			const bool canEnableDescriptorIndexing =
 			    (capabilities.shaderStorageBufferArrayNonUniformIndexingAvailable ||
-			     capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable ||
-			     capabilities.descriptorBindingPartiallyBoundAvailable ||
-			     capabilities.descriptorBindingVariableDescriptorCountAvailable ||
-			     capabilities.runtimeDescriptorArrayAvailable) &&
+				 capabilities.descriptorBindingStorageBufferUpdateAfterBindAvailable ||
+				 capabilities.descriptorBindingPartiallyBoundAvailable ||
+				 capabilities.descriptorBindingVariableDescriptorCountAvailable ||
+				 capabilities.runtimeDescriptorArrayAvailable) &&
 			    (apiAtLeast12
 #if defined(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
 			     || HasDeviceExtension(deviceExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
 #endif
-			    );
+				);
 			if (canEnableDescriptorIndexing)
 			{
 #if defined(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)
@@ -1057,9 +1057,9 @@ namespace LiteNN
 		{
 			throw std::runtime_error(
 			    std::format("Vulkan compute module requires {} storage-buffer descriptor(s), but device '{}' reports "
-			                "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
-			                descriptorCount, capabilities.deviceName, capabilities.maxPerStageDescriptorStorageBuffers,
-			                capabilities.maxDescriptorSetStorageBuffers));
+				            "maxPerStageDescriptorStorageBuffers={} and maxDescriptorSetStorageBuffers={}",
+				            descriptorCount, capabilities.deviceName, capabilities.maxPerStageDescriptorStorageBuffers,
+				            capabilities.maxDescriptorSetStorageBuffers));
 		}
 
 		const VkShaderModuleCreateInfo shaderInfo{
@@ -1295,9 +1295,9 @@ namespace LiteNN
 			{
 				throw std::runtime_error(
 				    std::format("Vulkan dispatch groups {}x{}x{} exceed device '{}' maxComputeWorkGroupCount {}x{}x{}",
-				                dispatch.groups.x, dispatch.groups.y, dispatch.groups.z, capabilities.deviceName,
-				                capabilities.maxComputeWorkGroupCount[0], capabilities.maxComputeWorkGroupCount[1],
-				                capabilities.maxComputeWorkGroupCount[2]));
+					            dispatch.groups.x, dispatch.groups.y, dispatch.groups.z, capabilities.deviceName,
+					            capabilities.maxComputeWorkGroupCount[0], capabilities.maxComputeWorkGroupCount[1],
+					            capabilities.maxComputeWorkGroupCount[2]));
 			}
 
 			std::vector<VkDescriptorBufferInfo> bufferInfos;

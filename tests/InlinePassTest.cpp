@@ -347,7 +347,7 @@ TEST(InlinePass, VariableRefAndConstant)
 	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cConst =
 	    calleeSg.AddNode(ConstantNode{ Tensor<CPU>({ 10, 20 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                     { OutputInfo{ DataType::Float32, { 2 } } });
+		                 { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cAdd = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Add, { cMul, 0 }, { cConst, 0 } },
 	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { cAdd, 0 } });

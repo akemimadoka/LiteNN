@@ -52,8 +52,8 @@ namespace LiteNN::Optimizer
 
 				auto cpuResults =
 				    LiteNN::Detail::EvalAdamWStep(variable.CopyToDevice(CPU{}), gradient, *firstMoment_[variableIndex],
-				                                  *secondMoment_[variableIndex], options_.learningRate, options_.beta1,
-				                                  options_.beta2, options_.epsilon, options_.weightDecay, step_);
+					                              *secondMoment_[variableIndex], options_.learningRate, options_.beta1,
+					                              options_.beta2, options_.epsilon, options_.weightDecay, step_);
 				DeviceTraits<PolymorphicDevice>::CopyFromCPU(
 				    variable.CurDevice(), variable.DType(), variable.UnsafeRawData(), cpuResults[0].DType(),
 				    cpuResults[0].UnsafeRawData(), cpuResults[0].NumElements());

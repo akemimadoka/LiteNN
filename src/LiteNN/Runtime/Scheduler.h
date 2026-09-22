@@ -281,11 +281,11 @@ namespace LiteNN::Runtime
 	                                                   std::vector<std::string> effects = {})
 	{
 		return { .name = std::move(name),
-			     .kind = kind,
-			     .role = std::move(role),
-			     .type = std::move(type),
-			     .mutability = mutability,
-			     .effects = std::move(effects) };
+		         .kind = kind,
+		         .role = std::move(role),
+		         .type = std::move(type),
+		         .mutability = mutability,
+		         .effects = std::move(effects) };
 	}
 
 	inline RuntimeStateBinding MakeKVCacheState(std::string name, TensorType type)
@@ -301,7 +301,7 @@ namespace LiteNN::Runtime
 	{
 		auto state =
 		    MakeRuntimeStateBinding(std::move(name), RuntimeStateKind::KVCache, "paged-kv-cache", std::move(type),
-		                            BufferMutability::Mutable, { "read", "write", "append", "view", "page-table" });
+			                        BufferMutability::Mutable, { "read", "write", "append", "view", "page-table" });
 		state.layout = RuntimeStateLayout{
 			.kind = RuntimeStateLayoutKind::PagedKVCache,
 			.pageSizeTokens = pageSizeTokens,
@@ -539,7 +539,7 @@ namespace LiteNN::Runtime
 				{
 					throw std::runtime_error(
 					    std::format("Runtime state '{}' references memory buffer {}, but bufferCount={}", state.name,
-					                *state.memoryBuffer, schedule.memory.buffers.size()));
+						            *state.memoryBuffer, schedule.memory.buffers.size()));
 				}
 				continue;
 			}
@@ -566,7 +566,7 @@ namespace LiteNN::Runtime
 			schedule.bufferBindings.push_back(ToRuntimeBufferBinding(
 			    i < schedule.module.plan.variableNames.size() && !schedule.module.plan.variableNames[i].empty()
 			        ? schedule.module.plan.variableNames[i]
-			        : (variable.region.name.empty() ? std::format("variable.{}", i) : variable.region.name),
+					: (variable.region.name.empty() ? std::format("variable.{}", i) : variable.region.name),
 			    variable, i));
 		}
 		for (const auto& state : schedule.states)
@@ -678,7 +678,7 @@ namespace LiteNN::Runtime
 				{
 					throw std::runtime_error(
 					    std::format("Runtime schedule partition {} references region {}, but regionCount={}",
-					                partition.id, regionId, schedule.module.regions.size()));
+						            partition.id, regionId, schedule.module.regions.size()));
 				}
 				const auto& region = schedule.module.regions[regionId];
 				RuntimeScheduleStep step;
@@ -844,9 +844,9 @@ namespace LiteNN::Runtime
 			throw std::runtime_error("Runtime schedule output projection does not cover every functional output");
 		}
 		return RuntimeScheduleOutputProjection{ .functionalOutputCount = functionalOutputCount,
-			                                    .publicOutputIndices = std::move(publicOutputs),
-			                                    .publicOutputTypes = std::move(publicTypes),
-			                                    .stateAliases = std::move(aliases) };
+		                                        .publicOutputIndices = std::move(publicOutputs),
+		                                        .publicOutputTypes = std::move(publicTypes),
+		                                        .stateAliases = std::move(aliases) };
 	}
 
 	inline void AppendUniqueBuffer(std::vector<std::size_t>& buffers, std::size_t buffer)
@@ -949,8 +949,8 @@ namespace LiteNN::Runtime
 				if (!current)
 				{
 					current = RuntimeExecutionSegment{ .id = segments.size(),
-						                               .subgraph = subgraph.sourceSubgraph,
-						                               .backend = decision->backend };
+					                                   .subgraph = subgraph.sourceSubgraph,
+					                                   .backend = decision->backend };
 				}
 				current->nodes.push_back(node.sourceNode);
 			}
@@ -1087,7 +1087,7 @@ namespace LiteNN::Runtime
 			{
 				message =
 				    std::format("dispatch segment {} on {} inputBuffers={} outputBuffers={}", step.segment.value_or(0),
-				                step.backend, step.inputBuffers.size(), step.outputBuffers.size());
+					            step.backend, step.inputBuffers.size(), step.outputBuffers.size());
 			}
 			else if (step.kind == RuntimeScheduleStepKind::Fallback)
 			{
@@ -1109,7 +1109,7 @@ namespace LiteNN::Runtime
 			{
 				message =
 				    std::format("{} on {} inputBuffers={} outputBuffers={}", RuntimeScheduleStepKindName(step.kind),
-				                step.backend, step.inputBuffers.size(), step.outputBuffers.size());
+					            step.backend, step.inputBuffers.size(), step.outputBuffers.size());
 			}
 			events.push_back({ .step = step.id,
 			                   .kind = step.kind,
@@ -1147,15 +1147,15 @@ namespace LiteNN::Runtime
 			label = std::format("{}:{}", RuntimeScheduleStepKindName(step.kind), step.backend);
 		}
 		return { .step = step.id,
-			     .kind = step.kind,
-			     .backend = step.backend,
-			     .fallbackBackend = step.fallbackBackend,
-			     .streamOwner = step.streamOwner,
-			     .eventOwner = step.eventOwner,
-			     .syncScope = step.syncScope,
-			     .inputBuffers = step.inputBuffers,
-			     .outputBuffers = step.outputBuffers,
-			     .label = std::move(label) };
+		         .kind = step.kind,
+		         .backend = step.backend,
+		         .fallbackBackend = step.fallbackBackend,
+		         .streamOwner = step.streamOwner,
+		         .eventOwner = step.eventOwner,
+		         .syncScope = step.syncScope,
+		         .inputBuffers = step.inputBuffers,
+		         .outputBuffers = step.outputBuffers,
+		         .label = std::move(label) };
 	}
 
 	inline std::vector<RuntimeScheduleProfileRecord> BuildRuntimeScheduleProfileRecords(const RuntimeSchedule& schedule)

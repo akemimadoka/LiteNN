@@ -39,14 +39,14 @@ namespace
 		                               { OutputInfo{ DataType::Float32, { 3, 2 } } });
 		const auto bias =
 		    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0.1, -0.2 }, { 1, 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-		               { OutputInfo{ DataType::Float32, { 1, 2 } } });
+			           { OutputInfo{ DataType::Float32, { 1, 2 } } });
 		const auto matmul = sg.AddNode(BinaryOpNode{ BinaryOp::MatMul, { input, 0 }, { weight, 0 } },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto shifted = sg.AddNode(BinaryOpNode{ BinaryOp::Add, { matmul, 0 }, { bias, 0 } },
 		                                { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		const auto zero =
 		    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0.0 }, { 1 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-		               { OutputInfo{ DataType::Float32, { 1 } } });
+			           { OutputInfo{ DataType::Float32, { 1 } } });
 		const auto output = sg.AddNode(BinaryOpNode{ BinaryOp::Max, { shifted, 0 }, { zero, 0 } },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });

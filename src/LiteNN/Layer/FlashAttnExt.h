@@ -125,7 +125,7 @@ namespace LiteNN::Layer
 		const auto transposedKeys = Detail::AddTranspose2D(subgraph, typedKeys);
 		const auto scores =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, queries, transposedKeys },
-		                     { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], keyInfo.shape[0] } } });
+			                 { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], keyInfo.shape[0] } } });
 		NodeOutput scoreOutput{ scores, 0 };
 
 		if (options.scale != 1.0 || options.logitSoftcap != 0.0)
@@ -183,8 +183,8 @@ namespace LiteNN::Layer
 
 		const auto scoreInfo = subgraph.GetOutputInfo(scoreOutput);
 		NodeOutput maxScores{ subgraph.AddNode(ReduceOpNode{ ReduceOp::Max, scoreOutput, 1 },
-			                                   { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
-			                  0 };
+		                                       { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
+		                      0 };
 		if (typedSinks)
 		{
 			const auto maxWithSink = subgraph.AddNode(BinaryOpNode{ BinaryOp::Max, maxScores, *typedSinks },
@@ -200,8 +200,8 @@ namespace LiteNN::Layer
 		const auto expScores = subgraph.AddNode(UnaryOpNode{ UnaryOp::Exp, { shiftedScores, 0 } }, { scoreInfo });
 
 		NodeOutput denominator{ subgraph.AddNode(ReduceOpNode{ ReduceOp::Sum, { expScores, 0 }, 1 },
-			                                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
-			                    0 };
+		                                         { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } }),
+		                        0 };
 		if (typedSinks)
 		{
 			const auto sinkShift = subgraph.AddNode(BinaryOpNode{ BinaryOp::Subtract, *typedSinks, maxScores },
@@ -210,7 +210,7 @@ namespace LiteNN::Layer
 			                                      { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
 			const auto correctedDenominator =
 			    subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, denominator, { sinkExp, 0 } },
-			                     { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
+				                 { OutputInfo{ scoreInfo.dtype, { scoreInfo.shape[0] } } });
 			denominator = { correctedDenominator, 0 };
 		}
 
@@ -220,7 +220,7 @@ namespace LiteNN::Layer
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::Divide, { expScores, 0 }, { denominator2D, 0 } }, { scoreInfo });
 		const auto attended =
 		    subgraph.AddNode(BinaryOpNode{ BinaryOp::MatMul, { probabilities, 0 }, typedValues },
-		                     { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], valueInfo.shape[1] } } });
+			                 { OutputInfo{ queryInfo.dtype, { queryInfo.shape[0], valueInfo.shape[1] } } });
 		return { attended, 0 };
 	}
 } // namespace LiteNN::Layer

@@ -98,7 +98,7 @@ namespace LiteNN::Runtime
 			{
 				throw std::runtime_error(
 				    std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}", subgraphId,
-				                subgraph.Params().size(), inputs.size()));
+					            subgraph.Params().size(), inputs.size()));
 			}
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
@@ -107,8 +107,8 @@ namespace LiteNN::Runtime
 				{
 					throw std::runtime_error(
 					    std::format("RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
-					                Validation::FormatInfo(param.dtype, param.shape),
-					                Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+						            Validation::FormatInfo(param.dtype, param.shape),
+						            Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
 				}
 			}
 		}
@@ -126,7 +126,7 @@ namespace LiteNN::Runtime
 			{
 				throw std::runtime_error(
 				    std::format("RunSubgraph input count mismatch for subgraph {}: expected {}, got {}", subgraphId,
-				                subgraph.params.size(), inputs.size()));
+					            subgraph.params.size(), inputs.size()));
 			}
 			for (std::size_t i = 0; i < inputs.size(); ++i)
 			{
@@ -141,8 +141,8 @@ namespace LiteNN::Runtime
 				{
 					throw std::runtime_error(
 					    std::format("RunSubgraph input {} mismatch for subgraph {}: expected {}, got {}", i, subgraphId,
-					                Validation::FormatInfo(param.dtype, expectedShape),
-					                Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
+						            Validation::FormatInfo(param.dtype, expectedShape),
+						            Validation::FormatInfo(inputs[i].DType(), inputs[i].Shape().Dims)));
 				}
 			}
 		}
@@ -399,7 +399,7 @@ namespace LiteNN::Runtime
 								    const auto rhsOffset =
 								        (outer * axisSize + static_cast<std::size_t>(rhs)) * innerSize + inner;
 								    return ArgsortComesBefore<TypeValue>(src[lhsOffset], lhs, src[rhsOffset], rhs,
-								                                         order);
+									                                     order);
 							    });
 
 							for (auto index = 0uz; index < axisSize; ++index)
@@ -1643,7 +1643,7 @@ namespace LiteNN::Runtime
 		{
 			auto cpuResult =
 			    Detail::EvalSolveTri(GetValue(slots, node.a).CopyToDevice(CPU{}),
-			                         GetValue(slots, node.b).CopyToDevice(CPU{}), node.lower, node.unitDiagonal);
+				                     GetValue(slots, node.b).CopyToDevice(CPU{}), node.lower, node.unitDiagonal);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1726,7 +1726,7 @@ namespace LiteNN::Runtime
 			                          : std::nullopt;
 			auto cpuResult =
 			    Detail::EvalConv2D(cpuInput, cpuWeight, cpuBiasStorage ? &*cpuBiasStorage : nullptr, node.strides,
-			                       node.dilations, node.lowPads, node.highPads, node.groupCount);
+				                   node.dilations, node.lowPads, node.highPads, node.groupCount);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));
@@ -1766,7 +1766,7 @@ namespace LiteNN::Runtime
 		{
 			auto cpuResult =
 			    Detail::EvalPool2D(GetValue(slots, node.input).CopyToDevice(CPU{}), node.mode, node.kernelShape,
-			                       node.strides, node.lowPads, node.highPads, node.countIncludePad);
+				                   node.strides, node.lowPads, node.highPads, node.countIncludePad);
 			if constexpr (std::same_as<D, CPU>)
 			{
 				slots[nodeId].push_back(std::move(cpuResult));

@@ -1430,7 +1430,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		    "exp",
 		    { 0.0, 1.0, -1.0, 2.0 },
 		    { static_cast<float>(std::exp(0.0)), static_cast<float>(std::exp(1.0)), static_cast<float>(std::exp(-1.0)),
-		      static_cast<float>(std::exp(2.0)) },
+			  static_cast<float>(std::exp(2.0)) },
 		    2e-3f,
 		},
 		Case{
@@ -1438,7 +1438,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		    "log",
 		    { 1.0, 2.0, 4.0, 0.5 },
 		    { static_cast<float>(std::log(1.0)), static_cast<float>(std::log(2.0)), static_cast<float>(std::log(4.0)),
-		      static_cast<float>(std::log(0.5)) },
+			  static_cast<float>(std::log(0.5)) },
 		    2e-3f,
 		},
 		Case{
@@ -1446,7 +1446,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		    "sin",
 		    { 0.0, 0.5, -0.5, 1.0 },
 		    { static_cast<float>(std::sin(0.0)), static_cast<float>(std::sin(0.5)), static_cast<float>(std::sin(-0.5)),
-		      static_cast<float>(std::sin(1.0)) },
+			  static_cast<float>(std::sin(1.0)) },
 		    2e-3f,
 		},
 		Case{
@@ -1454,7 +1454,7 @@ TEST(CompiledModuleCUDATest, RunsNativeElementwiseUnaryOpsWithCUDATensors)
 		    "cos",
 		    { 0.0, 0.5, -0.5, 1.0 },
 		    { static_cast<float>(std::cos(0.0)), static_cast<float>(std::cos(0.5)), static_cast<float>(std::cos(-0.5)),
-		      static_cast<float>(std::cos(1.0)) },
+			  static_cast<float>(std::cos(1.0)) },
 		    2e-3f,
 		},
 	};
@@ -2194,7 +2194,7 @@ TEST(CompiledModuleCUDATest, SeparatedNativeLinearChainMovesConstantsOutOfInstru
 	}
 
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
-		                                                         .shape = { 2, 3 } } };
+	                                                             .shape = { 2, 3 } } };
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected =
 	    interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), MakeCPUInputs(inputSpecs));
@@ -2280,9 +2280,9 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "batch_matmul",
 	    .graph = BuildBatchMatMulGraph({ 2, 2, 3 }, { 2, 3, 2 }, { 2, 2, 2 }, "batch_matmul"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, 0.5, 2.0, 3.0, -2.0, 1.0 },
-	                                 .shape = { 2, 2, 3 } },
-	                TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0, -2.0, 1.0, 3.0, 0.5, 1.0, -1.0 },
-	                                 .shape = { 2, 3, 2 } } },
+		                             .shape = { 2, 2, 3 } },
+		            TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0, -2.0, 1.0, 3.0, 0.5, 1.0, -1.0 },
+		                             .shape = { 2, 3, 2 } } },
 	    .runCPUAOT = false,
 	    .tolerance = 1.0e-5F,
 	});
@@ -2290,8 +2290,8 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "batch_matmul_broadcast_rhs",
 	    .graph = BuildBatchMatMulGraph({ 2, 2, 3 }, { 1, 3, 2 }, { 2, 2, 2 }, "batch_matmul_broadcast_rhs"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, 0.5, 2.0, 3.0, -2.0, 1.0 },
-	                                 .shape = { 2, 2, 3 } },
-	                TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0 }, .shape = { 1, 3, 2 } } },
+		                             .shape = { 2, 2, 3 } },
+		            TensorInputSpec{ .values = { 1.0, 0.0, 0.5, -1.0, 2.0, 1.0 }, .shape = { 1, 3, 2 } } },
 	    .runCPUAOT = false,
 	    .tolerance = 1.0e-5F,
 	});
@@ -2301,9 +2301,9 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 		    .name = indexType == DataType::Int32 ? "scatter_update_i32" : "scatter_update_i64",
 		    .graph = BuildScatterUpdateGraph(indexType, "scatter_update"),
 		    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0 },
-		                                 .shape = { 3, 2, 2 } },
-		                TensorInputSpec{ .values = { 1.0 }, .shape = { 1 }, .dtype = indexType },
-		                TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 1, 2, 2 } } },
+			                             .shape = { 3, 2, 2 } },
+			            TensorInputSpec{ .values = { 1.0 }, .shape = { 1 }, .dtype = indexType },
+			            TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 1, 2, 2 } } },
 		    .runCPUAOT = false,
 		});
 	}
@@ -2311,44 +2311,44 @@ TEST(CompiledModuleCUDATest, RunsNativeP3OpsWithCUDATensors)
 	    .name = "concat_axis0",
 	    .graph = BuildConcatGraph({ 1, 3 }, { 2, 3 }, { 3, 3 }, 0, "concat_axis0"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0 }, .shape = { 1, 3 } },
-	                TensorInputSpec{ .values = { 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 }, .shape = { 2, 3 } } },
+		            TensorInputSpec{ .values = { 4.0, 5.0, 6.0, 7.0, 8.0, 9.0 }, .shape = { 2, 3 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "concat_axis1",
 	    .graph = BuildConcatGraph({ 2, 3 }, { 2, 2 }, { 2, 5 }, 1, "concat_axis1"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 2, 2 } } },
+		            TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 2, 2 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "slice_axis0",
 	    .graph = BuildSliceGraph(0, 1, 1, { 1, 5 }, "slice_axis0"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 },
-	                                 .shape = { 2, 5 } } },
+		                             .shape = { 2, 5 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "slice_axis1",
 	    .graph = BuildSliceGraph(1, 1, 3, { 2, 3 }, "slice_axis1"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0 },
-	                                 .shape = { 2, 5 } } },
+		                             .shape = { 2, 5 } } },
 	    .runCPUAOT = false,
 	});
 	cases.push_back(Case{
 	    .name = "matmul_bias_add",
 	    .graph = BuildMatMulBiasGraph(false),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, -2.0, 3.0, -4.0, 5.0, -6.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 1.0, 2.0, -3.0, 4.0, 5.0, -6.0 }, .shape = { 3, 2 } },
-	                TensorInputSpec{ .values = { 10.0, -10.0 }, .shape = { 1, 2 } } },
+		            TensorInputSpec{ .values = { 1.0, 2.0, -3.0, 4.0, 5.0, -6.0 }, .shape = { 3, 2 } },
+		            TensorInputSpec{ .values = { 10.0, -10.0 }, .shape = { 1, 2 } } },
 	    .runFusionPass = true,
 	});
 	cases.push_back(Case{
 	    .name = "matmul_bias_relu",
 	    .graph = BuildMatMulBiasGraph(true),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, -2.0, 3.0, -4.0, 5.0, -6.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 1.0, 2.0, -3.0, 4.0, 5.0, -6.0 }, .shape = { 3, 2 } },
-	                TensorInputSpec{ .values = { 10.0, -10.0 }, .shape = { 1, 2 } } },
+		            TensorInputSpec{ .values = { 1.0, 2.0, -3.0, 4.0, 5.0, -6.0 }, .shape = { 3, 2 } },
+		            TensorInputSpec{ .values = { 10.0, -10.0 }, .shape = { 1, 2 } } },
 	    .runFusionPass = true,
 	});
 
@@ -2404,7 +2404,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithConstantsAndWorkspace)
 
 	auto graph = BuildTinyMLPGraph(2);
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
-		                                                         .shape = { 2, 3 } } };
+	                                                             .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), expectedInputs);
@@ -2478,7 +2478,7 @@ TEST(CompiledModuleCUDATest, RunsNativeLinearChainWithCUDAGraphReplay)
 
 	auto graph = BuildTinyMLPGraph(2);
 	std::vector<TensorInputSpec> inputSpecs = { TensorInputSpec{ .values = { 1.0f, -2.0f, 0.5f, -1.0f, 0.25f, 2.0f },
-		                                                         .shape = { 2, 3 } } };
+	                                                             .shape = { 2, 3 } } };
 	auto expectedInputs = MakeCPUInputs(inputSpecs);
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), expectedInputs);
@@ -2645,7 +2645,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 		    .name = name,
 		    .graph = BuildSimpleBinaryGraph(op, std::string(name)),
 		    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0 }, .shape = { 2, 2 } },
-		                TensorInputSpec{ .values = { 4.0, 3.0, 2.0, 1.0 }, .shape = { 2, 2 } } },
+			            TensorInputSpec{ .values = { 4.0, 3.0, 2.0, 1.0 }, .shape = { 2, 2 } } },
 		});
 	}
 
@@ -2653,50 +2653,50 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	cases.push_back(Case{
 	    .name = "broadcast_add",
 	    .graph = BuildBinaryGraph(BinaryOp::Add, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape,
-	                              "broadcast_add"),
+		                          "broadcast_add"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 10.0, 20.0, 30.0 }, .shape = { 1, 3 } } },
+		            TensorInputSpec{ .values = { 10.0, 20.0, 30.0 }, .shape = { 1, 3 } } },
 	});
 	cases.push_back(Case{
 	    .name = "broadcast_subtract",
 	    .graph = BuildBinaryGraph(BinaryOp::Subtract, std::array{ 2uz, 3uz }, std::array{ 2uz, 1uz }, outputShape,
-	                              "broadcast_subtract"),
+		                          "broadcast_subtract"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 10.0, 20.0 }, .shape = { 2, 1 } } },
+		            TensorInputSpec{ .values = { 10.0, 20.0 }, .shape = { 2, 1 } } },
 	});
 	cases.push_back(Case{
 	    .name = "broadcast_multiply",
 	    .graph = BuildBinaryGraph(BinaryOp::Multiply, std::array{ 1uz, 3uz }, std::array{ 2uz, 3uz }, outputShape,
-	                              "broadcast_multiply"),
+		                          "broadcast_multiply"),
 	    .inputs = { TensorInputSpec{ .values = { 2.0, 3.0, 4.0 }, .shape = { 1, 3 } },
-	                TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } } },
+		            TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0, 5.0, 6.0 }, .shape = { 2, 3 } } },
 	});
 	cases.push_back(Case{
 	    .name = "broadcast_divide",
 	    .graph = BuildBinaryGraph(BinaryOp::Divide, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape,
-	                              "broadcast_divide"),
+		                          "broadcast_divide"),
 	    .inputs = { TensorInputSpec{ .values = { 8.0, 18.0, 32.0, 20.0, 45.0, 80.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 2.0, 3.0, 4.0 }, .shape = { 1, 3 } } },
+		            TensorInputSpec{ .values = { 2.0, 3.0, 4.0 }, .shape = { 1, 3 } } },
 	});
 	cases.push_back(Case{
 	    .name = "broadcast_max",
 	    .graph = BuildBinaryGraph(BinaryOp::Max, std::array{ 2uz, 3uz }, std::array{ 1uz, 3uz }, outputShape,
-	                              "broadcast_max"),
+		                          "broadcast_max"),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 25.0, 3.0, 40.0, 5.0, 60.0 }, .shape = { 2, 3 } },
-	                TensorInputSpec{ .values = { 10.0, 20.0, 30.0 }, .shape = { 1, 3 } } },
+		            TensorInputSpec{ .values = { 10.0, 20.0, 30.0 }, .shape = { 1, 3 } } },
 	});
 	cases.push_back(Case{
 	    .name = "broadcast_min",
 	    .graph = BuildBinaryGraph(BinaryOp::Min, std::array{ 2uz, 1uz }, std::array{ 2uz, 3uz }, outputShape,
-	                              "broadcast_min"),
+		                          "broadcast_min"),
 	    .inputs = { TensorInputSpec{ .values = { 7.0, 18.0 }, .shape = { 2, 1 } },
-	                TensorInputSpec{ .values = { 1.0, 9.0, 8.0, 20.0, 2.0, 30.0 }, .shape = { 2, 3 } } },
+		            TensorInputSpec{ .values = { 1.0, 9.0, 8.0, 20.0, 2.0, 30.0 }, .shape = { 2, 3 } } },
 	});
 	cases.push_back(Case{
 	    .name = "matmul_cublas",
 	    .graph = BuildSimpleMatMulGraph(),
 	    .inputs = { TensorInputSpec{ .values = { 1.0, 2.0, 3.0, 4.0 }, .shape = { 2, 2 } },
-	                TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 2, 2 } } },
+		            TensorInputSpec{ .values = { 10.0, 20.0, 30.0, 40.0 }, .shape = { 2, 2 } } },
 	});
 	for (const auto indexType : { DataType::Int32, DataType::Int64 })
 	{
@@ -2742,7 +2742,7 @@ TEST(CompiledModuleCUDATest, MatchesCPUInterpreterAndAOTAcrossNumericalMatrix)
 	    .name = "pow_bridge_fallback",
 	    .graph = BuildSimplePowGraph(),
 	    .inputs = { TensorInputSpec{ .values = { 2.0, 3.0, 4.0, 5.0 }, .shape = { 2, 2 } },
-	                TensorInputSpec{ .values = { 3.0, 2.0, 1.0, 0.0 }, .shape = { 2, 2 } } },
+		            TensorInputSpec{ .values = { 3.0, 2.0, 1.0, 0.0 }, .shape = { 2, 2 } } },
 	    .expectedCUDABackend = CompiledModuleBackend::CPUNative,
 	});
 

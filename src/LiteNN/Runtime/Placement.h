@@ -153,8 +153,8 @@ namespace LiteNN::Runtime
 	{
 		const auto& schema = registry.Require(node.opKind);
 		PlacementDecision best{ .node = node.sourceNode,
-			                    .opKind = node.opKind,
-			                    .cost = std::numeric_limits<double>::infinity() };
+		                        .opKind = node.opKind,
+		                        .cost = std::numeric_limits<double>::infinity() };
 		bool requiredBackendWasCandidate = !requiredBackend.has_value();
 		for (const auto backend : candidateBackends)
 		{
@@ -274,7 +274,7 @@ namespace LiteNN::Runtime
 			{
 				throw std::runtime_error(
 				    std::format("Placement value constraint references missing subgraph {} value {}:{}",
-				                constraint.subgraph, constraint.value.node, constraint.value.port));
+					            constraint.subgraph, constraint.value.node, constraint.value.port));
 			}
 		}
 	}
@@ -343,9 +343,9 @@ namespace LiteNN::Runtime
 				if (decision.support == BackendSupportLevel::Fallback)
 				{
 					PlacementFallbackStep step{ .subgraph = decision.subgraph,
-						                        .node = decision.node,
-						                        .requestedBackend = decision.backend,
-						                        .fallbackBackend = decision.fallback };
+					                            .node = decision.node,
+					                            .requestedBackend = decision.backend,
+					                            .fallbackBackend = decision.fallback };
 					for (const auto input : node.inputs)
 					{
 						if (const auto* assignment =

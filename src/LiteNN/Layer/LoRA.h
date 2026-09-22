@@ -108,8 +108,8 @@ namespace LiteNN::Layer
 				adapter = "default";
 			}
 			return ParsedLoRATensorName{ .targetName = std::string(name.substr(0, markerPos)),
-				                         .adapterName = std::string(adapter),
-				                         .role = role };
+			                             .adapterName = std::string(adapter),
+			                             .role = role };
 		};
 		if (auto parsed = parse(".lora_A", LoRATensorRole::A))
 		{

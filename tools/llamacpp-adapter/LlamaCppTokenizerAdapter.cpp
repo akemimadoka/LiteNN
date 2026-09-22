@@ -466,7 +466,7 @@ namespace LiteNN::LlamaCppAdapter
 					{
 						throw std::runtime_error(
 						    std::format("llama.cpp attention residual and block input shapes differ: {} vs {}",
-						                residual.size(), blockInput.size()));
+							            residual.size(), blockInput.size()));
 					}
 					auto attentionOutput = residual;
 					for (std::size_t i = 0; i < attentionOutput.size(); ++i)
@@ -1037,15 +1037,15 @@ namespace LiteNN::LlamaCppAdapter
 			const auto decodeEnd = std::chrono::steady_clock::now();
 			windows.push_back(
 			    { .warmup = windowIndex < warmupWindowCount,
-			      .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
-			      .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
-			      .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
-			      .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
-			      .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
-			      .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
-			      .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
-			      .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
-			      .decodeTokens = generated.size() - 1 });
+				  .index = windowIndex < warmupWindowCount ? windowIndex : windowIndex - warmupWindowCount,
+				  .windowStartMonotonicNs = monotonicNanoseconds(resetStart),
+				  .decodeStartMonotonicNs = monotonicNanoseconds(decodeStart),
+				  .decodeEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+				  .windowEndMonotonicNs = monotonicNanoseconds(decodeEnd),
+				  .stateResetMs = std::chrono::duration<double, std::milli>(resetEnd - resetStart).count(),
+				  .prefillMs = std::chrono::duration<double, std::milli>(prefillEnd - prefillStart).count(),
+				  .decodeWallMs = std::chrono::duration<double, std::milli>(decodeEnd - decodeStart).count(),
+				  .decodeTokens = generated.size() - 1 });
 		}
 
 		std::vector<double> measuredThroughputs;

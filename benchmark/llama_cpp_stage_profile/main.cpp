@@ -227,14 +227,14 @@ namespace
 			const char* weight = tensor->src[0] != nullptr ? tensor->src[0]->name : "";
 			const bool selected =
 			    (state.cutBoundary == "prev" && state.targetLayer > 0 && IsLayerWeight(weight, state.targetLayer - 1) &&
-			     Contains(weight, "ffn_down")) ||
+				 Contains(weight, "ffn_down")) ||
 			    (state.cutBoundary == "attn" && IsLayerWeight(weight, state.targetLayer) &&
-			     Contains(weight, "attn_output")) ||
+				 Contains(weight, "attn_output")) ||
 			    (state.cutBoundary == "gate" && IsLayerWeight(weight, state.targetLayer) &&
-			     Contains(weight, "ffn_gate")) ||
+				 Contains(weight, "ffn_gate")) ||
 			    (state.cutBoundary == "up" && IsLayerWeight(weight, state.targetLayer) && Contains(weight, "ffn_up")) ||
 			    (state.cutBoundary == "down" && IsLayerWeight(weight, state.targetLayer) &&
-			     Contains(weight, "ffn_down"));
+				 Contains(weight, "ffn_down"));
 			if (selected)
 			{
 				return "cut.prefix";

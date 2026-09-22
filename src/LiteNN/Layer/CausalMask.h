@@ -49,7 +49,7 @@ namespace LiteNN::Layer
 
 		const auto mask = Detail::AddConstant(
 		    subgraph, Detail::MakeCausalMaskTensor(info.shape[0], info.shape[1], info.dtype, maskedValue,
-		                                           keyPositionOffset, queryPositionOffset));
+			                                       keyPositionOffset, queryPositionOffset));
 		const auto result = subgraph.AddNode(BinaryOpNode{ BinaryOp::Add, input, mask }, { info });
 		return { result, 0 };
 	}

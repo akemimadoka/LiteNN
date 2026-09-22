@@ -101,10 +101,10 @@ TEST(OpSchemaTest, ExtractsInputsFromNodePayloads)
 	EXPECT_EQ(addInputs[1].node, 2);
 
 	const NodeVariant norm = NormalizationNode{ .input = { 3, 0 },
-		                                        .scale = NodeOutput{ 4, 0 },
-		                                        .bias = std::nullopt,
-		                                        .mode = NormalizationMode::RMSNorm,
-		                                        .axis = 1 };
+	                                            .scale = NodeOutput{ 4, 0 },
+	                                            .bias = std::nullopt,
+	                                            .mode = NormalizationMode::RMSNorm,
+	                                            .axis = 1 };
 	const auto normInputs = NodeInputs(norm);
 	ASSERT_EQ(normInputs.size(), 2);
 	EXPECT_EQ(normInputs[0].node, 3);

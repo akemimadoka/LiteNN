@@ -692,13 +692,13 @@ namespace LiteNN::Serialization
 			const auto alpha = options.defaultAlpha == 0.0f ? static_cast<float>(rank) : options.defaultAlpha;
 			result.adapters.push_back(
 			    Layer::CreateLinearLoRA(graph,
-			                            Layer::LoRAAdapterMetadata{ .targetName = entry.targetName,
-			                                                        .adapterName = entry.adapterName,
-			                                                        .rank = rank,
-			                                                        .alpha = alpha,
-			                                                        .dtype = a.DType(),
-			                                                        .mergeMode = Layer::LoRAMergeMode::Unmerged },
-			                            std::move(a), std::move(b)));
+				                        Layer::LoRAAdapterMetadata{ .targetName = entry.targetName,
+				                                                    .adapterName = entry.adapterName,
+				                                                    .rank = rank,
+				                                                    .alpha = alpha,
+				                                                    .dtype = a.DType(),
+				                                                    .mergeMode = Layer::LoRAMergeMode::Unmerged },
+				                        std::move(a), std::move(b)));
 		}
 		return result;
 	}

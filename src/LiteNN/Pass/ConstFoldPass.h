@@ -338,8 +338,8 @@ namespace LiteNN
 			    [&](const auto& n) -> NodeVariant {
 				    using T = std::decay_t<decltype(n)>;
 				    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-				                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
-				                  std::same_as<T, LoadActivationNode>)
+					              std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+					              std::same_as<T, LoadActivationNode>)
 				    {
 					    return n;
 				    }
@@ -931,7 +931,7 @@ namespace LiteNN
 						    constValues[nodeId] = node.storage.CopyToDevice(CPU{});
 					    }
 					    else if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, VariableRefNode> ||
-					                       std::same_as<T, LoadActivationNode> || std::same_as<T, SaveActivationNode>)
+						                   std::same_as<T, LoadActivationNode> || std::same_as<T, SaveActivationNode>)
 					    {
 						    // 非常量
 					    }
@@ -975,9 +975,9 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, DequantizeNode>)
 					    {
 						    if (isConst[node.input.node] &&
-						        (node.params.scheme == QuantizationScheme::Affine ||
-						         (node.params.scheme == QuantizationScheme::Block &&
-						          IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))))
+							    (node.params.scheme == QuantizationScheme::Affine ||
+							     (node.params.scheme == QuantizationScheme::Block &&
+							      IsPackedNibbleQuantizedBlockFormat(node.params.blockFormat))))
 						    {
 							    isConst[nodeId] = true;
 							    const auto& input = GetConstValue(constValues, node.input);
@@ -1063,7 +1063,7 @@ namespace LiteNN
 					    {
 						    const auto dConst = !node.d || isConst[node.d->node];
 						    if (isConst[node.state.node] && isConst[node.dt.node] && isConst[node.a.node] &&
-						        isConst[node.b.node] && isConst[node.c.node] && dConst)
+							    isConst[node.b.node] && isConst[node.c.node] && dConst)
 						    {
 							    isConst[nodeId] = true;
 							    const auto& state = GetConstValue(constValues, node.state);
@@ -1078,14 +1078,14 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, RWKVWKVNode>)
 					    {
 						    if (isConst[node.key.node] && isConst[node.value.node] && isConst[node.receptance.node] &&
-						        isConst[node.timeDecay.node] && isConst[node.timeFirst.node])
+							    isConst[node.timeDecay.node] && isConst[node.timeFirst.node])
 						    {
 							    isConst[nodeId] = true;
 							    constValues[nodeId] = EvalRWKVWKV(GetConstValue(constValues, node.key),
-							                                      GetConstValue(constValues, node.value),
-							                                      GetConstValue(constValues, node.receptance),
-							                                      GetConstValue(constValues, node.timeDecay),
-							                                      GetConstValue(constValues, node.timeFirst));
+								                                  GetConstValue(constValues, node.value),
+								                                  GetConstValue(constValues, node.receptance),
+								                                  GetConstValue(constValues, node.timeDecay),
+								                                  GetConstValue(constValues, node.timeFirst));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, SoftmaxNode>)
@@ -1106,7 +1106,7 @@ namespace LiteNN
 							        node.positions ? &GetConstValue(constValues, *node.positions) : nullptr;
 							    constValues[nodeId] =
 							        Detail::EvalRoPE(GetConstValue(constValues, node.input), positions, node.base,
-							                         node.frequencyScale, node.positionOffset, node.layout);
+									                 node.frequencyScale, node.positionOffset, node.layout);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossNode>)
@@ -1115,7 +1115,7 @@ namespace LiteNN
 						    {
 							    isConst[nodeId] = true;
 							    constValues[nodeId] = EvalCrossEntropyLoss(GetConstValue(constValues, node.logits),
-							                                               GetConstValue(constValues, node.labels));
+								                                           GetConstValue(constValues, node.labels));
 						    }
 					    }
 					    else if constexpr (std::same_as<T, CrossEntropyLossBackwardNode>)
@@ -1176,7 +1176,7 @@ namespace LiteNN
 						    {
 							    isConst[nodeId] = true;
 							    constValues[nodeId] = EvalSolveTri(GetConstValue(constValues, node.a),
-							                                       GetConstValue(constValues, node.b), node);
+								                                   GetConstValue(constValues, node.b), node);
 						    }
 					    }
 					    else if constexpr (std::same_as<T, SGDStepNode> || std::same_as<T, AdamWStepNode>)
@@ -1196,7 +1196,7 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, Conv2DNode>)
 					    {
 						    const auto allConst = isConst[node.input.node] && isConst[node.weight.node] &&
-						                          (!node.bias || isConst[node.bias->node]);
+							                      (!node.bias || isConst[node.bias->node]);
 						    if (allConst)
 						    {
 							    isConst[nodeId] = true;
@@ -1209,7 +1209,7 @@ namespace LiteNN
 					    else if constexpr (std::same_as<T, ConvTranspose2DNode>)
 					    {
 						    const auto allConst = isConst[node.input.node] && isConst[node.weight.node] &&
-						                          (!node.bias || isConst[node.bias->node]);
+							                      (!node.bias || isConst[node.bias->node]);
 						    if (allConst)
 						    {
 							    isConst[nodeId] = true;

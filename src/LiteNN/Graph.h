@@ -684,7 +684,7 @@ namespace LiteNN
 			{
 				return std::shared_ptr<Variable>(
 				    new Variable(storage.CopyToDevice(PolymorphicDevice{ storage.CurDevice() }),
-				                 std::move(quantization), gradStorage));
+					             std::move(quantization), gradStorage));
 			}
 		}
 

@@ -169,10 +169,10 @@ TEST(DataMovementNode, ConstFoldBroadcastAndGather)
 	Subgraph sg;
 	const auto data =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4, 5, 6 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	const auto indices =
 	    sg.AddNode(ConstantNode{ MakeInt32Tensor({ 2, 0 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Int32, { 2 } } });
+		           { OutputInfo{ DataType::Int32, { 2 } } });
 	const auto gathered =
 	    sg.AddNode(GatherNode{ { data, 0 }, { indices, 0 }, 1 }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	sg.SetResults({ { gathered, 0 } });

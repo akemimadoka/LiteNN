@@ -203,7 +203,7 @@ TEST(ConstFoldPass, ConstantReduceOp)
 
 	const auto c =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 2, 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 2, 2 } } });
+		           { OutputInfo{ DataType::Float32, { 2, 2 } } });
 	const auto y = sg.AddNode(ReduceOpNode{ ReduceOp::Sum, { c, 0 }, 0 }, { OutputInfo{ DataType::Float32, { 2 } } });
 
 	sg.SetResults({ { y, 0 } });
@@ -234,7 +234,7 @@ TEST(ConstFoldPass, ConstantReshape)
 
 	const auto c =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 1, 2, 3, 4 }, { 4 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 4 } } });
+		           { OutputInfo{ DataType::Float32, { 4 } } });
 	const auto y = sg.AddNode(ReshapeNode{ { c, 0 }, { 2, 2 } }, { OutputInfo{ DataType::Float32, { 2, 2 } } });
 
 	sg.SetResults({ { y, 0 } });
@@ -434,7 +434,7 @@ TEST(ConstFoldPass, BroadcastNoElimination)
 	const auto x = sg.AddParam(DataType::Float32, { 2, 3 });
 	const auto zero =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0, 0 }, { 1, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 1, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 1, 3 } } });
 	const auto y =
 	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 
@@ -483,7 +483,7 @@ TEST(ConstFoldPass, BroadcastNoEliminationActual)
 	const auto x = sg.AddParam(DataType::Float32, { 1, 3 });
 	const auto zero =
 	    sg.AddNode(ConstantNode{ Tensor<CPU>({ 0, 0, 0, 0, 0, 0 }, { 2, 3 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	               { OutputInfo{ DataType::Float32, { 2, 3 } } });
+		           { OutputInfo{ DataType::Float32, { 2, 3 } } });
 	const auto y =
 	    sg.AddNode(BinaryOpNode{ BinaryOp::Add, { x, 0 }, { zero, 0 } }, { OutputInfo{ DataType::Float32, { 2, 3 } } });
 
@@ -593,7 +593,7 @@ TEST(ConstFoldPass, AfterInlinePass)
 	const auto cx = calleeSg.AddParam(DataType::Float32, { 2 });
 	const auto cConst =
 	    calleeSg.AddNode(ConstantNode{ Tensor<CPU>({ 2, 2 }, { 2 }).CopyToDevice(PolymorphicDevice{ CPU{} }) },
-	                     { OutputInfo{ DataType::Float32, { 2 } } });
+		                 { OutputInfo{ DataType::Float32, { 2 } } });
 	const auto cMul = calleeSg.AddNode(BinaryOpNode{ BinaryOp::Multiply, { cx, 0 }, { cConst, 0 } },
 	                                   { OutputInfo{ DataType::Float32, { 2 } } });
 	calleeSg.SetResults({ { cMul, 0 } });

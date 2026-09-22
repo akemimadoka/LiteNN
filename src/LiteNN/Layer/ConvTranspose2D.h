@@ -43,7 +43,7 @@ namespace LiteNN::Layer
 
 		const auto result = subgraph.AddNode(
 		    ConvTranspose2DNode{ input, weight, bias, std::move(strides), std::move(dilations), std::move(lowPads),
-		                         std::move(highPads), std::move(outputPads), groupCount },
+			                     std::move(highPads), std::move(outputPads), groupCount },
 		    { OutputInfo{ inputInfo.dtype, outputShape } });
 		return { result, 0 };
 	}
@@ -66,7 +66,7 @@ namespace LiteNN::Layer
 		}
 		const auto result =
 		    AddConvTranspose2D(subgraph, { input, 0 }, { weight, 0 }, bias, std::move(strides), std::move(dilations),
-		                       std::move(lowPads), std::move(highPads), std::move(outputPads), groupCount);
+			                   std::move(lowPads), std::move(highPads), std::move(outputPads), groupCount);
 		subgraph.SetResults({ result });
 		return builder.AddSubgraph(std::move(subgraph));
 	}

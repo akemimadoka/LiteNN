@@ -43,7 +43,7 @@ namespace LiteNN::Detail
 			{
 				throw std::runtime_error(
 				    std::format("BroadcastTo input dim {} (size {}) cannot broadcast to target dim {} (size {})", dim,
-				                inputDim, rankDelta + dim, targetDim));
+					            inputDim, rankDelta + dim, targetDim));
 			}
 		}
 		return { targetShape.begin(), targetShape.end() };

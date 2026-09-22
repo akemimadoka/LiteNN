@@ -188,7 +188,7 @@ TEST(LayerLinear, BuildsThroughModelBuilderSurface)
 	ModelBuilder builder;
 	auto layer =
 	    Layer::CreateLinear(builder, Tensor<CPU>({ 1.0f, 2.0f, 3.0f, 4.0f, 0.5f, -1.0f }, { 3, 2 }, DataType::Float32),
-	                        Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
+		                    Tensor<CPU>({ 0.25f, -0.5f }, { 1, 2 }, DataType::Float32));
 	const auto forward = Layer::BuildLinear(builder, layer, 2);
 	builder.SetForward(forward);
 
@@ -1440,7 +1440,7 @@ TEST(LayerRoPE, UsesRuntimePositions)
 
 	Runtime::Interpreter<CPU> interpreter;
 	std::array inputs{ Tensor<CPU>({ 1.0, 0.0, 1.0, 0.0 }, { 2, 2 }, DataType::Float32),
-		               Tensor<CPU>({ 3.0, 1.0 }, { 2 }, DataType::Int64) };
+	                   Tensor<CPU>({ 3.0, 1.0 }, { 2 }, DataType::Int64) };
 	const auto result = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs)[0];
 	EXPECT_NEAR(ReadFloat(result, 0), std::cos(3.0f), 1e-5f);
 	EXPECT_NEAR(ReadFloat(result, 1), std::sin(3.0f), 1e-5f);
@@ -1458,7 +1458,7 @@ TEST(LayerRoPE, NeoXUsesHalfSplitPairs)
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
 	const std::vector<float> values{ 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F, 0.0F,
-		                             1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F };
+	                                 1.0F, 2.0F, 3.0F, 4.0F, 5.0F, 6.0F, 7.0F, 8.0F };
 	const auto result = RunSingleIO(graph, values, { 2, 8 });
 	const auto cosine = std::cos(1.0F);
 	const auto sine = std::sin(1.0F);
@@ -1484,7 +1484,7 @@ TEST(LayerRoPE, NeoXRuntimePositionsUseIndependentFormula)
 	const std::vector<double> values{ 1.0, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0 };
 	Runtime::Interpreter<CPU> interpreter;
 	std::array inputs{ Tensor<CPU>(std::span<const double>(values), { 1, 8 }),
-		               Tensor<CPU>({ 3.0 }, { 1 }, DataType::Int64) };
+	                   Tensor<CPU>({ 3.0 }, { 1 }, DataType::Int64) };
 	const auto result = interpreter.RunForward(Detail::BuildExecutablePlanFromGraph(graph), inputs)[0];
 	for (std::size_t pair = 0; pair < 4; ++pair)
 	{
@@ -1705,7 +1705,7 @@ TEST(LayerRepeat, TilesNonSingletonDimensions)
 	const std::vector<std::size_t> repeatedShape{ 4, 4 };
 	ASSERT_EQ(result.Shape(), ShapeView{ repeatedShape });
 	const std::vector<float> expected{ 1.0f, 2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 3.0f, 4.0f,
-		                               1.0f, 2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 3.0f, 4.0f };
+	                                   1.0f, 2.0f, 1.0f, 2.0f, 3.0f, 4.0f, 3.0f, 4.0f };
 	for (auto index = 0uz; index < expected.size(); ++index)
 	{
 		EXPECT_NEAR(ReadFloat(result, index), expected[index], 1e-5f);
