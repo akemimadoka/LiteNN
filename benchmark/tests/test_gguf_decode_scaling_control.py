@@ -31,6 +31,7 @@ def report(threads: int, llama_tps: float, litenn_tps: float, llama_cpu_ms: floa
             "litenn_threads": threads,
             "llama_threads": threads,
             "process_cpu_set": [0, 1, 2, 3],
+            "litenn_activation_math": "strict",
         },
         "summary": {
             "llama_cpp": {"median": llama_tps, "coefficient_of_variation_percent": 1.0},
@@ -74,6 +75,27 @@ class GGUFDecodeScalingControlTest(unittest.TestCase):
         self.assertNotIn(model_argument, identity)
         self.assertNotEqual(identity, resume_identity([1, 2, 4], "python311", ["--model", model_argument]))
         self.assertNotEqual(identity, resume_identity([1, 2, 4, 8], "python311", ["--model", "other.gguf"]))
+        self.assertNotEqual(
+            resume_identity([1, 2], "python311", ["--litenn-activation-math", "strict"]),
+            resume_identity([1, 2], "python311", ["--litenn-activation-math", "bounded"]),
+        )
+
+    def test_rejects_scaling_curve_with_mixed_math_policies(self) -> None:
+        strict = report(1, 2.0, 1.8, 1200.0, 1400.0)
+        bounded = report(2, 3.0, 3.2, 1800.0, 2000.0)
+        bounded["configuration"]["litenn_activation_math"] = "bounded"
+        with self.assertRaisesRegex(ValueError, "activation math policy mismatch"):
+            summarize_scaling_reports([(1, strict), (2, bounded)])
+        strict["configuration"]["litenn_activation_math"] = "bounded"
+        self.assertEqual(
+            summarize_scaling_reports([(1, strict), (2, bounded)])["litenn_activation_math"], "bounded"
+        )
+
+    def test_rejects_scaling_report_without_math_policy(self) -> None:
+        missing = report(1, 2.0, 1.8, 1200.0, 1400.0)
+        del missing["configuration"]["litenn_activation_math"]
+        with self.assertRaisesRegex(ValueError, "activation math policy"):
+            summarize_scaling_reports([(1, missing)])
 
     def test_fingerprints_resume_input_metadata_without_retaining_paths(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:

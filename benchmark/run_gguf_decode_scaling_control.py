@@ -60,9 +60,14 @@ def summarize_runtime(document: dict[str, object], runtime: str, threads: int) -
 def summarize_scaling_reports(reports: list[tuple[int, dict[str, object]]]) -> dict[str, object]:
     if not reports:
         raise ValueError("at least one scaling report is required")
+    activation_math = reports[0][1]["configuration"].get("litenn_activation_math")  # type: ignore[union-attr]
+    if activation_math not in ("strict", "bounded"):
+        raise ValueError("unsupported LiteNN activation math policy in scaling reports")
     rows: list[dict[str, object]] = []
     for threads, report in reports:
         configuration = report["configuration"]
+        if configuration.get("litenn_activation_math") != activation_math:  # type: ignore[union-attr]
+            raise ValueError("activation math policy mismatch across scaling reports")
         if int(configuration["litenn_threads"]) != threads or int(configuration["llama_threads"]) != threads:  # type: ignore[index]
             raise ValueError(f"thread configuration mismatch for T{threads}")
         for runtime in ("llama_cpp", "litenn"):
@@ -107,7 +112,12 @@ def summarize_scaling_reports(reports: list[tuple[int, dict[str, object]]]) -> d
                 "child_accepted": bool(report["gate"]["accepted"]),  # type: ignore[index]
             }
         )
-    return {"baseline_threads": baseline_threads, "runtime_rows": rows, "paired_rows": paired_rows}
+    return {
+        "baseline_threads": baseline_threads,
+        "litenn_activation_math": activation_math,
+        "runtime_rows": rows,
+        "paired_rows": paired_rows,
+    }
 
 
 def write_markdown(path: Path, document: dict[str, object]) -> None:
@@ -119,6 +129,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         "",
         f"- Shared process CPU set: `{document['configuration']['process_cpu_set']}`",  # type: ignore[index]
         f"- Thread counts: `{document['configuration']['thread_counts']}`",  # type: ignore[index]
+        f"- LiteNN activation math: `{document['summary']['litenn_activation_math']}`",  # type: ignore[index]
         "",
         "| Runtime | Threads | t/s | Process CV | Wall ms/token | CPU ms/token | "
         "tokens/CPU-s | Speedup | Parallel efficiency |",
@@ -216,6 +227,7 @@ def load_completed_child_report(path: Path, threads: int) -> dict[str, object] |
             document.get("status") != "complete"
             or int(configuration["litenn_threads"]) != threads
             or int(configuration["llama_threads"]) != threads
+            or configuration.get("litenn_activation_math") not in ("strict", "bounded")
             or not isinstance(document.get("pairs"), list)
             or not document["pairs"]
             or not isinstance(gate.get("accepted"), bool)

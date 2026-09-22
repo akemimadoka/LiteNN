@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "benchmark"))
 
 from benchmark.run_litenn_position_stage_control import (
+    build_command,
+    build_parser,
     load_token_ids_file,
     normalize_pair,
     parse_run_logs,
@@ -24,6 +26,24 @@ def helper(operator: str, role: str, name: str = "helper") -> GGUFHelperEvent:
 
 
 class LiteNNPositionStageControlTest(unittest.TestCase):
+    def test_math_policy_matches_clean_and_profile_artifact_identity(self) -> None:
+        required = [
+            "--model", "model.gguf", "--litenn", "litenn", "--aot-cache-dir", "cache",
+            "--output-json", "report.json", "--prompt-token-ids", "1,2",
+            "--decode-token-ids", "3,4", "--position-bins", "1-2",
+        ]
+        for policy in ("strict", "bounded"):
+            args = build_parser().parse_args(required + ["--activation-math", policy])
+            for profile in (False, True):
+                command = build_command(
+                    args, Path("model.gguf"), Path("litenn"), [1, 2], [3, 4],
+                    Path("workdir"), Path("tokens.txt"), profile,
+                )
+                self.assertEqual(command[command.index("--cpu-aot-activation-math") + 1], policy)
+                self.assertIn("--require-aot-cache-hit", command)
+                self.assertEqual("--profile-helpers" in command, profile)
+        self.assertEqual(build_parser().parse_args(required).activation_math, "strict")
+
     def test_loads_token_ids_from_supported_json_shapes(self) -> None:
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             root = Path(directory)

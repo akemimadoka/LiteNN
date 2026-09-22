@@ -243,6 +243,8 @@ def build_command(
         "--require-aot-cache-hit",
         "--llvm-opt-level",
         str(args.llvm_opt_level),
+        "--cpu-aot-activation-math",
+        args.activation_math,
         "--cpu-aot-threads",
         str(args.threads),
         "--cpu-aot-worker-wait",
@@ -546,6 +548,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         "",
         f"- Host: `{document['host']['cpu_model']}`",  # type: ignore[index]
         f"- Threads: `{configuration['threads']}`",  # type: ignore[index]
+        f"- Activation math: `{configuration['activation_math']}`",  # type: ignore[index]
         f"- Generated tokens: `{configuration['decode_tokens']['count']}`",  # type: ignore[index]
         f"- Repetitions: `{configuration['repetitions']}`",  # type: ignore[index]
         f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
@@ -650,6 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--affinity", choices=("default", "none", "compact", "spread"), default="default")
     parser.add_argument("--worker-wait", choices=("adaptive", "low-power", "latency"), default="adaptive")
     parser.add_argument("--llvm-opt-level", choices=(0, 1, 2, 3), default=0, type=int)
+    parser.add_argument("--activation-math", choices=("strict", "bounded"), default="strict")
     parser.add_argument("--max-cache-length", type=positive_int)
     parser.add_argument(
         "--prepacked-weight-policy", choices=("disabled", "profitable", "all"), default="all"
@@ -729,6 +733,7 @@ def main() -> int:
             "affinity": args.affinity,
             "worker_wait": args.worker_wait,
             "llvm_opt_level": args.llvm_opt_level,
+            "activation_math": args.activation_math,
             "max_cache_length": args.max_cache_length,
             "prepacked_weight_policy": args.prepacked_weight_policy,
             "prepacked_weight_layout": args.prepacked_weight_layout,

@@ -86,3 +86,17 @@ CTest set passed 196/196. On the current GCC 16.2 Release build, five 48-call re
 `0.144 ms` built-in bounded, and `0.392 ms` pinned ggml. Contiguous strict/bounded wall CV was `0.49/0.37%`; maximum
 absolute/relative delta stayed `9.54e-7/3.47e-7` with zero special-value mismatches. Strided timing was noisy and is not
 used for a speedup claim. These are current same-binary controls, not a speedup against the August toolchain.
+
+## Post-Correction Position Control (2026-09-22)
+
+Three alternating clean/profile pairs used 32 forced generated tokens, T8/adaptive/O0, bounded math, v4 prepacked
+weights, and the existing 41-position cache. The raw bundle is `build/cpu_activation_validation/bounded/stages.json`.
+No model payload was copied. Both position bins and all measured runs preserved the fixed trajectory, expected helper
+shape, cache-hit-only execution, and zero fallback. The whole-window clean/profile module medians were
+`164.022/160.822 ms/token`; paired median module overhead was `-1.29%` with `100%` accounting coverage.
+
+Raw activation/Down/Gate-Up medians were `1.027/39.885/63.532 ms/token`. These are diagnostic, not accepted stage deltas:
+whole-window variance and first-bin stage variance failed (first-bin major stages reached approximately `24%` CV).
+Every sample is retained. The aggregate's `100%` coverage includes an explicitly computed module residual and therefore
+does not independently prove all execution was attributed. No speedup against August or llama.cpp follows from this
+campaign; fresh equal-thread controls remain required.

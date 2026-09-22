@@ -3830,6 +3830,9 @@ Priority classes:
             `--shared-weights-cache-dir` and `LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR` provide explicit application/CLI
             configuration. Instruction variants keep independent small cache entries but reuse the same content- and
             layout-addressed prepared payload.
+            - [x] Make strict/bounded activation math explicit in paired/scaling and position-stage benchmark commands
+                  and reports. Cache preparation uses the measured policy, scaling rejects absent/mixed policies,
+                  and switching math policy preserves the shared weight payload. Completed on 2026-09-22.
       - [x] Add auditable retention controls for scratch artifacts. Completed on 2026-08-19:
             `scripts/manage_build_artifacts.py` inventories direct children, protects the shared cache, supports age,
             capacity, and entry-count policies, and remains dry-run unless `--apply` is supplied. Repository-root,

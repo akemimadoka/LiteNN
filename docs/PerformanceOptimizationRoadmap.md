@@ -79,6 +79,11 @@ P0 implementation order:
     exact-token full-model promotion gates. The attributed built-in AVX2+FMA implementation saves about `11.4 ms` in
     the 48-call production shape and three full-model pairs improve `3.05-9.00%` (`5.20%` median) with identical
     output/no fallback. Evidence: `docs/QwenCPUDecodeBoundedActivationEvidence_2026-08-19.md`.
+    - [x] Carry strict/bounded activation policy through paired, scaling, and position-stage controls, including
+      unmeasured cache preparation, measured execution, report identity, and resume validation. Missing/mixed-policy
+      scaling reports are rejected. Completed on 2026-09-22; the three-pair T8 bounded position control preserves
+      trajectory/cache/no-fallback gates but is rejected by whole/bin variance. Its `1.027 ms/token` raw activation
+      median is diagnostic only, not a fresh cross-runtime acceptance claim.
   - [x] In parallel, attribute the sustained context-dependent module slope. The accepted 128-token fixed-trajectory
     control measures LiteNN/reference medians of `4.768/5.700 token/s` (`-15.01%` paired median); LiteNN module time
     rises from `198.080 ms` over positions 1-16 to `221.030 ms` over positions 113-128. The first reference-side

@@ -1220,6 +1220,8 @@ def build_litenn_command(
         "--ignore-eos",
         "--llvm-opt-level",
         str(args.llvm_opt_level),
+        "--cpu-aot-activation-math",
+        args.litenn_activation_math,
         "--cpu-aot-threads",
         str(args.litenn_threads),
         "--cpu-aot-worker-wait",
@@ -1377,6 +1379,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Runtime/pair cooldown: `{document['configuration']['cooldown_between_runtimes_seconds']}/"
         f"{document['configuration']['cooldown_between_pairs_seconds']} s`",  # type: ignore[index]
         f"- Shared process CPU set: `{document['configuration']['process_cpu_set']}`",  # type: ignore[index]
+        f"- LiteNN activation math: `{document['configuration']['litenn_activation_math']}`",  # type: ignore[index]
         f"- Trajectory mode: `{'fixed reference replay' if document['configuration']['fixed_token_replay'] else 'natural greedy'}`",  # type: ignore[index]
         "",
         "| Pair | Order | llama ms/token | llama t/s | LiteNN ms/token | LiteNN t/s | LiteNN delta | "
@@ -1479,6 +1482,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--litenn-worker-wait", choices=["adaptive", "low-power", "latency"], default="adaptive"
     )
     parser.add_argument("--llvm-opt-level", choices=[0, 1, 2, 3], default=0, type=int)
+    parser.add_argument("--litenn-activation-math", choices=("strict", "bounded"), default="strict")
     parser.add_argument("--llama-threads", default=2, type=positive_int)
     parser.add_argument("--llama-cpu-mask", default="")
     parser.add_argument("--llama-cpu-strict", choices=["0", "1"], default="0")
@@ -1598,6 +1602,7 @@ def main() -> int:
             "litenn_max_cache_length": args.litenn_max_cache_length,
             "litenn_affinity": args.litenn_affinity,
             "litenn_worker_wait": args.litenn_worker_wait,
+            "litenn_activation_math": args.litenn_activation_math,
             "llvm_opt_level": args.llvm_opt_level,
             "llama_threads": args.llama_threads,
             "llama_cpu_mask": args.llama_cpu_mask,

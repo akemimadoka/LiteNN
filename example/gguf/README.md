@@ -353,6 +353,17 @@ store. The runtime-level equivalent is `LITENN_GGUF_SHARED_WEIGHTS_CACHE_DIR`;
 applications should prefer the CLI option and configure the child process rather
 than setting library behavior globally.
 
+For explicit bounded activation math, pass `--cpu-aot-activation-math bounded`
+to `qwen_smoke.py`. The default is `strict`; this choice changes the instruction
+cache identity but reuses the same shared weights. Controlled runners expose the
+same axis as `--litenn-activation-math strict|bounded` in
+`benchmark/run_paired_gguf_decode_control.py` (also accepted after `--` by
+`benchmark/run_gguf_decode_scaling_control.py`) and `--activation-math
+strict|bounded` in `benchmark/run_litenn_position_stage_control.py`. Cache
+preparation and measured runs use the same policy. JSON/Markdown reports record
+it, and scaling aggregation rejects missing or mixed policies. Keep the policy
+explicit when comparing a new optimization against previous evidence.
+
 Prepared Q4_K/Q6_K experiments can select `--cpu-aot-ggml-prepacked-weight-policy all`
 with `--cpu-aot-ggml-prepacked-weight-layout expanded-v1`, `compact-v3`, or `field-interleaved-v4`.
 The layout is part of both the decode artifact key and shared-weight key, so the

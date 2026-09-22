@@ -234,6 +234,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             llvm_opt_level=0,
             litenn_threads=8,
             litenn_worker_wait="adaptive",
+            litenn_activation_math="bounded",
             litenn_max_cache_length=256,
             litenn_affinity="default",
             shared_weights_cache_dir=Path("shared-weights"),
@@ -251,6 +252,7 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertEqual(command[index + 1], "256")
         shared_index = command.index("--shared-weights-cache-dir")
         self.assertEqual(command[shared_index + 1], "shared-weights")
+        self.assertEqual(command[command.index("--cpu-aot-activation-math") + 1], "bounded")
 
     def test_builds_unmeasured_cache_preparation_command(self) -> None:
         args = SimpleNamespace(
@@ -260,6 +262,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             llvm_opt_level=0,
             litenn_threads=2,
             litenn_worker_wait="adaptive",
+            litenn_activation_math="bounded",
             litenn_max_cache_length=256,
             litenn_affinity="compact",
             shared_weights_cache_dir=None,
@@ -279,6 +282,7 @@ class FixedTokenReplayTest(unittest.TestCase):
         self.assertIn("--compile-only", command)
         self.assertNotIn("--require-aot-cache-hit", command)
         self.assertNotIn("--benchmark-windows", command)
+        self.assertEqual(command[command.index("--cpu-aot-activation-math") + 1], "bounded")
 
     def test_validates_in_process_window_report_from_raw_windows(self) -> None:
         windows = [
@@ -436,6 +440,7 @@ class FixedTokenReplayTest(unittest.TestCase):
             litenn_threads=8,
             litenn_worker_wait="adaptive",
             litenn_max_cache_length=256,
+            litenn_activation_math="strict",
             litenn_affinity="default",
             llama_threads=2,
             in_process_warmup_windows=1,
