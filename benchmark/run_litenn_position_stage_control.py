@@ -14,13 +14,14 @@ from pathlib import Path
 try:
     from .profile_bundle import GGUFHelperEvent, LogEvidence, parse_gguf_decode_logs
     from .run_llama_cpp_completion_control import host_metadata
-    from .run_llama_cpp_stage_control import position_bins
+    from .run_llama_cpp_stage_control import position_bins, stage_variance_passes
     from .run_paired_gguf_decode_control import (
         binary_identity,
+        campaign_power_policy_stable,
+        cpu_set,
         load_litenn_generated_token_ids,
         parse_forced_replay_metrics,
         power_policy,
-        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -29,13 +30,14 @@ try:
 except ImportError:
     from profile_bundle import GGUFHelperEvent, LogEvidence, parse_gguf_decode_logs
     from run_llama_cpp_completion_control import host_metadata
-    from run_llama_cpp_stage_control import position_bins
+    from run_llama_cpp_stage_control import position_bins, stage_variance_passes
     from run_paired_gguf_decode_control import (
         binary_identity,
+        campaign_power_policy_stable,
+        cpu_set,
         load_litenn_generated_token_ids,
         parse_forced_replay_metrics,
         power_policy,
-        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -60,7 +62,6 @@ STAGE_ORDER = (
     "module.residual",
 )
 STAGE_SORT_KEY = {name: index for index, name in enumerate(STAGE_ORDER)}
-SUB_MILLISECOND_STAGE_LIMIT_MS = 1.0
 METRIC_RE = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>[^\s]+)")
 
 
@@ -153,7 +154,13 @@ def parse_decode_metrics(path: Path) -> dict[str, str]:
     return {match.group("name"): match.group("value") for match in METRIC_RE.finditer(lines[2])}
 
 
-def parse_run_logs(stdout: Path, stderr: Path, expected_steps: int, profile: bool) -> dict[str, object]:
+def parse_run_logs(
+    stdout: Path, stderr: Path, expected_steps: int, profile: bool, measurement_window: str = "generation"
+) -> dict[str, object]:
+    if measurement_window not in ("generation", "decode"):
+        raise ValueError("unsupported measurement window")
+    if measurement_window == "decode" and expected_steps < 2:
+        raise ValueError("decode measurement requires at least two generated tokens")
     analysis = parse_gguf_decode_logs([LogEvidence(name="litenn", stdout=stdout, stderr=stderr)])
     generation_steps = [step for step in analysis.steps if step.phase == "generation"]
     if len(generation_steps) != expected_steps:
@@ -198,6 +205,9 @@ def parse_run_logs(stdout: Path, stderr: Path, expected_steps: int, profile: boo
             record["module_non_helper_ms"] = step.module_non_helper_ms
         step_records.append(record)
 
+    first_generation_step = dict(step_records[0])
+    if measurement_window == "decode":
+        step_records = [dict(step, position=index) for index, step in enumerate(step_records[1:], start=1)]
     mean_step_ms = sum(float(step["step_ms"]) for step in step_records) / len(step_records)
     mean_module_ms = sum(float(step["module_ms"]) for step in step_records) / len(step_records)
     return {
@@ -205,6 +215,27 @@ def parse_run_logs(stdout: Path, stderr: Path, expected_steps: int, profile: boo
         "mean_module_ms": mean_module_ms,
         "tokens_per_second": 1000.0 / mean_step_ms,
         "steps": step_records,
+        "measurement_window": measurement_window,
+        "first_generation_step": first_generation_step,
+    }
+
+
+def measured_replay_identity(
+    prompt_ids: list[int], generated_ids: list[int], measurement_window: str
+) -> dict[str, object]:
+    if not prompt_ids or not generated_ids:
+        raise ValueError("prompt and generated token sequences must be nonempty")
+    if measurement_window == "decode":
+        prefix, inputs = prompt_ids, generated_ids[:-1]
+    elif measurement_window == "generation":
+        prefix, inputs = prompt_ids[:-1], [prompt_ids[-1], *generated_ids[:-1]]
+    else:
+        raise ValueError("unsupported measurement window")
+    if not inputs:
+        raise ValueError("decode measurement requires at least two generated tokens")
+    return {
+        "prefill_count": len(prefix), "prefill_sha256": token_ids_digest(prefix),
+        "decode_count": len(inputs), "decode_sha256": token_ids_digest(inputs),
     }
 
 
@@ -278,7 +309,7 @@ def run_litenn(
     output = workdir / "generated_tokens.txt"
     command = build_command(args, model, litenn, prompt_ids, decode_ids, workdir, output, profile)
     process, _, stderr = run_monitored(
-        command, artifact_prefix, replacements, args.monitor_interval_seconds
+        command, artifact_prefix, replacements, args.monitor_interval_seconds, args.process_cpu_set
     )
     if process["returncode"] != 0:
         raise RuntimeError(
@@ -294,7 +325,14 @@ def run_litenn(
         raise RuntimeError(f"LiteNN {mode} run reported fallback_count={metrics_row.get('fallback_count')}")
     stdout_path = artifact_prefix.with_suffix(".stdout.txt")
     stderr_path = artifact_prefix.with_suffix(".stderr.txt")
-    metrics = parse_run_logs(stdout_path, stderr_path, len(decode_ids), profile)
+    metrics = parse_run_logs(stdout_path, stderr_path, len(decode_ids), profile, args.measurement_window)
+    identity = measured_replay_identity(prompt_ids, decode_ids, args.measurement_window)
+    expected_runtime_steps = list(range(
+        int(identity["prefill_count"]) + 1,
+        int(identity["prefill_count"]) + int(identity["decode_count"]) + 1,
+    ))
+    if [step["runtime_step"] for step in metrics["steps"]] != expected_runtime_steps:
+        raise RuntimeError("measured runtime positions differ from the replay input window")
     return {
         "process": process,
         "metrics": metrics,
@@ -499,16 +537,6 @@ def summarize_pairs(pairs: list[dict[str, object]]) -> dict[str, object]:
     return result
 
 
-def stage_variance_passes(stats: dict[str, object], relative_limit: float, absolute_limit: float) -> bool:
-    return (
-        float(stats["coefficient_of_variation_percent"]) <= relative_limit
-        or (
-            float(stats["mean"]) <= SUB_MILLISECOND_STAGE_LIMIT_MS
-            and float(stats["standard_deviation"]) <= absolute_limit
-        )
-    )
-
-
 def qwen_stage_shape_passes(summary: dict[str, object]) -> bool:
     stages = summary["normalized_stages"]  # type: ignore[index]
     names = set(stages)
@@ -548,8 +576,11 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         "",
         f"- Host: `{document['host']['cpu_model']}`",  # type: ignore[index]
         f"- Threads: `{configuration['threads']}`",  # type: ignore[index]
+        f"- Process CPU set: `{configuration['process_cpu_set']}`",  # type: ignore[index]
         f"- Activation math: `{configuration['activation_math']}`",  # type: ignore[index]
         f"- Generated tokens: `{configuration['decode_tokens']['count']}`",  # type: ignore[index]
+        f"- Measurement window: `{configuration['measurement_window']}`; "
+        f"measured calls: `{configuration['measured_replay']['decode_count']}`",  # type: ignore[index]
         f"- Repetitions: `{configuration['repetitions']}`",  # type: ignore[index]
         f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
         f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
@@ -574,6 +605,18 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
             f"| {stage} | {values['ms_per_token']['median']:.3f} | "
             f"{values['raw_ms_per_token']['median']:.3f} | {values['calls_per_token']['median']:.1f} | "
             f"{values['ms_per_token']['coefficient_of_variation_percent']:.2f}% |"
+        )
+    lines.extend([
+        "", "## First Generation Call", "",
+        "The last prompt-token call is retained separately; this is not full startup/prefill TTFT.",
+        "It is excluded from the measured window only in explicit decode mode.", "",
+        "| Pair | Clean module ms | Profile module ms |",
+        "| --- | ---: | ---: |",
+    ])
+    for pair in document["pairs"]:
+        lines.append(
+            f"| {pair['repetition']} | {pair['clean']['metrics']['first_generation_step']['module_ms']:.3f} | "
+            f"{pair['profile']['metrics']['first_generation_step']['module_ms']:.3f} |"
         )
     lines.extend(
         [
@@ -648,8 +691,13 @@ def build_parser() -> argparse.ArgumentParser:
     decode.add_argument("--decode-token-ids", type=comma_token_ids)
     decode.add_argument("--decode-token-ids-file", type=Path)
     parser.add_argument("--position-bins", required=True, type=position_bins)
+    parser.add_argument(
+        "--measurement-window", choices=("generation", "decode"), default="generation",
+        help="generation includes the last prompt call; decode measures generated-token inputs only (N-1 calls)",
+    )
     parser.add_argument("--repetitions", default=3, type=positive_int)
     parser.add_argument("--threads", default=8, type=positive_int)
+    parser.add_argument("--process-cpu-set", type=cpu_set, help="OS process CPU domain inherited by the decode child")
     parser.add_argument("--affinity", choices=("default", "none", "compact", "spread"), default="default")
     parser.add_argument("--worker-wait", choices=("adaptive", "low-power", "latency"), default="adaptive")
     parser.add_argument("--llvm-opt-level", choices=(0, 1, 2, 3), default=0, type=int)
@@ -703,8 +751,9 @@ def main() -> int:
         if args.decode_token_ids is not None
         else load_token_ids_file(args.decode_token_ids_file.resolve())
     )
-    if args.position_bins[-1][1] != len(decode_ids):
-        raise SystemExit("--position-bins must cover every decode token")
+    measured_replay = measured_replay_identity(prompt_ids, decode_ids, args.measurement_window)
+    if args.position_bins[-1][1] != measured_replay["decode_count"]:
+        raise SystemExit("--position-bins must cover every measured call (N generation calls or N-1 decode calls)")
     output_json = args.output_json.resolve()
     output_json.parent.mkdir(parents=True, exist_ok=True)
     output_md = args.output_md.resolve() if args.output_md is not None else None
@@ -730,10 +779,13 @@ def main() -> int:
         "configuration": {
             "repetitions": args.repetitions,
             "threads": args.threads,
+            "process_cpu_set": args.process_cpu_set,
             "affinity": args.affinity,
             "worker_wait": args.worker_wait,
             "llvm_opt_level": args.llvm_opt_level,
             "activation_math": args.activation_math,
+            "measurement_window": args.measurement_window,
+            "measured_replay": measured_replay,
             "max_cache_length": args.max_cache_length,
             "prepacked_weight_policy": args.prepacked_weight_policy,
             "prepacked_weight_layout": args.prepacked_weight_layout,
@@ -852,10 +904,11 @@ def main() -> int:
         for pair in pairs  # type: ignore[union-attr]
         for mode in ("clean", "profile")
     )
-    power_stable = all(
-        process_power_policy_stable(pair[mode]["process"])  # type: ignore[index]
-        for pair in pairs  # type: ignore[union-attr]
-        for mode in ("clean", "profile")
+    document["power_policy_after"] = power_policy()
+    power_stable = campaign_power_policy_stable(
+        [pair[mode]["process"] for pair in pairs for mode in ("clean", "profile")],
+        document["power_policy"],
+        document["power_policy_after"],
     )
     gate = {
         "whole_variance": whole_variance,
@@ -876,7 +929,6 @@ def main() -> int:
     document["summary"] = summary
     document["gate"] = gate
     document["status"] = "complete"
-    document["power_policy_after"] = power_policy()
     frequency: dict[str, object] = {}
     for mode in ("clean", "profile"):
         values = []

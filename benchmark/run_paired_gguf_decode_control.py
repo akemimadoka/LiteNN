@@ -589,6 +589,15 @@ def paired_power_policy_stable(first: dict[str, object], second: dict[str, objec
     return first.get("power_policy_before") == second.get("power_policy_before")
 
 
+def campaign_power_policy_stable(
+    processes: list[dict[str, object]], before: dict[str, object], after: dict[str, object]
+) -> bool:
+    return bool(processes) and before == after and all(
+        process_power_policy_stable(process) and process.get("power_policy_before") == before
+        for process in processes
+    )
+
+
 def summarize_frequency(samples: list[dict[str, object]]) -> dict[str, object]:
     current = [
         float(value) for sample in samples for value in sample.get("current_mhz", [])  # type: ignore[union-attr]

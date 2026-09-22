@@ -13,8 +13,9 @@ from pathlib import Path
 try:
     from .run_llama_cpp_completion_control import host_metadata, sha256_file
     from .run_paired_gguf_decode_control import (
+        campaign_power_policy_stable,
+        cpu_set,
         power_policy,
-        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -22,8 +23,9 @@ try:
 except ImportError:
     from run_llama_cpp_completion_control import host_metadata, sha256_file
     from run_paired_gguf_decode_control import (
+        campaign_power_policy_stable,
+        cpu_set,
         power_policy,
-        process_power_policy_stable,
         redact_text,
         run_monitored,
         series_statistics,
@@ -50,6 +52,15 @@ STAGE_STEP_RE = re.compile(
 )
 NAME_RE = re.compile(r"[A-Za-z0-9_.-]+")
 AGGREGATE_STAGES = {"attention", "ffn.gate_up", "ffn.activation", "ffn.down", "logits"}
+
+
+def stage_variance_passes(stats: dict[str, object], relative_limit: float, absolute_limit: float) -> bool:
+    mean = float(stats["mean"])
+    deviation = float(stats["standard_deviation"])
+    cv = float(stats["coefficient_of_variation_percent"])
+    if not all(math.isfinite(value) and value >= 0.0 for value in (mean, deviation, cv)):
+        return False
+    return cv <= relative_limit or (mean <= 1.0 and deviation <= absolute_limit)
 
 
 def positive_int(raw: str) -> int:
@@ -210,7 +221,9 @@ def run_profile(
                 ",".join(str(value) for value in args.decode_token_ids),
             ]
         )
-    process, stdout, stderr = run_monitored(command, artifact_prefix, replacements, args.monitor_interval_seconds)
+    process, stdout, stderr = run_monitored(
+        command, artifact_prefix, replacements, args.monitor_interval_seconds, args.process_cpu_set
+    )
     if process["returncode"] != 0:
         raise RuntimeError(
             f"stage profiler failed with {process['returncode']}: "
@@ -401,6 +414,7 @@ def write_markdown(path: Path, document: dict[str, object]) -> None:
         f"- Threads: `{configuration['threads']}`",  # type: ignore[index]
         f"- Warmup/steps: `{configuration['warmup']}/{configuration['steps']}`",  # type: ignore[index]
         f"- Repetitions: `{configuration['repetitions']}`",  # type: ignore[index]
+        f"- Process CPU set: `{configuration['process_cpu_set']}`",  # type: ignore[index]
         f"- Power-policy stability: `{gate['power_policy_stability']}`",  # type: ignore[index]
         f"- Accepted: `{gate['accepted']}`",  # type: ignore[index]
         "",
@@ -501,6 +515,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", action="append", help="coarse, ffn, layer-N, or scan-layer-N; may be repeated"
     )
     parser.add_argument("--threads", default=2, type=positive_int)
+    parser.add_argument("--process-cpu-set", type=cpu_set, help="OS process CPU domain, for example 0-7")
     parser.add_argument("--warmup", default=9, type=non_negative_int)
     parser.add_argument("--steps", default=15, type=positive_int)
     parser.add_argument("--repetitions", default=3, type=positive_int)
@@ -513,6 +528,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--variance-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--stage-variance-threshold-percent", default=15.0, type=positive_float)
+    parser.add_argument("--stage-absolute-standard-deviation-ms", default=0.05, type=positive_float)
     parser.add_argument("--overhead-threshold-percent", default=3.0, type=positive_float)
     parser.add_argument("--minimum-stage-coverage-percent", default=95.0, type=positive_float)
     parser.add_argument("--maximum-stage-coverage-percent", default=102.0, type=positive_float)
@@ -584,6 +600,7 @@ def main() -> int:
         "model": {"filename": "<model>", "size_bytes": model.stat().st_size},
         "configuration": {
             "threads": args.threads,
+            "process_cpu_set": args.process_cpu_set,
             "warmup": args.warmup,
             "steps": args.steps,
             "repetitions": args.repetitions,
@@ -595,6 +612,7 @@ def main() -> int:
             ),
             "variance_threshold_percent": args.variance_threshold_percent,
             "stage_variance_threshold_percent": args.stage_variance_threshold_percent,
+            "stage_absolute_standard_deviation_ms": args.stage_absolute_standard_deviation_ms,
             "overhead_threshold_percent": args.overhead_threshold_percent,
             "minimum_stage_coverage_percent": args.minimum_stage_coverage_percent,
             "maximum_stage_coverage_percent": args.maximum_stage_coverage_percent,
@@ -680,7 +698,7 @@ def main() -> int:
         for summary in summaries
     )
     stage_variance_ok = all(
-        stats["coefficient_of_variation_percent"] <= args.stage_variance_threshold_percent
+        stage_variance_passes(stats, args.stage_variance_threshold_percent, args.stage_absolute_standard_deviation_ms)
         for summary in summaries
         for stats in summary["normalized_stages"].values()
     )
@@ -701,7 +719,7 @@ def main() -> int:
         for stats in (position_bin["baseline_ms_per_token"], position_bin["profile_ms_per_token"])
     )
     position_bin_stage_variance_ok = all(
-        stats["coefficient_of_variation_percent"] <= args.stage_variance_threshold_percent
+        stage_variance_passes(stats, args.stage_variance_threshold_percent, args.stage_absolute_standard_deviation_ms)
         for summary in summaries
         for position_bin in summary["position_bins"]
         for stats in position_bin["normalized_stages"].values()
@@ -718,10 +736,11 @@ def main() -> int:
         for summary in summaries
         for position_bin in summary["position_bins"]
     )
-    power_policy_stability_ok = all(
-        process_power_policy_stable(pair[run]["process"])
-        for pair in document["pairs"]  # type: ignore[union-attr]
-        for run in ("baseline", "profile")
+    document["power_policy_after"] = power_policy()
+    power_policy_stability_ok = campaign_power_policy_stable(
+        [pair[run]["process"] for pair in document["pairs"] for run in ("baseline", "profile")],
+        document["power_policy"],
+        document["power_policy_after"],
     )
     document["summaries"] = summaries
     document["gate"] = {
@@ -747,7 +766,6 @@ def main() -> int:
         and power_policy_stability_ok,
     }
     document["status"] = "complete"
-    document["power_policy_after"] = power_policy()
     output_json.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     if args.output_md is not None:
         write_markdown(args.output_md.resolve(), document)

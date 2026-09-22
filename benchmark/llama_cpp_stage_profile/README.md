@@ -56,5 +56,27 @@ python311 benchmark\run_llama_cpp_stage_control.py `
 ```
 
 Acceptance requires complete aggregate stage shape, `95-102%` stage coverage, at most `3%` whole-token overhead,
-at most `3%` whole-run CV, and at most `15%` CV for every promoted stage. Raw artifacts belong under ignored build or
+at most `3%` whole-run CV, and at most `15%` CV for every promoted stage. For a stage mean at or below `1 ms`, an
+absolute standard deviation at or below `--stage-absolute-standard-deviation-ms` (default `0.05 ms`) also passes the
+stage gate. This exception never applies to whole-token/bin latency or multi-millisecond stages. Power policy must
+match across the entire campaign, not just before/after each individual process. Raw artifacts belong under ignored build or
 benchmark-output directories; model paths must not be committed.
+
+## Match The LiteNN Measurement Window
+
+Reference `--decode-token-ids` lists **inputs to measured calls**, while LiteNN's `--decode-token-ids` lists forced
+**generated outputs**. For `P` prompt ids and `N` generated outputs `G`, use:
+
+- LiteNN: `--prompt-token-ids P --decode-token-ids G --measurement-window decode`.
+- Reference: `--prefill-token-ids P --decode-token-ids G_without_last --warmup 0 --steps N_minus_1`.
+- Both: identical threads, `--process-cpu-set`, and bins covering exactly `N-1` measured positions.
+
+Compare LiteNN `configuration.measured_replay` with reference `configuration.exact_token_replay`: their prefix/input
+counts and SHA-256 digests must match. The last requested generated output is never fed back into LiteNN's graph.
+LiteNN's default `generation` window instead measures `[last(P), G_without_last]` after prefix `P_without_last`.
+It includes the first logits-producing prompt call and is not the steady decode window. That call's latency and
+profile remain in JSON and Markdown even in decode mode; startup and complete prefill latency must be reported
+separately when assessing time to first token. Do not discard an arbitrary slow sample as warmup.
+
+`--process-cpu-set` restricts each launched process (and LiteNN smoke descendants) through the existing platform
+affinity helper. It does not replace native per-window affinity/host telemetry gates in the formal scaling controller.

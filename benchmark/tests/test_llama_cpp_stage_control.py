@@ -12,11 +12,41 @@ from benchmark.run_llama_cpp_stage_control import (
     parse_output,
     position_bins,
     summarize_pairs,
+    stage_variance_passes,
     token_ids,
 )
+from benchmark.run_paired_gguf_decode_control import campaign_power_policy_stable
 
 
 class LlamaCppStageControlTest(unittest.TestCase):
+    def test_stage_variance_uses_absolute_limit_only_below_one_millisecond(self) -> None:
+        for mean, deviation, cv, expected in (
+            (0.2, 0.04, 20.0, True),
+            (0.2, 0.06, 30.0, False),
+            (1.0, 0.05, 20.0, True),
+            (1.01, 0.05, 20.0, False),
+            (2.0, 0.2, 10.0, True),
+            (float("nan"), 0.01, 1.0, False),
+            (0.2, float("inf"), 1.0, False),
+            (-1.0, 0.0, 0.0, False),
+        ):
+            with self.subTest(mean=mean, deviation=deviation, cv=cv):
+                self.assertEqual(stage_variance_passes(
+                    {"mean": mean, "standard_deviation": deviation, "coefficient_of_variation_percent": cv},
+                    15.0, 0.05,
+                ), expected)
+
+    def test_campaign_rejects_power_changes_between_individually_stable_processes(self) -> None:
+        a = {"source": "fixture", "value": "balanced"}
+        b = {"source": "fixture", "value": "performance"}
+        stable_a = {"power_policy_before": a, "power_policy_after": a}
+        stable_b = {"power_policy_before": b, "power_policy_after": b}
+        self.assertTrue(campaign_power_policy_stable([stable_a, stable_a], a, a))
+        self.assertFalse(campaign_power_policy_stable([stable_a, stable_b], a, a))
+        self.assertFalse(campaign_power_policy_stable([stable_a], a, b))
+        self.assertFalse(campaign_power_policy_stable([{}], a, a))
+        self.assertFalse(campaign_power_policy_stable([], a, a))
+
     def test_parses_exact_replay_token_ids(self) -> None:
         self.assertEqual(token_ids("151644,872,198"), [151644, 872, 198])
         self.assertEqual(position_bins("1-16,17-48,49-80"), [(1, 16), (17, 48), (49, 80)])

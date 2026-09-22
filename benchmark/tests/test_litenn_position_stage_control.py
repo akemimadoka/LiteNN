@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "benchmark"))
 from benchmark.run_litenn_position_stage_control import (
     build_command,
     build_parser,
+    measured_replay_identity,
     load_token_ids_file,
     normalize_pair,
     parse_run_logs,
@@ -107,6 +108,38 @@ class LiteNNPositionStageControlTest(unittest.TestCase):
             stages = parsed["steps"][0]["stages"]
             self.assertEqual(stages["ffn.activation"]["calls"], 48)
             self.assertEqual(stages["module.residual"]["ms"], 2.0)
+
+    def test_decode_window_excludes_first_token_but_preserves_its_latency(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            stdout, stderr = Path(directory) / "stdout.txt", Path(directory) / "stderr.txt"
+            stdout.write_text("".join(
+                f"stream stats step={index + 8} phase=generation step_ms={milliseconds} "
+                f"module_run_ms={milliseconds - 1} generated_tokens={index} sampling_ms=1\n"
+                for index, milliseconds in enumerate((1350, 170, 160), start=1)
+            ), encoding="utf-8")
+            stderr.write_text("", encoding="utf-8")
+            parsed = parse_run_logs(stdout, stderr, 3, False, "decode")
+            self.assertEqual(parsed["mean_module_ms"], 164.0)
+            self.assertEqual([step["runtime_step"] for step in parsed["steps"]], [10, 11])
+            self.assertEqual([step["position"] for step in parsed["steps"]], [1, 2])
+            self.assertEqual(parsed["first_generation_step"]["step_ms"], 1350)
+            generation = parse_run_logs(stdout, stderr, 3, False, "generation")
+            self.assertEqual(len(generation["steps"]), 3)
+            with self.assertRaisesRegex(ValueError, "at least two"):
+                parse_run_logs(stdout, stderr, 1, False, "decode")
+
+    def test_measured_replay_identity_matches_reference_decode_inputs(self) -> None:
+        from benchmark.run_llama_cpp_stage_control import token_ids_digest
+        decode = measured_replay_identity([1, 2, 3], [4, 5, 6], "decode")
+        self.assertEqual(decode, {
+            "prefill_count": 3, "prefill_sha256": token_ids_digest([1, 2, 3]),
+            "decode_count": 2, "decode_sha256": token_ids_digest([4, 5]),
+        })
+        generation = measured_replay_identity([1, 2, 3], [4, 5, 6], "generation")
+        self.assertEqual(generation["prefill_count"], 2)
+        self.assertEqual(generation["decode_sha256"], token_ids_digest([3, 4, 5]))
+        with self.assertRaisesRegex(ValueError, "at least two"):
+            measured_replay_identity([1], [2], "decode")
 
     def test_normalizes_bins_and_summarizes_growth(self) -> None:
         stage_shape = {

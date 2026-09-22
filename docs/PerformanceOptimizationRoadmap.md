@@ -108,6 +108,9 @@ P0 implementation order:
       The adjacent three-pair whole-model result remains directional because clean variance and bin-overhead gates fail.
     - [ ] Add a dual absolute/relative variance rule for sub-millisecond stages and repeat at least five alternating
       reference pairs without relaxing whole-token or multi-millisecond stage gates.
+      - [x] Share the `mean <= 1 ms, standard deviation <= 0.05 ms` exception between both stage controllers;
+        otherwise require the existing 15% stage CV, with whole/bin CV and overhead unchanged at 3%. Reject
+        non-finite statistics and campaign-wide power-policy drift. Completed on 2026-09-22.
     - [ ] P0: rerun at least five alternating LiteNN/Clang-reference fixed-trajectory pairs under one stable power
       policy. Require exact trajectory, no fallback, cache hit, whole/bin variance and overhead gates; retain and report
       outliers instead of deleting them. This is the acceptance gate for the observed directional `7.02%` module gain.
@@ -162,6 +165,12 @@ P0 implementation order:
               attention score/softmax/value, attention output, FFN norm, Gate/Up, activation, Down, logits,
               residual/dispatch, and unclassified overhead. Preserve exact replay, cache-hit, no-fallback, affinity,
               host, telemetry, and 3% variance gates.
+              - [x] Correct stage-window identity before attribution: LiteNN's generation window includes the last
+                prompt-token call, whereas the reference decode window consumes generated-token inputs. Add explicit
+                `--measurement-window decode` with N-1 calls, preserve first-generation latency/profile separately,
+                validate runtime positions, and publish matching prefix/input digests. Add the same optional OS
+                process CPU domain to both stage controllers. Completed on 2026-09-22; this does not replace native
+                per-window host/affinity validation or the full-token fine-stage evidence requirement.
             - [ ] P0: collect matched T1 and T4 cycles, instructions, IPC, cache-miss, stall, and effective-bandwidth
               evidence. Use T1 to localize the `56.052 ms/token` excess and T4 to explain why it grows to
               `231.647 ms/token` instead of assuming a scheduler or kernel owner.

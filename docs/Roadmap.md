@@ -3833,6 +3833,11 @@ Priority classes:
             - [x] Make strict/bounded activation math explicit in paired/scaling and position-stage benchmark commands
                   and reports. Cache preparation uses the measured policy, scaling rejects absent/mixed policies,
                   and switching math policy preserves the shared weight payload. Completed on 2026-09-22.
+            - [x] Align position-stage measurement with actual decode inputs instead of generated-output count.
+                  Explicit decode mode measures N-1 calls, preserves the first logits-producing prompt call separately,
+                  validates runtime positions, and records prefix/input hashes for reference matching. Both controllers
+                  share sub-millisecond variance rules, campaign-wide power-policy checks, and optional OS process CPU
+                  placement. Whole-token 3% acceptance gates remain unchanged. Completed on 2026-09-22.
       - [x] Add auditable retention controls for scratch artifacts. Completed on 2026-08-19:
             `scripts/manage_build_artifacts.py` inventories direct children, protects the shared cache, supports age,
             capacity, and entry-count policies, and remains dry-run unless `--apply` is supplied. Repository-root,
