@@ -375,8 +375,8 @@ namespace
 			++stats.operationCount;
 			stats.blockCount += op->getRegions().empty()
 			                        ? 0
-			                        : std::accumulate(op->getRegions().begin(), op->getRegions().end(), std::size_t{},
-			                                          [](std::size_t total, mlir::Region& region) {
+									: std::accumulate(op->getRegions().begin(), op->getRegions().end(), std::size_t{},
+									                  [](std::size_t total, mlir::Region& region) {
 				                                          return total + std::distance(region.begin(), region.end());
 			                                          });
 			if (llvm::isa<mlir::func::FuncOp>(op))
@@ -678,7 +678,7 @@ namespace
 					{
 						result.compact.push_back(
 						    { .group = group,
-						      .mask = static_cast<KAFFINITY>(1) << static_cast<std::size_t>(processor) });
+							  .mask = static_cast<KAFFINITY>(1) << static_cast<std::size_t>(processor) });
 					}
 				}
 #elif defined(__linux__)
@@ -1295,17 +1295,9 @@ namespace
 	// derived from Arm's optimized exp implementation; LiteNN exposes a conservative 2 ULP contract.
 	float LiteNNBoundedExpF32(float value)
 	{
-		if (std::isnan(value))
+		if (!std::isfinite(value))
 		{
-			return value;
-		}
-		if (value > 88.3762626647949F)
-		{
-			return std::numeric_limits<float>::infinity();
-		}
-		if (value < -103.972084045410F)
-		{
-			return 0.0F;
+			return std::exp(value);
 		}
 
 		constexpr float roundBias = 0x1.8p23F;
@@ -1350,8 +1342,8 @@ namespace
 		const auto squared = _mm256_mul_ps(reduced, reduced);
 		const auto polynomial = _mm256_fmadd_ps(
 		    _mm256_fmadd_ps(_mm256_fmadd_ps(_mm256_set1_ps(0x1.0e4020p-7F), reduced, _mm256_set1_ps(0x1.573e2ep-5F)),
-		                    squared,
-		                    _mm256_fmadd_ps(_mm256_set1_ps(0x1.555e66p-3F), reduced, _mm256_set1_ps(0x1.fffdb6p-2F))),
+			                squared,
+			                _mm256_fmadd_ps(_mm256_set1_ps(0x1.555e66p-3F), reduced, _mm256_set1_ps(0x1.fffdb6p-2F))),
 		    squared, _mm256_mul_ps(_mm256_set1_ps(0x1.ffffecp-1F), reduced));
 		if (!_mm256_movemask_ps(_mm256_castsi256_ps(largeExponent)))
 		{
@@ -1360,7 +1352,7 @@ namespace
 
 		const auto negativeExponent =
 		    _mm256_and_si256(_mm256_castps_si256(_mm256_cmp_ps(n, _mm256_setzero_ps(), _CMP_LE_OQ)),
-		                     _mm256_set1_epi32(static_cast<int>(0x82000000U)));
+			                 _mm256_set1_epi32(static_cast<int>(0x82000000U)));
 		const auto scale1 =
 		    _mm256_castsi256_ps(_mm256_add_epi32(negativeExponent, _mm256_set1_epi32(static_cast<int>(0x7f000000U))));
 		const auto scale2 = _mm256_castsi256_ps(_mm256_sub_epi32(exponentBits, negativeExponent));
@@ -1372,7 +1364,7 @@ namespace
 		        _mm256_castsi256_ps(extremeExponent),
 		        _mm256_or_ps(
 		            _mm256_and_ps(_mm256_castsi256_ps(largeExponent),
-		                          _mm256_mul_ps(_mm256_fmadd_ps(scale2, polynomial, scale2), scale1)),
+					              _mm256_mul_ps(_mm256_fmadd_ps(scale2, polynomial, scale2), scale1)),
 		            _mm256_andnot_ps(_mm256_castsi256_ps(largeExponent), _mm256_fmadd_ps(scale, polynomial, scale)))));
 	}
 
@@ -1449,8 +1441,8 @@ namespace
 		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_swiglu_f32",
 		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
 		                                          ? std::format("gate={}x{} up={}x{} out={}x{}", gateRows, gateColumns,
-		                                                        upRows, upColumns, outRows, outColumns)
-		                                          : std::string{});
+												                upRows, upColumns, outRows, outColumns)
+												  : std::string{});
 		LiteNNCPUSwiGLUF32(gateAligned, gateOffset, gateRows, gateColumns, gateRowStride, gateColumnStride, upAligned,
 		                   upOffset, upRows, upColumns, upRowStride, upColumnStride, outAligned, outOffset, outRows,
 		                   outColumns, outRowStride, outColumnStride, false);
@@ -1468,8 +1460,8 @@ namespace
 		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_swiglu_bounded_f32",
 		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
 		                                          ? std::format("gate={}x{} up={}x{} out={}x{}", gateRows, gateColumns,
-		                                                        upRows, upColumns, outRows, outColumns)
-		                                          : std::string{});
+												                upRows, upColumns, outRows, outColumns)
+												  : std::string{});
 		LiteNNCPUSwiGLUF32(gateAligned, gateOffset, gateRows, gateColumns, gateRowStride, gateColumnStride, upAligned,
 		                   upOffset, upRows, upColumns, upRowStride, upColumnStride, outAligned, outOffset, outRows,
 		                   outColumns, outRowStride, outColumnStride, true);
@@ -1533,7 +1525,7 @@ namespace
 		    "litenn_cpu_rope_at_positions_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("input={}x{} out={}x{}", inputRows, inputColumns, outRows, outColumns)
-		        : std::string{});
+				: std::string{});
 		const auto layout = static_cast<RoPELayout>(layoutValue);
 		if (inputRows <= 0 || inputColumns <= 0 || (inputColumns % 2) != 0 || inputRows != outRows ||
 		    inputColumns != outColumns || positionSize != inputRows || !std::isfinite(base) || base <= 0.0 ||
@@ -1579,7 +1571,7 @@ namespace
 		    "litenn_cpu_rms_norm_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("input={}x{} output={}x{}", inputRows, inputColumns, outRows, outColumns)
-		        : std::string{});
+				: std::string{});
 		if (!inputAligned || !scaleAligned || !outAligned || inputOffset < 0 || scaleOffset < 0 || outOffset < 0 ||
 		    inputRows <= 0 || inputColumns <= 0 || inputRowStride <= 0 || inputColumnStride <= 0 || scaleRows != 1 ||
 		    scaleColumns != inputColumns || scaleRowStride <= 0 || scaleColumnStride <= 0 || outRows != inputRows ||
@@ -1804,8 +1796,8 @@ namespace
 		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32",
 		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
 		                                          ? std::format("query={}x{} keys={}x{} out={}x{}", queryRows,
-		                                                        queryColumns, keyRows, keyColumns, outRows, outColumns)
-		                                          : std::string{});
+												                queryColumns, keyRows, keyColumns, outRows, outColumns)
+												  : std::string{});
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueColumns != outColumns || outColumns <= 0)
 		{
@@ -1845,9 +1837,9 @@ namespace
 		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_scatter_update_axis0_f32_rank3",
 		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
 		                                          ? std::format("data={}x{}x{} updates={}x{}x{} out={}x{}x{}", dataDim0,
-		                                                        dataDim1, dataDim2, updatesDim0, updatesDim1,
-		                                                        updatesDim2, outDim0, outDim1, outDim2)
-		                                          : std::string{});
+												                dataDim1, dataDim2, updatesDim0, updatesDim1,
+												                updatesDim2, outDim0, outDim1, outDim2)
+												  : std::string{});
 		if (indicesSize != 1 || dataDim0 != outDim0 || dataDim1 != outDim1 || dataDim2 != outDim2 || updatesDim0 != 1 ||
 		    updatesDim1 != dataDim1 || updatesDim2 != dataDim2 || dataDim0 <= 0 || dataDim1 <= 0 || dataDim2 <= 0)
 		{
@@ -1902,9 +1894,9 @@ namespace
 		CPUAOTHelperProfileTimer profileTimer("litenn_cpu_active_prefix_attention_f32_rank3",
 		                                      CompiledModuleCPUHelperProfilerAccess::Enabled()
 		                                          ? std::format("query={}x{} keys={}x{}x{} out={}x{} kv_head={}",
-		                                                        queryRows, queryColumns, keyRows, keyHeads, keyColumns,
-		                                                        outRows, outColumns, kvHead)
-		                                          : std::string{});
+												                queryRows, queryColumns, keyRows, keyHeads, keyColumns,
+												                outRows, outColumns, kvHead)
+												  : std::string{});
 		if (queryRows != 1 || outRows != 1 || positionSize != 1 || queryColumns <= 0 || keyRows <= 0 ||
 		    keyColumns != queryColumns || valueRows != keyRows || valueHeads != keyHeads || kvHead < 0 ||
 		    kvHead >= keyHeads || valueColumns != outColumns || outColumns <= 0)
@@ -2044,9 +2036,9 @@ namespace
 		    "litenn_cpu_grouped_paged_attention_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("queries={}x{} kv={}x{}x{}x{}x{} out={}x{} groups_per_kv={}", queryRows, queryColumns,
-		                      kvPlanes, residentPages, pageSize, kvHeads, kvColumns, outRows, outColumns,
-		                      queryGroupsPerKVHead)
-		        : std::string{});
+				              kvPlanes, residentPages, pageSize, kvHeads, kvColumns, outRows, outColumns,
+				              queryGroupsPerKVHead)
+				: std::string{});
 		if (queryRows <= 0 || queryColumns <= 0 || outRows != queryRows || outColumns != queryColumns ||
 		    kvPlanes != 2 || residentPages <= 0 || pageSize <= 0 || kvHeads <= 0 || kvColumns != queryColumns ||
 		    queryGroupsPerKVHead <= 0 || queryRows > kvHeads * queryGroupsPerKVHead || pageTableSize <= 0 ||
@@ -4570,27 +4562,27 @@ namespace
 			}
 		}
 		Context context{ .lhsAligned = lhsAligned,
-			             .lhsOffset = lhsOffset,
-			             .lhsColumns = lhsColumns,
-			             .lhsRowStride = lhsRowStride,
-			             .lhsColumnStride = lhsColumnStride,
-			             .rhsStride = rhsStride,
-			             .projections = projections.data(),
-			             .projectionCount = projections.size(),
-			             .outAligned = outAligned,
-			             .outOffset = outOffset,
-			             .outColumns = outColumns,
-			             .outRowStride = outRowStride,
-			             .outColumnStride = outColumnStride,
-			             .rowBytes = rowBytes,
-			             .format = format,
-			             .elementsPerBlock = layout->elementsPerBlock,
-			             .bytesPerBlock = layout->bytesPerBlock,
-			             .blockCount = blockCount,
-			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
-			             .activationDotMode = effectiveActivationDotMode,
-			             .lhsSubblockSums = lhsSubblockSums.empty() ? nullptr : lhsSubblockSums.data(),
-			             .lhsQ8KBlocks = effectiveQ8KBlocks };
+		                 .lhsOffset = lhsOffset,
+		                 .lhsColumns = lhsColumns,
+		                 .lhsRowStride = lhsRowStride,
+		                 .lhsColumnStride = lhsColumnStride,
+		                 .rhsStride = rhsStride,
+		                 .projections = projections.data(),
+		                 .projectionCount = projections.size(),
+		                 .outAligned = outAligned,
+		                 .outOffset = outOffset,
+		                 .outColumns = outColumns,
+		                 .outRowStride = outRowStride,
+		                 .outColumnStride = outColumnStride,
+		                 .rowBytes = rowBytes,
+		                 .format = format,
+		                 .elementsPerBlock = layout->elementsPerBlock,
+		                 .bytesPerBlock = layout->bytesPerBlock,
+		                 .blockCount = blockCount,
+		                 .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
+		                 .activationDotMode = effectiveActivationDotMode,
+		                 .lhsSubblockSums = lhsSubblockSums.empty() ? nullptr : lhsSubblockSums.data(),
+		                 .lhsQ8KBlocks = effectiveQ8KBlocks };
 		const auto outputElements = static_cast<std::uint64_t>(lhsRows) * static_cast<std::uint64_t>(outColumns);
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
@@ -4647,9 +4639,9 @@ namespace
 					                         : ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
 					float acc[4] = {};
 					bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
-						              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
-						              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
-						              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+					                  columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
+					                  columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
+					                  columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
 					const std::uint8_t* weightRows[4] = {};
 					for (int localColumn = 0; localColumn < 4; ++localColumn)
 					{
@@ -4662,7 +4654,7 @@ namespace
 						std::uint64_t projectionColumn = 0;
 						const auto* projection =
 						    ResolveGGMLBlockMatMulProjection({ ctx.projections, ctx.projectionCount },
-						                                     static_cast<std::uint64_t>(column), projectionColumn);
+							                                 static_cast<std::uint64_t>(column), projectionColumn);
 						if (!projection)
 						{
 							valid[localColumn] = false;
@@ -4859,8 +4851,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::DirectFloat32, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -4880,8 +4872,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_q8k_staged_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		LiteNNCPUGGMLBlockMatMulF32(lhsBase, lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
 		                            rhsBase, rhsAligned, rhsOffset, rhsBytes, rhsStride, outBase, outAligned, outOffset,
 		                            outRows, outColumns, outRowStride, outColumnStride, formatValue,
@@ -5241,7 +5233,7 @@ namespace
 		GGMLQ8KActivationPreparationProfile activationProfile;
 		const auto* staged =
 		    PrepareCachedGGMLQ8KActivation(lhsAligned + lhsOffset, lhsRows, lhsColumns, lhsRowStride, lhsColumnStride,
-		                                   profileEnabled ? &activationProfile : nullptr);
+			                               profileEnabled ? &activationProfile : nullptr);
 		if (lhsRows > 0 && !staged)
 		{
 			return;
@@ -5449,7 +5441,7 @@ namespace
 			    "litenn_cpu_swiglu_prepare_q8k_activation_f32",
 			    CompiledModuleCPUHelperProfilerAccess::Enabled()
 			        ? std::format("gate={}x{} up={}x{}", gateRows, gateColumns, upRows, upColumns)
-			        : std::string{});
+					: std::string{});
 			activation = GetGGMLQ8KActivationThreadCache().PrepareSwiGLU(gateAligned, gateOffset, gateRows, gateColumns,
 			                                                             gateRowStride, gateColumnStride, upAligned,
 			                                                             upOffset, upRowStride, upColumnStride, false);
@@ -5487,7 +5479,7 @@ namespace
 			    "litenn_cpu_swiglu_bounded_prepare_q8k_activation_f32",
 			    CompiledModuleCPUHelperProfilerAccess::Enabled()
 			        ? std::format("gate={}x{} up={}x{}", gateRows, gateColumns, upRows, upColumns)
-			        : std::string{});
+					: std::string{});
 			activation = GetGGMLQ8KActivationThreadCache().PrepareSwiGLU(gateAligned, gateOffset, gateRows, gateColumns,
 			                                                             gateRowStride, gateColumnStride, upAligned,
 			                                                             upOffset, upRowStride, upColumnStride, true);
@@ -5727,8 +5719,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount, profileThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount, profileThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -5774,8 +5766,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount, profileThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount, profileThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -5815,7 +5807,7 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value) };
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -5839,9 +5831,9 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(profileFormat, GGMLActivationDotMode::Q8KStaged, lhsRows,
-		                                            lhsColumns, outRows, outColumns, requestedThreadCount,
-		                                            profileThreadCount)
-		        : std::string{});
+				                                    lhsColumns, outRows, outColumns, requestedThreadCount,
+				                                    profileThreadCount)
+				: std::string{});
 		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
 		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,
 		                                                  outColumns, outRowStride, outColumnStride, formats,
@@ -5866,8 +5858,8 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value),
-			                      static_cast<QuantizedBlockFormat>(format2Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value),
+		                          static_cast<QuantizedBlockFormat>(format2Value) };
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -5896,9 +5888,9 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_field_interleaved_v4_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(profileFormat, GGMLActivationDotMode::Q8KStaged, lhsRows,
-		                                            lhsColumns, outRows, outColumns, requestedThreadCount,
-		                                            profileThreadCount)
-		        : std::string{});
+				                                    lhsColumns, outRows, outColumns, requestedThreadCount,
+				                                    profileThreadCount)
+				: std::string{});
 		LiteNNCPUGGMLBlockGroupedFieldInterleavedV4Q8KF32(lhsAligned, lhsOffset, lhsRows, lhsColumns, lhsRowStride,
 		                                                  lhsColumnStride, projections, outAligned, outOffset, outRows,
 		                                                  outColumns, outRowStride, outColumnStride, formats,
@@ -5973,8 +5965,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_compact_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto blockCount = header->blockCount;
 		std::vector<GGMLQ8KActivationBlock> staged(
 		    static_cast<std::size_t>(static_cast<std::uint64_t>(lhsRows) * blockCount));
@@ -6258,8 +6250,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_compact_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -6300,8 +6292,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_compact_q8k_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -6362,8 +6354,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_q8k_prepared_activation_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto* preparedBlocks = ResolveGGMLQ8KActivationBlocks(format, lhsQ8KAligned, lhsQ8KOffset, lhsQ8KBytes,
 		                                                            lhsQ8KStride, lhsRows, lhsColumns);
 		if (!preparedBlocks)
@@ -6437,8 +6429,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_q4k_prepacked_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("format=GGML_Q4_K activation=direct_prepacked lhs={}x{} out={}x{} requested_threads={}",
-		                      lhsRows, lhsColumns, outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				              lhsRows, lhsColumns, outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q4_K);
 		if (!layout || !lhsAligned || !rhsAligned || !outAligned || lhsRows < 0 || lhsColumns < 0 || outRows < 0 ||
 		    outColumns < 0 || lhsRows != outRows || lhsColumns == 0 || outColumns == 0 || rhsOffset < 0 ||
@@ -6502,21 +6494,21 @@ namespace
 		const auto useAVX2Prepared = false;
 #endif
 		Context context{ .lhsAligned = lhsAligned,
-			             .lhsOffset = lhsOffset,
-			             .lhsRowStride = lhsRowStride,
-			             .lhsColumnStride = lhsColumnStride,
-			             .rhsAligned = rhsAligned,
-			             .rhsOffset = rhsOffset,
-			             .outAligned = outAligned,
-			             .outOffset = outOffset,
-			             .outColumns = outColumns,
-			             .outRowStride = outRowStride,
-			             .outColumnStride = outColumnStride,
-			             .lhsSubblockSums = lhsSubblockSums.data(),
-			             .blockCount = blockCount,
-			             .rowBytes = rowBytes,
-			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
-			             .useAVX2Prepared = useAVX2Prepared };
+		                 .lhsOffset = lhsOffset,
+		                 .lhsRowStride = lhsRowStride,
+		                 .lhsColumnStride = lhsColumnStride,
+		                 .rhsAligned = rhsAligned,
+		                 .rhsOffset = rhsOffset,
+		                 .outAligned = outAligned,
+		                 .outOffset = outOffset,
+		                 .outColumns = outColumns,
+		                 .outRowStride = outRowStride,
+		                 .outColumnStride = outColumnStride,
+		                 .lhsSubblockSums = lhsSubblockSums.data(),
+		                 .blockCount = blockCount,
+		                 .rowBytes = rowBytes,
+		                 .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
+		                 .useAVX2Prepared = useAVX2Prepared };
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
 			for (std::uint64_t groupIndex = begin; groupIndex < end; ++groupIndex)
@@ -6526,9 +6518,9 @@ namespace
 				const auto* lhsRow = ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
 				float acc[4] = {};
 				bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+				                  columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
+				                  columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
+				                  columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
 				const auto allValid = columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns);
 				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 				{
@@ -6598,7 +6590,7 @@ namespace
 		                        static_cast<std::uint64_t>(lhsColumns);
 		const auto threadCount =
 		    ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat::GGML_Q4_K, GGMLActivationDotMode::DirectFloat32,
-		                                      operations, outputGroups, requestedThreadCount);
+			                                  operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
@@ -6663,8 +6655,8 @@ namespace
 		    "litenn_cpu_ggml_block_matmul_q6k_prepacked_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("format=GGML_Q6_K activation=direct_prepacked lhs={}x{} out={}x{} requested_threads={}",
-		                      lhsRows, lhsColumns, outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				              lhsRows, lhsColumns, outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto layout = GetQuantizedBlockLayout(QuantizedBlockFormat::GGML_Q6_K);
 		if (!layout || !lhsAligned || !rhsAligned || !outAligned || lhsRows < 0 || lhsColumns < 0 || outRows < 0 ||
 		    outColumns < 0 || lhsRows != outRows || lhsColumns == 0 || outColumns == 0 || rhsOffset < 0 ||
@@ -6703,20 +6695,20 @@ namespace
 		const auto useAVX2Prepared = false;
 #endif
 		Context context{ .lhsAligned = lhsAligned,
-			             .lhsOffset = lhsOffset,
-			             .lhsRowStride = lhsRowStride,
-			             .lhsColumnStride = lhsColumnStride,
-			             .rhsAligned = rhsAligned,
-			             .rhsOffset = rhsOffset,
-			             .outAligned = outAligned,
-			             .outOffset = outOffset,
-			             .outColumns = outColumns,
-			             .outRowStride = outRowStride,
-			             .outColumnStride = outColumnStride,
-			             .blockCount = blockCount,
-			             .rowBytes = rowBytes,
-			             .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
-			             .useAVX2Prepared = useAVX2Prepared };
+		                 .lhsOffset = lhsOffset,
+		                 .lhsRowStride = lhsRowStride,
+		                 .lhsColumnStride = lhsColumnStride,
+		                 .rhsAligned = rhsAligned,
+		                 .rhsOffset = rhsOffset,
+		                 .outAligned = outAligned,
+		                 .outOffset = outOffset,
+		                 .outColumns = outColumns,
+		                 .outRowStride = outRowStride,
+		                 .outColumnStride = outColumnStride,
+		                 .blockCount = blockCount,
+		                 .rowBytes = rowBytes,
+		                 .columnGroupsPerRow = (static_cast<std::uint64_t>(outColumns) + 3) / 4,
+		                 .useAVX2Prepared = useAVX2Prepared };
 		const auto body = [](std::uint64_t begin, std::uint64_t end, void* userData) {
 			const auto& ctx = *static_cast<const Context*>(userData);
 			for (std::uint64_t groupIndex = begin; groupIndex < end; ++groupIndex)
@@ -6726,9 +6718,9 @@ namespace
 				const auto* lhsRow = ctx.lhsAligned + ctx.lhsOffset + row * ctx.lhsRowStride;
 				float acc[4] = {};
 				bool valid[4] = { columnBase < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
-					              columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
+				                  columnBase + 1 < static_cast<std::uint64_t>(ctx.outColumns),
+				                  columnBase + 2 < static_cast<std::uint64_t>(ctx.outColumns),
+				                  columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns) };
 				const auto allValid = columnBase + 3 < static_cast<std::uint64_t>(ctx.outColumns);
 				for (std::uint64_t blockIndex = 0; blockIndex < ctx.blockCount; ++blockIndex)
 				{
@@ -6794,7 +6786,7 @@ namespace
 		                        static_cast<std::uint64_t>(lhsColumns);
 		const auto threadCount =
 		    ResolveGGMLBlockMatMulThreadCount(QuantizedBlockFormat::GGML_Q6_K, GGMLActivationDotMode::DirectFloat32,
-		                                      operations, outputGroups, requestedThreadCount);
+			                                  operations, outputGroups, requestedThreadCount);
 		const auto grain = std::max<std::uint64_t>(1, outputGroups / (std::max<std::uint64_t>(1, threadCount) * 8));
 		const auto affinityPolicy = ResolveCPUAOTAffinityPolicy(affinityPolicyValue);
 		const auto waitPolicy = ResolveCPUAOTWorkerWaitPolicy(affinityPolicyValue);
@@ -6955,13 +6947,13 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value) };
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::DirectFloat32, lhsRows,
-		                                                 lhsColumns, outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                         lhsColumns, outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -6992,13 +6984,13 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value) };
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul2_mixed_q8k_staged_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                                 outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                         outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -7032,14 +7024,14 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value),
-			                      static_cast<QuantizedBlockFormat>(format2Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value),
+		                          static_cast<QuantizedBlockFormat>(format2Value) };
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::DirectFloat32, lhsRows,
-		                                                 lhsColumns, outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                         lhsColumns, outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -7076,14 +7068,14 @@ namespace
 			return;
 		}
 		const std::array formats{ static_cast<QuantizedBlockFormat>(format0Value),
-			                      static_cast<QuantizedBlockFormat>(format1Value),
-			                      static_cast<QuantizedBlockFormat>(format2Value) };
+		                          static_cast<QuantizedBlockFormat>(format1Value),
+		                          static_cast<QuantizedBlockFormat>(format2Value) };
 		CPUAOTHelperProfileTimer profileTimer(
 		    "litenn_cpu_ggml_block_grouped_matmul3_mixed_q8k_staged_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLMixedBlockMatMulProfileDetail(formats, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                                 outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                         outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ rhs0Aligned, rhs0Offset, rhs0Bytes, rhs0Stride,
 			                           static_cast<std::int64_t>(out0Columns) },
@@ -7121,8 +7113,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::DirectFloat32, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -7163,8 +7155,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_q8k_staged_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -7205,8 +7197,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul2_q8k_prepared_activation_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto* preparedBlocks = ResolveGGMLQ8KActivationBlocks(format, lhsQ8KAligned, lhsQ8KOffset, lhsQ8KBytes,
 		                                                            lhsQ8KStride, lhsRows, lhsColumns);
 		if (!preparedBlocks)
@@ -7255,8 +7247,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::DirectFloat32, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -7305,8 +7297,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_q8k_staged_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const std::array projections{
 			GGMLBlockMatMulProjection{ .rhsAligned = rhs0Aligned,
 			                           .rhsOffset = rhs0Offset,
@@ -7355,8 +7347,8 @@ namespace
 		    "litenn_cpu_ggml_block_grouped_matmul3_q8k_prepared_activation_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? BuildGGMLBlockMatMulProfileDetail(format, GGMLActivationDotMode::Q8KStaged, lhsRows, lhsColumns,
-		                                            outRows, outColumns, requestedThreadCount)
-		        : std::string{});
+				                                    outRows, outColumns, requestedThreadCount)
+				: std::string{});
 		const auto* preparedBlocks = ResolveGGMLQ8KActivationBlocks(format, lhsQ8KAligned, lhsQ8KOffset, lhsQ8KBytes,
 		                                                            lhsQ8KStride, lhsRows, lhsColumns);
 		if (!preparedBlocks)
@@ -7516,9 +7508,9 @@ namespace
 		    "litenn_cpu_ggml_block_get_rows_i32_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("format={} rows={} columns={} storage_bytes={}",
-		                      QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
-		                      outColumns, storageBytes)
-		        : std::string{});
+				              QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
+				              outColumns, storageBytes)
+				: std::string{});
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);
@@ -7535,9 +7527,9 @@ namespace
 		    "litenn_cpu_ggml_block_get_rows_i64_f32",
 		    CompiledModuleCPUHelperProfilerAccess::Enabled()
 		        ? std::format("format={} rows={} columns={} storage_bytes={}",
-		                      QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
-		                      outColumns, storageBytes)
-		        : std::string{});
+				              QuantizedBlockFormatName(static_cast<QuantizedBlockFormat>(formatValue)), outRows,
+				              outColumns, storageBytes)
+				: std::string{});
 		LiteNNCPUGGMLBlockGetRowsF32(storageAligned, storageOffset, storageBytes, storageStride, indicesAligned,
 		                             indicesOffset, indicesCount, indicesStride, outAligned, outOffset, outRows,
 		                             outColumns, outRowStride, outColumnStride, formatValue);
@@ -8083,7 +8075,7 @@ namespace
 	{
 		return options.cpuAOTActivationMathPolicy == CPUAOTActivationMathPolicy::Bounded
 		           ? kCPUAOTBoundedActivationMathFeature
-		           : 0;
+				   : 0;
 	}
 
 	void ValidateCPUAOTCompilerOptions(const CompilerOptions& options)
@@ -8557,7 +8549,7 @@ namespace
 		{
 			throw std::runtime_error(
 			    std::format("Compiled module separated '{}' region size mismatch: expected {}, got {}", expected.name,
-			                expected.size, bytes.size()));
+				            expected.size, bytes.size()));
 		}
 		if (expected.alignment > 1 && region.size != 0 &&
 		    reinterpret_cast<std::uintptr_t>(region.data) % expected.alignment != 0)
@@ -9019,7 +9011,7 @@ namespace
 		{
 			const auto compactBytes =
 			    GGMLCompactInterleavedByteSize(params.blockFormat, static_cast<std::uint64_t>(params.expressedShape[0]),
-			                                   static_cast<std::uint64_t>(params.expressedShape[1]));
+				                               static_cast<std::uint64_t>(params.expressedShape[1]));
 			if (!compactBytes || *compactBytes > std::numeric_limits<std::size_t>::max())
 			{
 				return std::nullopt;
@@ -9030,7 +9022,7 @@ namespace
 		{
 			const auto interleavedBytes =
 			    GGMLFieldInterleavedV4ByteSize(params.blockFormat, static_cast<std::uint64_t>(params.expressedShape[0]),
-			                                   static_cast<std::uint64_t>(params.expressedShape[1]));
+				                               static_cast<std::uint64_t>(params.expressedShape[1]));
 			if (!interleavedBytes || *interleavedBytes > std::numeric_limits<std::size_t>::max())
 			{
 				return std::nullopt;
@@ -9053,7 +9045,7 @@ namespace
 			return std::nullopt;
 		}
 		return std::vector<std::size_t>{ params.expressedShape[0] * blockCount *
-			                             static_cast<std::size_t>(*preparedBlockBytes) };
+		                                 static_cast<std::size_t>(*preparedBlockBytes) };
 	}
 
 	std::optional<std::uint64_t> AppendGGMLPrepackedPayloadBytes(std::vector<std::byte>& bytes,
@@ -9345,8 +9337,8 @@ namespace
 			    using T = std::decay_t<decltype(typedNode)>;
 			    auto copy = typedNode;
 			    if constexpr (std::same_as<T, ParamRefNode> || std::same_as<T, ConstantNode> ||
-			                  std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
-			                  std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
+				              std::same_as<T, QuantizedConstantNode> || std::same_as<T, VariableRefNode> ||
+				              std::same_as<T, LoadActivationNode> || std::same_as<T, TapeLoadActivationNode>)
 			    {
 				    return copy;
 			    }
@@ -9385,14 +9377,14 @@ namespace
 				    return copy;
 			    }
 			    else if constexpr (std::same_as<T, CastNode> || std::same_as<T, QuantizeNode> ||
-			                       std::same_as<T, DequantizeNode> || std::same_as<T, SaveActivationNode> ||
-			                       std::same_as<T, TapeSaveActivationNode> || std::same_as<T, ReduceOpNode> ||
-			                       std::same_as<T, ReshapeNode> || std::same_as<T, PermuteNode> ||
-			                       std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
-			                       std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
-			                       std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
-			                       std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
-			                       std::same_as<T, ArgsortNode>)
+				                   std::same_as<T, DequantizeNode> || std::same_as<T, SaveActivationNode> ||
+				                   std::same_as<T, TapeSaveActivationNode> || std::same_as<T, ReduceOpNode> ||
+				                   std::same_as<T, ReshapeNode> || std::same_as<T, PermuteNode> ||
+				                   std::same_as<T, BroadcastToNode> || std::same_as<T, PadNode> ||
+				                   std::same_as<T, ScanNode> || std::same_as<T, SoftmaxNode> ||
+				                   std::same_as<T, Im2ColNode> || std::same_as<T, Pool2DNode> ||
+				                   std::same_as<T, UpsampleNode> || std::same_as<T, SliceNode> ||
+				                   std::same_as<T, ArgsortNode>)
 			    {
 				    copy.input = remap(copy.input);
 				    return copy;
@@ -9620,7 +9612,7 @@ namespace
 			const auto variableBytes =
 			    prepackedVariablePlans[variableIndex] &&
 			            GGMLPrepackedStorageShape(*prepackedVariablePlans[variableIndex],
-			                                      options.cpuAOTGGMLPrepackedWeightLayout)
+						                          options.cpuAOTGGMLPrepackedWeightLayout)
 			        ? static_cast<std::uint64_t>((*GGMLPrepackedStorageShape(
 			              *prepackedVariablePlans[variableIndex], options.cpuAOTGGMLPrepackedWeightLayout))[0])
 			        : static_cast<std::uint64_t>(data.NumElements()) * ElementByteSize(data.DType());
@@ -9706,9 +9698,9 @@ namespace
 						result.externalTensorInfos.push_back(MakeExternalTensorInfo(
 						    prepackedShape
 						        ? std::format("{}.prepacked.{}.{}", name,
-						                      GGMLPrepackedLayoutName(options.cpuAOTGGMLPrepackedWeightLayout),
-						                      QuantizedBlockFormatName(prepackedPlan->blockFormat))
-						        : name,
+								              GGMLPrepackedLayoutName(options.cpuAOTGGMLPrepackedWeightLayout),
+								              QuantizedBlockFormatName(prepackedPlan->blockFormat))
+								: name,
 						    kWeightsRegionName, output.dtype, result.weights, externalShape, *offset, externalByteSize,
 						    kAlignment));
 					}
@@ -9746,7 +9738,7 @@ namespace
 					const auto name = std::format("constant_{}_{}", subgraphId, nodeId);
 					result.externalTensorInfos.push_back(
 					    MakeExternalTensorInfo(name, kConstantsRegionName, output.dtype, result.constants, output.shape,
-					                           *offset, byteSize, kAlignment));
+						                       *offset, byteSize, kAlignment));
 					directExternalByNode[subgraphId][nodeId] = externalId;
 					AppendUniqueExternalId(externalDepsBySubgraph[subgraphId], externalId);
 				}
@@ -10252,12 +10244,12 @@ namespace
 		                              CPUAOTRequiredRuntimeFeatures(options));
 		auto instructions = EmitObjectFile(*module);
 		return CompiledArtifactParts{ std::move(rodata),
-			                          std::move(instructions),
-			                          std::move(externalConstants),
-			                          std::move(externalWeights),
-			                          std::move(externalTensorInfos),
-			                          inputSpecs,
-			                          outputSpecs };
+		                              std::move(instructions),
+		                              std::move(externalConstants),
+		                              std::move(externalWeights),
+		                              std::move(externalTensorInfos),
+		                              inputSpecs,
+		                              outputSpecs };
 	}
 
 	std::optional<CompiledArtifactParts>
@@ -10460,18 +10452,18 @@ namespace
 
 		if (tryAppendPattern([&] {
 			    return appendWholeField(0) && appendWholeField(1) && appendWholeField(2) && appendWholeField(3) &&
-			           appendWholeField(4);
+				       appendWholeField(4);
 		    }) ||
 		    tryAppendPattern([&] {
 			    return appendWholeField(1) && appendWholeField(2) && appendWholeField(3) && appendWholeField(4);
 		    }) ||
 		    tryAppendPattern([&] {
 			    return appendWholeField(1) && appendWholeField(2) && appendArrayScalars(3, sizesTy) &&
-			           appendArrayScalars(4, stridesTy);
+				       appendArrayScalars(4, stridesTy);
 		    }) ||
 		    tryAppendPattern([&] {
 			    return appendWholeField(0) && appendWholeField(1) && appendWholeField(2) &&
-			           appendArrayScalars(3, sizesTy) && appendArrayScalars(4, stridesTy);
+				       appendArrayScalars(3, sizesTy) && appendArrayScalars(4, stridesTy);
 		    }))
 		{
 			return;
@@ -11123,9 +11115,9 @@ namespace
 		RegisterJITRuntimeSymbol("malloc", reinterpret_cast<void*>(&LiteNNRuntimeMalloc));
 		RegisterJITRuntimeSymbol("free", reinterpret_cast<void*>(&LiteNNRuntimeFree));
 		RegisterJITRuntimeSymbol(
-		    "memcpy", reinterpret_cast<void*>(static_cast<void* (*) (void*, const void*, std::size_t)>(&std::memcpy)));
+		    "memcpy", reinterpret_cast<void*>(static_cast<void* (*)(void*, const void*, std::size_t)>(&std::memcpy)));
 		RegisterJITRuntimeSymbol(
-		    "memset", reinterpret_cast<void*>(static_cast<void* (*) (void*, int, std::size_t)>(&std::memset)));
+		    "memset", reinterpret_cast<void*>(static_cast<void* (*)(void*, int, std::size_t)>(&std::memset)));
 		RegisterJITRuntimeSymbol("memrefCopy", reinterpret_cast<void*>(&LiteNNRuntimeMemRefCopy));
 		RegisterJITRuntimeSymbol("expf", reinterpret_cast<void*>(&LiteNNRuntimeExpF));
 		RegisterJITRuntimeSymbol("logf", reinterpret_cast<void*>(&LiteNNRuntimeLogF));
@@ -11458,8 +11450,8 @@ namespace
 			const auto label = spec.name.empty() ? std::to_string(index) : std::format("{} ('{}')", index, spec.name);
 			throw std::runtime_error(
 			    std::format("CompiledModule {} {} mismatch: expected {}, got {}", role, label,
-			                Validation::FormatInfo(spec.type.dtype, shape),
-			                Validation::FormatInfo(binding.type.dtype, binding.type.StaticShape())));
+				            Validation::FormatInfo(spec.type.dtype, shape),
+				            Validation::FormatInfo(binding.type.dtype, binding.type.StaticShape())));
 		}
 		if (!binding.name.empty() && !spec.name.empty() && binding.name != spec.name)
 		{
@@ -11474,9 +11466,9 @@ namespace
 	                                            std::optional<QuantizationParams> quantization = std::nullopt)
 	{
 		return { .data = tensor.UnsafeRawData(),
-			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
-			     .name = std::move(name),
-			     .quantization = std::move(quantization) };
+		         .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
+		         .name = std::move(name),
+		         .quantization = std::move(quantization) };
 	}
 
 	template <Device D>
@@ -11484,9 +11476,9 @@ namespace
 	                                            std::optional<QuantizationParams> quantization = std::nullopt)
 	{
 		return { .data = const_cast<void*>(tensor.UnsafeRawData()),
-			     .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
-			     .name = std::move(name),
-			     .quantization = std::move(quantization) };
+		         .type = MakeTensorType(tensor.DType(), tensor.Shape().Dims),
+		         .name = std::move(name),
+		         .quantization = std::move(quantization) };
 	}
 
 	std::size_t NormalizeThreadCount(std::size_t requested, std::size_t workCount)
@@ -11819,11 +11811,11 @@ namespace
 		if (const auto inputIndex = GetParamIndex(subgraph, output))
 		{
 			return CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::InputTensor,
-				                        .index = *inputIndex,
-				                        .byteOffset = 0,
-				                        .byteSize = byteSize,
-				                        .dtype = info.dtype,
-				                        .shape = info.shape };
+			                            .index = *inputIndex,
+			                            .byteOffset = 0,
+			                            .byteSize = byteSize,
+			                            .dtype = info.dtype,
+			                            .shape = info.shape };
 		}
 		if (const auto* constant = std::get_if<ConstantNode>(&entry.node))
 		{
@@ -11832,11 +11824,11 @@ namespace
 				return std::nullopt;
 			}
 			return CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
-				                        .index = 0,
-				                        .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
-				                        .byteSize = byteSize,
-				                        .dtype = info.dtype,
-				                        .shape = info.shape };
+			                            .index = 0,
+			                            .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
+			                            .byteSize = byteSize,
+			                            .dtype = info.dtype,
+			                            .shape = info.shape };
 		}
 		if (const auto* variable = std::get_if<VariableRefNode>(&entry.node))
 		{
@@ -11851,11 +11843,11 @@ namespace
 				return std::nullopt;
 			}
 			return CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
-				                        .index = 0,
-				                        .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
-				                        .byteSize = byteSize,
-				                        .dtype = info.dtype,
-				                        .shape = info.shape };
+			                            .index = 0,
+			                            .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
+			                            .byteSize = byteSize,
+			                            .dtype = info.dtype,
+			                            .shape = info.shape };
 		}
 		return std::nullopt;
 	}
@@ -12959,7 +12951,7 @@ namespace
 			return std::nullopt;
 		}
 		return CUDANativeReducePlan{ reduce->op,   *inputIndex, *inputElementCount, *outputElementCount,
-			                         reduce->axis, input.shape, output.shape };
+		                             reduce->axis, input.shape, output.shape };
 	}
 
 	std::optional<CUDANativeSoftmaxPlan> MatchCUDANativeSoftmaxF32(const Graph& graph)
@@ -13069,11 +13061,11 @@ namespace
 		if (const auto tableInputIndex = GetParamIndex(subgraph, getRows->data))
 		{
 			tableRef = { .kind = CUDANativeArgumentKind::InputTensor,
-				         .index = *tableInputIndex,
-				         .byteOffset = 0,
-				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
-				         .dtype = tableInfo.dtype,
-				         .shape = tableInfo.shape };
+			             .index = *tableInputIndex,
+			             .byteOffset = 0,
+			             .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+			             .dtype = tableInfo.dtype,
+			             .shape = tableInfo.shape };
 		}
 		else if (const auto* variable = std::get_if<VariableRefNode>(&tableEntry.node))
 		{
@@ -13089,11 +13081,11 @@ namespace
 				return std::nullopt;
 			}
 			tableRef = { .kind = CUDANativeArgumentKind::ConstantTensor,
-				         .index = 0,
-				         .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
-				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
-				         .dtype = tableInfo.dtype,
-				         .shape = tableInfo.shape };
+			             .index = 0,
+			             .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
+			             .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+			             .dtype = tableInfo.dtype,
+			             .shape = tableInfo.shape };
 		}
 		else if (const auto* constant = std::get_if<ConstantNode>(&tableEntry.node))
 		{
@@ -13102,11 +13094,11 @@ namespace
 				return std::nullopt;
 			}
 			tableRef = { .kind = CUDANativeArgumentKind::ConstantTensor,
-				         .index = 0,
-				         .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
-				         .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
-				         .dtype = tableInfo.dtype,
-				         .shape = tableInfo.shape };
+			             .index = 0,
+			             .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
+			             .byteSize = TensorByteSize(tableInfo.dtype, tableInfo.shape),
+			             .dtype = tableInfo.dtype,
+			             .shape = tableInfo.shape };
 		}
 		else
 		{
@@ -13119,11 +13111,11 @@ namespace
 			return std::nullopt;
 		}
 		return CUDANativeGetRowsPlan{ .table = std::move(tableRef),
-			                          .indicesInputIndex = *indicesInputIndex,
-			                          .indexType = indicesInfo.dtype,
-			                          .rowSize = static_cast<std::uint32_t>(rowSize64),
-			                          .indexCount = *indexCount,
-			                          .outputElementCount = *outputElementCount };
+		                              .indicesInputIndex = *indicesInputIndex,
+		                              .indexType = indicesInfo.dtype,
+		                              .rowSize = static_cast<std::uint32_t>(rowSize64),
+		                              .indexCount = *indexCount,
+		                              .outputElementCount = *outputElementCount };
 	}
 
 	std::optional<CUDANativeRMSNormPlan> MatchCUDANativeRMSNormF32(const Graph& graph,
@@ -13191,11 +13183,11 @@ namespace
 			if (const auto scaleInputIndex = GetParamIndex(subgraph, *norm->scale))
 			{
 				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::InputTensor,
-					                            .index = *scaleInputIndex,
-					                            .byteOffset = 0,
-					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
-					                            .dtype = scaleInfo.dtype,
-					                            .shape = scaleInfo.shape };
+				                                .index = *scaleInputIndex,
+				                                .byteOffset = 0,
+				                                .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+				                                .dtype = scaleInfo.dtype,
+				                                .shape = scaleInfo.shape };
 			}
 			else if (const auto* variable = std::get_if<VariableRefNode>(&scaleEntry.node))
 			{
@@ -13211,11 +13203,11 @@ namespace
 					return std::nullopt;
 				}
 				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
-					                            .index = 0,
-					                            .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
-					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
-					                            .dtype = scaleInfo.dtype,
-					                            .shape = scaleInfo.shape };
+				                                .index = 0,
+				                                .byteOffset = AppendCUDANativeConstantTensor(payload, tensor),
+				                                .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+				                                .dtype = scaleInfo.dtype,
+				                                .shape = scaleInfo.shape };
 			}
 			else if (const auto* constant = std::get_if<ConstantNode>(&scaleEntry.node))
 			{
@@ -13224,11 +13216,11 @@ namespace
 					return std::nullopt;
 				}
 				scaleRef = CUDANativeTensorRef{ .kind = CUDANativeArgumentKind::ConstantTensor,
-					                            .index = 0,
-					                            .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
-					                            .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
-					                            .dtype = scaleInfo.dtype,
-					                            .shape = scaleInfo.shape };
+				                                .index = 0,
+				                                .byteOffset = AppendCUDANativeConstantTensor(payload, constant->value),
+				                                .byteSize = TensorByteSize(scaleInfo.dtype, scaleInfo.shape),
+				                                .dtype = scaleInfo.dtype,
+				                                .shape = scaleInfo.shape };
 			}
 			else
 			{
@@ -13237,10 +13229,10 @@ namespace
 		}
 
 		return CUDANativeRMSNormPlan{ .inputIndex = *inputIndex,
-			                          .scale = std::move(scaleRef),
-			                          .rowSize = static_cast<std::uint32_t>(input.shape.back()),
-			                          .elementCount = *elementCount,
-			                          .epsilon = static_cast<float>(norm->epsilon) };
+		                              .scale = std::move(scaleRef),
+		                              .rowSize = static_cast<std::uint32_t>(input.shape.back()),
+		                              .elementCount = *elementCount,
+		                              .epsilon = static_cast<float>(norm->epsilon) };
 	}
 
 	std::optional<CUDANativeRoPEPlan> MatchCUDANativeRoPEF32(const Graph& graph)
@@ -13304,14 +13296,14 @@ namespace
 			positionType = positions.dtype;
 		}
 		return CUDANativeRoPEPlan{ .inputIndex = *inputIndex,
-			                       .positionsInputIndex = positionsInputIndex,
-			                       .positionType = positionType,
-			                       .featureSize = static_cast<std::uint32_t>(input.shape[1]),
-			                       .elementCount = *elementCount,
-			                       .positionOffset = static_cast<std::uint32_t>(rope->positionOffset),
-			                       .base = rope->base,
-			                       .frequencyScale = rope->frequencyScale,
-			                       .layout = rope->layout };
+		                           .positionsInputIndex = positionsInputIndex,
+		                           .positionType = positionType,
+		                           .featureSize = static_cast<std::uint32_t>(input.shape[1]),
+		                           .elementCount = *elementCount,
+		                           .positionOffset = static_cast<std::uint32_t>(rope->positionOffset),
+		                           .base = rope->base,
+		                           .frequencyScale = rope->frequencyScale,
+		                           .layout = rope->layout };
 	}
 
 	std::optional<CUDANativeCastPlan> MatchCUDANativeCast(const Graph& graph)
@@ -13461,7 +13453,7 @@ namespace
 			return std::nullopt;
 		}
 		return CUDANativeSlicePlan{ *inputIndex,  *inputElementCount, *outputElementCount, slice->axis,
-			                        slice->start, input.shape,        output.shape };
+		                            slice->start, input.shape,        output.shape };
 	}
 
 	CUDANativeFeature CUDANativeBinaryF32FeatureFlag(BinaryOp op)
@@ -13879,7 +13871,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14429,7 +14421,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14487,7 +14479,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14544,7 +14536,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14605,7 +14597,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14672,7 +14664,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14736,9 +14728,9 @@ namespace
 			const auto sequenceLength = plan->elementCount / plan->featureSize;
 			arguments.push_back(
 			    { .kind = CUDANativeArgumentKind::InputTensor,
-			      .index = *plan->positionsInputIndex,
-			      .byteOffset = 0,
-			      .byteSize = static_cast<std::uint64_t>(sequenceLength) * ElementByteSize(*plan->positionType) });
+				  .index = *plan->positionsInputIndex,
+				  .byteOffset = 0,
+				  .byteSize = static_cast<std::uint64_t>(sequenceLength) * ElementByteSize(*plan->positionType) });
 		}
 		arguments.push_back(
 		    { .kind = CUDANativeArgumentKind::Scalar, .index = 0, .byteOffset = 0, .byteSize = sizeof(std::uint32_t) });
@@ -14756,7 +14748,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14821,7 +14813,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -14880,7 +14872,7 @@ namespace
 		                              CompiledModuleBackend::CUDANative);
 		auto instructions = SerializeCUDANativeInstructionPayload(payload);
 		return CUDANativeArtifactParts{ std::move(rodata), std::move(instructions), std::move(inputSpecs),
-			                            std::move(outputSpecs) };
+		                                std::move(outputSpecs) };
 #else
 		(void) graph;
 		return std::nullopt;
@@ -15033,8 +15025,8 @@ namespace
 	CUDAExecutionOptions ToCUDAExecutionOptions(CompiledModuleCUDARunOptions options)
 	{
 		return CUDAExecutionOptions{ .stream = options.stream,
-			                         .synchronize = options.synchronize,
-			                         .enableCUBLASLt = options.enableCUBLASLt };
+		                             .synchronize = options.synchronize,
+		                             .enableCUBLASLt = options.enableCUBLASLt };
 	}
 
 	bool RequestsCUDAGraphReplay(CompiledModuleCUDARunOptions options)
@@ -16025,7 +16017,7 @@ namespace
 					}
 					const auto appended =
 					    AppendVulkanP0ExternalTensor(*builder, std::move(name), kWeightsRegionName,
-					                                 graph.GetVariable(variable->variableIndex)->Data(), info);
+						                             graph.GetVariable(variable->variableIndex)->Data(), info);
 					if (!appended)
 					{
 						builder->variableExternalIds.erase(it);
@@ -16547,7 +16539,7 @@ namespace
 			if (const auto found = kernelIndexByNode.find(output.node); found != kernelIndexByNode.end())
 			{
 				return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
-					                             .index = found->second };
+				                                 .index = found->second };
 			}
 
 			const auto& entry = subgraph.GetNodeEntry(output.node);
@@ -16595,7 +16587,7 @@ namespace
 					    found != bodyKernelIndexByNode.end())
 					{
 						return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
-							                             .index = found->second };
+						                                 .index = found->second };
 					}
 					const auto& bodyEntry = body.GetNodeEntry(bodyOutput.node);
 					if (bodyEntry.outputInfos.size() != 1 || bodyEntry.outputInfos[0].dtype != DataType::Float32 ||
@@ -16624,7 +16616,7 @@ namespace
 					plan.kernels.push_back(
 					    VulkanP0BinaryDAGKernelPlan{ .op = bodyBinary->op, .lhs = *lhs, .rhs = *rhs });
 					return VulkanP0BinaryDAGOperand{ .kind = VulkanP0BinaryDAGOperandKind::Intermediate,
-						                             .index = kernelIndex };
+					                                 .index = kernelIndex };
 				};
 
 				const auto fusedOperand = collectBody(collectBody, body.Results()[0]);
@@ -16736,7 +16728,7 @@ namespace
 					return std::nullopt;
 				}
 				return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Input,
-					                                  .index = *inputIndex };
+				                                      .index = *inputIndex };
 			}
 			if (output.port != 0 || output.node >= subgraph.NodeCount())
 			{
@@ -16745,7 +16737,7 @@ namespace
 			if (const auto found = kernelIndexByNode.find(output.node); found != kernelIndexByNode.end())
 			{
 				return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-					                                  .index = found->second };
+				                                      .index = found->second };
 			}
 
 			const auto& entry = subgraph.GetNodeEntry(output.node);
@@ -16793,7 +16785,7 @@ namespace
 					    found != bodyKernelIndexByNode.end())
 					{
 						return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-							                                  .index = found->second };
+						                                      .index = found->second };
 					}
 					const auto& bodyEntry = body.GetNodeEntry(bodyOutput.node);
 					if (bodyEntry.outputInfos.size() != 1 || bodyEntry.outputInfos[0].dtype != DataType::Float32 ||
@@ -16826,7 +16818,7 @@ namespace
 						    .input = *input,
 						});
 						return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-							                                  .index = kernelIndex };
+						                                      .index = kernelIndex };
 					}
 					const auto* bodyBinary = std::get_if<BinaryOpNode>(&bodyEntry.node);
 					if (!bodyBinary || !VulkanNativeSupportsSameShapeBinaryF32(bodyBinary->op))
@@ -16853,7 +16845,7 @@ namespace
 					    .rhs = *rhs,
 					});
 					return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-						                                  .index = kernelIndex };
+					                                      .index = kernelIndex };
 				};
 
 				const auto fusedOperand = collectBody(collectBody, body.Results()[0]);
@@ -16902,7 +16894,7 @@ namespace
 				    .input = *input,
 				});
 				return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-					                                  .index = kernelIndex };
+				                                      .index = kernelIndex };
 			}
 			const auto* binary = std::get_if<BinaryOpNode>(&entry.node);
 			if (!binary || !VulkanNativeSupportsSameShapeBinaryF32(binary->op))
@@ -16929,7 +16921,7 @@ namespace
 			    .rhs = *rhs,
 			});
 			return VulkanP0ElementwiseDAGOperand{ .kind = VulkanP0ElementwiseDAGOperandKind::Intermediate,
-				                                  .index = kernelIndex };
+			                                      .index = kernelIndex };
 		};
 
 		const auto outputOperand = collect(collect, result);
@@ -16960,9 +16952,9 @@ namespace
 		{
 			return VulkanNativeUnsupported(
 			    std::format("Vulkan native currently requires a forward-only graph with no activations or tape slots; "
-			                "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
-			                graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
-			                graph.ActivationSlotCount(), graph.TapeSlotCount()));
+				            "got subgraphs={}, forward={}, backward={}, variables={}, activationSlots={}, tapeSlots={}",
+				            graph.SubgraphCount(), graph.Forward(), graph.Backward().has_value(), graph.VariableCount(),
+				            graph.ActivationSlotCount(), graph.TapeSlotCount()));
 		}
 
 		const auto& subgraph = graph.GetSubgraph(graph.Forward());
@@ -17153,13 +17145,13 @@ namespace
 			{
 				return VulkanNativeUnsupported(
 				    std::format("Vulkan native ConvTranspose2D requires static rank-4 f32 tensors, got input={} "
-				                "weight={} output={} "
-				                "strides={} dilations={} lowPads={} highPads={} outputPads={} groupCount={}",
-				                Validation::ShapeToString(input->shape), Validation::ShapeToString(weight->shape),
-				                Validation::ShapeToString(output.shape), Validation::ShapeToString(convT->strides),
-				                Validation::ShapeToString(convT->dilations), Validation::ShapeToString(convT->lowPads),
-				                Validation::ShapeToString(convT->highPads),
-				                Validation::ShapeToString(convT->outputPads), convT->groupCount));
+					            "weight={} output={} "
+					            "strides={} dilations={} lowPads={} highPads={} outputPads={} groupCount={}",
+					            Validation::ShapeToString(input->shape), Validation::ShapeToString(weight->shape),
+					            Validation::ShapeToString(output.shape), Validation::ShapeToString(convT->strides),
+					            Validation::ShapeToString(convT->dilations), Validation::ShapeToString(convT->lowPads),
+					            Validation::ShapeToString(convT->highPads),
+					            Validation::ShapeToString(convT->outputPads), convT->groupCount));
 			}
 			return VulkanNativeSupported(
 			    std::format("f32 ConvTranspose2D groupCount={} bias={}", convT->groupCount, bias.has_value()));
@@ -17173,7 +17165,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("unsupported unary op {} for Vulkan native same-shape unary slice",
-					                VulkanNativeOpName(unary->op)));
+						            VulkanNativeOpName(unary->op)));
 				}
 				const auto inputIndex = GetVulkanP0ParamIndex(subgraph, unary->input);
 				if (!inputIndex)
@@ -17185,7 +17177,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native unary slice requires matching input/output dtypes, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (!VulkanNativeSupportsSameShapeUnary(input.dtype, unary->op))
 				{
@@ -17197,7 +17189,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native unary slice requires identical input/output shapes, got {} -> {}",
-					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+						            Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
 				}
 				if (auto shapeReport = DiagnoseVulkanP0SingleForwardShape(output.shape, "unary output");
 				    !shapeReport.supported)
@@ -17220,19 +17212,19 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native cast output dtype must match target type, got output={} target={}",
-					                DataTypeName(output.dtype), DataTypeName(cast->targetType)));
+						            DataTypeName(output.dtype), DataTypeName(cast->targetType)));
 				}
 				if (input.shape != output.shape)
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native cast slice requires identical input/output shapes, got {} -> {}",
-					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+						            Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
 				}
 				if (!VulkanNativeSupportsSameShapeCast(input.dtype, output.dtype))
 				{
 					return VulkanNativeUnsupported(
 					    std::format("unsupported cast {} -> {} for Vulkan native same-shape cast slice",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (auto shapeReport = DiagnoseVulkanP0SingleForwardShape(output.shape, "cast output");
 				    !shapeReport.supported)
@@ -17255,7 +17247,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native reduce slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				const auto expectedShape = VulkanP0ReduceOutputShape(input.shape, reduce->axis);
 				if (reduce->axis >= input.shape.size() || expectedShape != output.shape)
@@ -17268,7 +17260,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("unsupported reduce op {} or shape for Vulkan native f32 reduce slice",
-					                VulkanNativeOpName(reduce->op)));
+						            VulkanNativeOpName(reduce->op)));
 				}
 				return VulkanNativeSupported(
 				    std::format("f32 reduce {} axis={}", VulkanNativeOpName(reduce->op), reduce->axis));
@@ -17286,13 +17278,13 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native softmax slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (input.shape != output.shape)
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native softmax slice requires identical input/output shapes, got {} -> {}",
-					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
+						            Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape)));
 				}
 				if (!VulkanNativeSupportsSoftmaxF32(input.shape, softmax->axis))
 				{
@@ -17316,7 +17308,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native normalization slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (input.shape != output.shape)
 				{
@@ -17349,7 +17341,7 @@ namespace
 					{
 						return VulkanNativeUnsupported(
 						    std::format("Vulkan native normalization {} tensor must be Float32, got {}", label,
-						                DataTypeName(affineInfo.dtype)));
+							            DataTypeName(affineInfo.dtype)));
 					}
 					const auto affineShapeSupported =
 					    norm->mode == NormalizationMode::GroupNorm
@@ -17396,18 +17388,18 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native Pool2D slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (!VulkanNativeSupportsPool2DF32(pool->mode, input.shape, output.shape, pool->kernelShape,
 				                                   pool->strides, pool->lowPads, pool->highPads, pool->countIncludePad))
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native Pool2D requires static rank-4 f32 input/output, got input={} "
-					                "output={} kernel={} strides={} lowPads={} highPads={} countIncludePad={}",
-					                Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
-					                Validation::ShapeToString(pool->kernelShape),
-					                Validation::ShapeToString(pool->strides), Validation::ShapeToString(pool->lowPads),
-					                Validation::ShapeToString(pool->highPads), pool->countIncludePad));
+						            "output={} kernel={} strides={} lowPads={} highPads={} countIncludePad={}",
+						            Validation::ShapeToString(input.shape), Validation::ShapeToString(output.shape),
+						            Validation::ShapeToString(pool->kernelShape),
+						            Validation::ShapeToString(pool->strides), Validation::ShapeToString(pool->lowPads),
+						            Validation::ShapeToString(pool->highPads), pool->countIncludePad));
 				}
 				return VulkanNativeSupported(std::format("f32 Pool2D {}", VulkanNativeOpName(pool->mode)));
 			}
@@ -17425,7 +17417,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native nearest Upsample slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (upsample->mode != UpsampleMode::Nearest)
 				{
@@ -17455,7 +17447,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native Slice requires Float32 input/output, got {} -> {}",
-					                DataTypeName(input.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(input.dtype), DataTypeName(output.dtype)));
 				}
 				if (!VulkanNativeSupportsSliceF32(input.shape, output.shape, slice->axis, slice->start, slice->length))
 				{
@@ -17496,7 +17488,7 @@ namespace
 				{
 					return VulkanNativeUnsupported(
 					    std::format("Vulkan native Concat requires Float32 inputs/output, got lhs={} rhs={} output={}",
-					                DataTypeName(lhs.dtype), DataTypeName(rhs.dtype), DataTypeName(output.dtype)));
+						            DataTypeName(lhs.dtype), DataTypeName(rhs.dtype), DataTypeName(output.dtype)));
 				}
 				if (!VulkanNativeSupportsConcatF32(lhs.shape, rhs.shape, output.shape, concat->axis))
 				{
@@ -17561,7 +17553,7 @@ namespace
 			{
 				return VulkanNativeUnsupported(
 				    std::format("unsupported binary op {} for Vulkan native same-shape binary slice",
-				                VulkanNativeOpName(binary->op)));
+					            VulkanNativeOpName(binary->op)));
 			}
 			const auto lhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->lhs);
 			const auto rhsInputIndex = GetVulkanP0ParamIndex(subgraph, binary->rhs);
@@ -18014,7 +18006,7 @@ namespace
 				}
 				const auto workspaceIndex =
 				    workspacePlanner.Allocate(TensorByteSizeForShape(output.dtype, output.shape), alignof(float),
-				                              chain.kernels.size(), subgraph.NodeCount());
+					                          chain.kernels.size(), subgraph.NodeCount());
 				return VulkanP0TensorRef{
 					.argumentKind = VulkanNativeArgumentKind::WorkspaceTensor,
 					.argumentIndex = workspaceIndex,
@@ -18847,7 +18839,7 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(plan->dtype == DataType::Float32
 		                                  ? VulkanNativeUnaryF32FeatureFlag(plan->op)
-		                                  : VulkanNativeFeature::SameShapeElementwiseUnaryLowPrecision);
+										  : VulkanNativeFeature::SameShapeElementwiseUnaryLowPrecision);
 		auto spirv = VulkanNativeSameShapeUnarySPIRV(plan->dtype, plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
@@ -19159,7 +19151,7 @@ namespace
 		{
 			auto spirv =
 			    VulkanNativeNormalizationF32SPIRV(plan->mode, plan->inputShape, plan->axis, plan->epsilon,
-			                                      plan->scale.has_value(), plan->bias.has_value(), plan->groupCount);
+				                                  plan->scale.has_value(), plan->bias.has_value(), plan->groupCount);
 			payload.spirv = std::move(spirv.words);
 
 			std::vector<VulkanNativeArgumentSpec> arguments;
@@ -19273,7 +19265,7 @@ namespace
 		payload.featureSet.AddFeature(VulkanNativeFeature::SingleSubgraph);
 		payload.featureSet.AddFeature(plan->dtype == DataType::Float32
 		                                  ? VulkanNativeBinaryF32FeatureFlag(plan->op)
-		                                  : VulkanNativeFeature::SameShapeElementwiseBinaryLowPrecision);
+										  : VulkanNativeFeature::SameShapeElementwiseBinaryLowPrecision);
 		auto spirv = VulkanNativeSameShapeBinarySPIRV(plan->dtype, plan->op, plan->elementCount);
 		payload.spirv = std::move(spirv.words);
 
@@ -20259,12 +20251,12 @@ namespace
 		    TimedCompileDiagnostic(options, "cpu-aot emit object file", [&] { return EmitObjectFile(*llvmModule); });
 		LogCompileDiagnostic(options, std::format("cpu-aot object file bytes={}", instructions.size()));
 		return CompiledArtifactParts{ std::move(rodata),
-			                          std::move(instructions),
-			                          std::move(externalized->constants),
-			                          std::move(externalized->weights),
-			                          std::move(externalized->externalTensorInfos),
-			                          std::move(inputSpecs),
-			                          std::move(entryOutputSpecs) };
+		                              std::move(instructions),
+		                              std::move(externalized->constants),
+		                              std::move(externalized->weights),
+		                              std::move(externalized->externalTensorInfos),
+		                              std::move(inputSpecs),
+		                              std::move(entryOutputSpecs) };
 	}
 } // namespace
 
@@ -20380,7 +20372,7 @@ CPUAOTActivationMathCapabilities LiteNN::QueryCPUAOTActivationMathCapabilities()
 		.strictSupported = true,
 		.boundedSupported = true,
 		.boundedExpMaximumUlp = 2.0F,
-		.boundedExpOverflowInput = 88.3762626647949F,
+		.boundedExpOverflowInput = 0x1.62e42ep+6F,
 		.boundedExpUnderflowInput = -103.972084045410F,
 		.boundedPreservesSpecialValues = true,
 #if LITENN_HAS_X86_AVX2_TARGET
@@ -20448,11 +20440,11 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, 
 				    {
 					    ++estimate.constantNodeCount;
 					    const auto byteSize = static_cast<std::uint64_t>(node.value.NumElements()) *
-					                          LiteNN::ElementByteSize(node.value.DType());
+						                      LiteNN::ElementByteSize(node.value.DType());
 					    estimate.constantPayloadBytes = SaturatedAddU64(estimate.constantPayloadBytes, byteSize);
 					    const bool externalized = options.enableCPUAOTExternalRegions &&
-					                              CanExternalizeCPUTensorInMLIR(node.value.DType()) &&
-					                              byteSize >= options.cpuAOTExternalConstantMinBytes;
+						                          CanExternalizeCPUTensorInMLIR(node.value.DType()) &&
+						                          byteSize >= options.cpuAOTExternalConstantMinBytes;
 					    if (externalized)
 					    {
 						    estimate.projectedExternalConstantBytes =
@@ -20468,7 +20460,7 @@ CompileBudgetEstimate LiteNN::EstimateCompileBudget(const ExecutablePlan& plan, 
 				    {
 					    ++estimate.quantizedConstantNodeCount;
 					    const auto byteSize = static_cast<std::uint64_t>(node.storage.NumElements()) *
-					                          LiteNN::ElementByteSize(node.storage.DType());
+						                      LiteNN::ElementByteSize(node.storage.DType());
 					    estimate.quantizedConstantPayloadBytes =
 					        SaturatedAddU64(estimate.quantizedConstantPayloadBytes, byteSize);
 					    estimate.projectedInlineMLIRPayloadBytes =
@@ -20639,7 +20631,7 @@ CompiledModule<CPU> CompiledModuleSeparatedArtifact::LoadBorrowedExternalRegions
 	auto instructions = RestoreLegacyInstructionsFromSeparated(
 	    metadata.legacyMetadata.backend,
 	    RegionBytes({ .data = owner->instructions_.data(), .size = owner->instructions_.size() },
-	                kInstructionsRegionName),
+		            kInstructionsRegionName),
 	    constants);
 	auto module = CompiledModule<CPU>::Load({
 	    .rodata = metadata.legacyRodata.data(),
@@ -21846,8 +21838,8 @@ namespace
 		{
 			throw std::runtime_error(
 			    std::format("Vulkan native payload requires Vulkan 1.1 or newer; device '{}' reports {}.{}.{}",
-			                VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor,
-			                capabilities.apiVersionMinor, capabilities.apiVersionPatch));
+				            VulkanDeviceCapabilityName(capabilities), capabilities.apiVersionMajor,
+				            capabilities.apiVersionMinor, capabilities.apiVersionPatch));
 		}
 		for (std::size_t kernelIndex = 0; kernelIndex < payload.kernels.size(); ++kernelIndex)
 		{
@@ -21857,7 +21849,7 @@ namespace
 			{
 				throw std::runtime_error(
 				    std::format("Vulkan native kernel {} requires unsupported descriptor ABI version {}", kernelIndex,
-				                requirements.descriptorAbiVersion));
+					            requirements.descriptorAbiVersion));
 			}
 			if (kernel.groups.x == 0 || kernel.groups.y == 0 || kernel.groups.z == 0)
 			{
@@ -21870,10 +21862,10 @@ namespace
 			{
 				throw std::runtime_error(
 				    std::format("Vulkan native kernel {} requires dispatch groups {}x{}x{}, but device '{}' supports "
-				                "maxComputeWorkGroupCount {}x{}x{}",
-				                kernelIndex, kernel.groups.x, kernel.groups.y, kernel.groups.z,
-				                VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupCount[0],
-				                capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
+					            "maxComputeWorkGroupCount {}x{}x{}",
+					            kernelIndex, kernel.groups.x, kernel.groups.y, kernel.groups.z,
+					            VulkanDeviceCapabilityName(capabilities), capabilities.maxComputeWorkGroupCount[0],
+					            capabilities.maxComputeWorkGroupCount[1], capabilities.maxComputeWorkGroupCount[2]));
 			}
 			const auto descriptorCount = VulkanDescriptorCount(kernel);
 			if (capabilities.maxBoundDescriptorSets < 1)
@@ -21912,10 +21904,10 @@ namespace
 			{
 				throw std::runtime_error(
 				    std::format("Vulkan native kernel {} requires compute subgroup size {}, but device '{}' reports "
-				                "subgroupSize={}, compute={}, basic={}",
-				                kernelIndex, requirements.requiredSubgroupSize,
-				                VulkanDeviceCapabilityName(capabilities), capabilities.subgroupSize,
-				                capabilities.subgroupComputeAvailable, capabilities.subgroupBasicAvailable));
+					            "subgroupSize={}, compute={}, basic={}",
+					            kernelIndex, requirements.requiredSubgroupSize,
+					            VulkanDeviceCapabilityName(capabilities), capabilities.subgroupSize,
+					            capabilities.subgroupComputeAvailable, capabilities.subgroupBasicAvailable));
 			}
 			RequireVulkanNativeDeviceFeature(
 			    requirements.deviceRequirements, VulkanNativeDeviceRequirement::SubgroupArithmetic,
@@ -21983,7 +21975,7 @@ namespace
 				{
 					throw std::runtime_error(
 					    std::format("Vulkan native kernel {} binding {} byte offset {} is not aligned to {} bytes",
-					                kernelIndex, argument.binding, argument.byteOffset, requiredAlignment));
+						            kernelIndex, argument.binding, argument.byteOffset, requiredAlignment));
 				}
 			}
 		}
@@ -22419,7 +22411,7 @@ std::span<Tensor<Vulkan>> CompiledModule<Vulkan>::RunTensors(std::span<const Ten
 	{
 		throw std::runtime_error(
 		    std::format("CompiledModule Vulkan workspace output count mismatch: expected {}, got {}",
-		                impl_->outputSpecs.size(), workspace.outputs_.size()));
+			            impl_->outputSpecs.size(), workspace.outputs_.size()));
 	}
 	for (std::size_t i = 0; i < inputs.size(); ++i)
 	{

@@ -536,6 +536,9 @@ P0 implementation order:
   - [x] Implement bounded standalone and fused helpers and freeze their maximum-error, saturation, special-value, and
     ISA-dispatch contracts. The public capability reports a conservative 2 ULP bound, fixed overflow/underflow inputs,
     special-value preservation, and host AVX2+FMA availability; scalar tails and cross-platform fallback are covered.
+  - [x] Harden the scalar/vector range boundary (2026-09-22). Remove premature scalar-tail exponential overflow,
+    correct capability metadata, and test amplified finite values across SIMD widths, tails, and strided storage.
+    The before/after regression and 196 passing compiler/GGUF tests are recorded in the bounded-activation evidence.
   - [x] Pass the production-shape and full-model promotion gates. The stable built-in row is `0.182-0.184 ms` for 48
     calls versus an initial strict `11.6 ms`; three alternating cache-hit pairs improve `5.20%`, `3.05%`, and `9.00%`
     with identical token ids/text and no fallback.

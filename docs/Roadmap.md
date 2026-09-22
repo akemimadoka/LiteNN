@@ -3293,6 +3293,10 @@ Priority classes:
             `std::exp` remains the default/reference path, and bounded artifacts cannot silently fall back.
       - [x] Implement bounded standalone/fused helpers and freeze a conservative 2 ULP error bound, saturation inputs,
             special-value behavior, AVX2+FMA dispatch, scalar tail, and cross-platform fallback contracts.
+            - [x] Correct the scalar-tail exponential overflow boundary and add amplified-error regressions across
+                  vector, scalar-tail, and strided rows (2026-09-22). The former `-0` versus `-32.4998665` discrepancy
+                  is fixed; compiler/GGUF validation passes 196/196. Evidence:
+                  `docs/QwenCPUDecodeBoundedActivationEvidence_2026-08-19.md`.
       - [x] Pass the production-shape and full-Qwen promotion gates. The built-in 48-call row is `0.182-0.184 ms`
             versus an initial strict `11.6 ms`; three alternating cache-hit pairs improve `5.20/3.05/9.00%`
             (`5.20%` median) with identical token ids/text, no fallback, and the intended cache-v4 helper artifact.

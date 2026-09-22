@@ -10,7 +10,7 @@ compiler options, helper ABI, rodata feature set, and GGUF AOT cache identity.
 The bounded contract is:
 
 - maximum advertised exponential error: 2 ULP;
-- overflow input: `88.3762626647949F`;
+- largest finite exponential input: `0x1.62e42ep+6F` (`88.7228317`, corrected on 2026-09-22);
 - underflow input: `-103.972084045410F`;
 - preserved signed zero, NaN, and infinity behavior for SwiGLU;
 - AVX2+FMA dispatch on supported x86 hosts, bounded scalar tail handling, and strict scalar fallback for strided rows.
@@ -70,3 +70,19 @@ profile-classification tests pass. The implementation clears both promotion gate
 This closes the confirmed activation implementation deficit. Remaining cross-runtime work is controlled end-to-end
 closure: reproduce the strongest reference provenance under matched host state, then re-rank the now smaller
 Gate/Up, logits, attention-output, and module-residual differences rather than reopening FFN Down.
+
+## Range Correction (2026-09-22)
+
+The original scalar tail clamped `exp` to infinity above `88.3762627`, earlier than the Float32 overflow boundary.
+The vector and strided paths did not have that clamp. A regression reproduced `gate=-88.5, up=1e38` returning `-0`
+in scalar lanes while the strict result was `-32.4998665`. The previous absolute-only tolerance hid the unamplified
+error. The tail now delegates large exponents and non-finite inputs to `std::exp`; the normal SIMD polynomial is
+unchanged. Capability metadata reports the corrected largest finite input, verified against its next representable
+Float32 neighbor.
+
+Range tests cover widths 1/7/8/9/15/16/17, contiguous and stride-2 storage, amplified upstream values, signed zero,
+NaN, infinity, and overflow neighbors. The test failed before the fix and passed after it. The focused compiler/GGUF
+CTest set passed 196/196. On the current GCC 16.2 Release build, five 48-call repetitions measured `7.19 ms` strict,
+`0.144 ms` built-in bounded, and `0.392 ms` pinned ggml. Contiguous strict/bounded wall CV was `0.49/0.37%`; maximum
+absolute/relative delta stayed `9.54e-7/3.47e-7` with zero special-value mismatches. Strided timing was noisy and is not
+used for a speedup claim. These are current same-binary controls, not a speedup against the August toolchain.

@@ -49,6 +49,11 @@ extern "C" void litenn_cpu_matmul_bias_relu_parallel_f32(const float* lhs, const
                                                          std::uint64_t biasRows, std::uint64_t threadCount,
                                                          std::uint64_t schedulingPolicy, bool relu);
 
+extern "C" void litenn_cpu_swiglu_bounded_f32(const float*, const float*, std::int64_t, std::int64_t, std::int64_t,
+                                              std::int64_t, std::int64_t, const float*, const float*, std::int64_t,
+                                              std::int64_t, std::int64_t, std::int64_t, std::int64_t, float*, float*,
+                                              std::int64_t, std::int64_t, std::int64_t, std::int64_t, std::int64_t);
+
 namespace
 {
 	static_assert(CPUAOTCompilationCacheVersion >= 4,
@@ -321,7 +326,7 @@ namespace
 		Tensor<CPU> storage({ -3.0, 1.0, 5.0, 7.0 }, { 2, 2 }, DataType::Int8);
 		const auto quantized =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::Int8, { 2, 2 } } });
+			           { OutputInfo{ DataType::Int8, { 2, 2 } } });
 		sg.SetResults({ { quantized, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -338,7 +343,7 @@ namespace
 		Tensor<CPU> storage({ 0xf1, 0x02 }, { 2 }, DataType::UInt8);
 		const auto quantized =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 2 } } });
+			           { OutputInfo{ DataType::UInt8, { 2 } } });
 		sg.SetResults({ { quantized, 0 } });
 		graph.AddSubgraph(std::move(sg));
 		graph.SetForward(0);
@@ -355,7 +360,7 @@ namespace
 		Tensor<CPU> storage({ 0xf1, 0x02 }, { 2 }, DataType::UInt8);
 		const auto quantized =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 2 } } });
+			           { OutputInfo{ DataType::UInt8, { 2 } } });
 		const auto dequantized = sg.AddNode(DequantizeNode{ { quantized, 0 }, params, DataType::Float32 },
 		                                    { OutputInfo{ DataType::Float32, { 3 } } });
 		sg.SetResults({ { dequantized, 0 } });
@@ -473,7 +478,7 @@ namespace
 		Tensor<CPU> storage({ -2.0, 2.0, 6.0, -6.0, 0.0, 10.0 }, { 3, 2 }, DataType::Int8);
 		const auto weight =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::Int8, { 3, 2 } } });
+			           { OutputInfo{ DataType::Int8, { 3, 2 } } });
 		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });
@@ -494,7 +499,7 @@ namespace
 		Tensor<CPU> storage({ 4.0, 12.0, 6.0, 4.0, 10.0, 16.0 }, { 3, 2 }, DataType::UInt8);
 		const auto weight =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 3, 2 } } });
+			           { OutputInfo{ DataType::UInt8, { 3, 2 } } });
 		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });
@@ -515,7 +520,7 @@ namespace
 		Tensor<CPU> storage({ 4.0, 12.0, 6.0, 4.0, 10.0, 16.0 }, { 3, 2 }, DataType::UInt8);
 		const auto weight =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 3, 2 } } });
+			           { OutputInfo{ DataType::UInt8, { 3, 2 } } });
 		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });
@@ -536,7 +541,7 @@ namespace
 		Tensor<CPU> storage({ 0xf1, 0x02, 0x34 }, { 3 }, DataType::UInt8);
 		const auto weight =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 3 } } });
+			           { OutputInfo{ DataType::UInt8, { 3 } } });
 		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });
@@ -557,7 +562,7 @@ namespace
 		Tensor<CPU> storage({ 0x21, 0x43, 0x65 }, { 3 }, DataType::UInt8);
 		const auto weight =
 		    sg.AddNode(QuantizedConstantNode{ storage.CopyToDevice(PolymorphicDevice{ CPU{} }), params },
-		               { OutputInfo{ DataType::UInt8, { 3 } } });
+			           { OutputInfo{ DataType::UInt8, { 3 } } });
 		const auto output = sg.AddNode(QuantizedMatMulNode{ { input, 0 }, { weight, 0 }, params, false },
 		                               { OutputInfo{ DataType::Float32, { 2, 2 } } });
 		sg.SetResults({ { output, 0 } });
@@ -609,7 +614,7 @@ namespace
 		const auto h1 = Layer::CreateLinear(
 		    builder,
 		    Tensor<CPU>({ 0.5, -0.25, 0.75, 0.125, -0.5, 0.25, 1.0, -1.0, 0.375, 0.625, -0.75, 0.5 }, { 3, 4 },
-		                DataType::Float32),
+			            DataType::Float32),
 		    Tensor<CPU>({ 0.1, -0.2, 0.3, -0.4 }, { 1, 4 }, DataType::Float32));
 		const auto h2 = Layer::CreateLinear(
 		    builder, Tensor<CPU>({ 0.25, -0.5, 0.75, 0.5, 0.125, -0.25, -0.375, 0.625 }, { 4, 2 }, DataType::Float32),
@@ -743,7 +748,7 @@ namespace
 					if (ReadFloat(outputs[0], i) != expected)
 					{
 						return { false,
-							     std::format("worker {} output {} mismatch at iteration {}", workerId, i, iteration) };
+						         std::format("worker {} output {} mismatch at iteration {}", workerId, i, iteration) };
 					}
 				}
 			}
@@ -1115,7 +1120,7 @@ TEST(CompiledModuleTest, CPUDataMovementSoftmaxArtifactMatchesInterpreter)
 		1.0, -2.0, 0.5, 3.0, 0.25, -1.0,
 	};
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { 1, 2, 3 },
-		                                              DataType::Float32) };
+	                                                  DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected =
@@ -1385,7 +1390,7 @@ TEST(CompiledModuleTest, CPUActivationMathCapabilitiesAreExplicit)
 	EXPECT_TRUE(capabilities.strictSupported);
 	EXPECT_TRUE(capabilities.boundedSupported);
 	EXPECT_FLOAT_EQ(capabilities.boundedExpMaximumUlp, 2.0F);
-	EXPECT_FLOAT_EQ(capabilities.boundedExpOverflowInput, 88.3762626647949F);
+	EXPECT_FLOAT_EQ(capabilities.boundedExpOverflowInput, 0x1.62e42ep+6F);
 	EXPECT_FLOAT_EQ(capabilities.boundedExpUnderflowInput, -103.972084045410F);
 	EXPECT_TRUE(capabilities.boundedPreservesSpecialValues);
 	EXPECT_TRUE(IsCPUAOTActivationMathPolicySupported(CPUAOTActivationMathPolicy::Strict));
@@ -1444,6 +1449,84 @@ TEST(CompiledModuleTest, CPUBoundedActivationMathCompilesAndMatchesContract)
 			if (expected == 0.0F)
 			{
 				EXPECT_EQ(std::signbit(value), std::signbit(expected)) << "element " << i;
+			}
+		}
+	}
+}
+
+TEST(CompiledModuleTest, CPUBoundedSwiGLUPreservesRangeAcrossVectorTailAndStridedRows)
+{
+	const auto infinity = std::numeric_limits<float>::infinity();
+	const auto nan = std::numeric_limits<float>::quiet_NaN();
+	const auto maximum = std::numeric_limits<float>::max();
+	const auto overflowInput = QueryCPUAOTActivationMathCapabilities().boundedExpOverflowInput;
+	EXPECT_TRUE(std::isfinite(std::exp(overflowInput)));
+	EXPECT_TRUE(std::isinf(std::exp(std::nextafter(overflowInput, infinity))));
+	const std::array gates{ -overflowInput,
+	                        -std::nextafter(overflowInput, infinity),
+	                        -maximum,
+	                        -infinity,
+	                        -104.0F,
+	                        -100.0F,
+	                        -89.0F,
+	                        -88.75F,
+	                        -88.7F,
+	                        -88.5F,
+	                        -88.375F,
+	                        -88.0F,
+	                        -87.5F,
+	                        -0.0F,
+	                        0.0F,
+	                        87.5F,
+	                        88.0F,
+	                        88.5F,
+	                        100.0F,
+	                        104.0F,
+	                        maximum,
+	                        infinity,
+	                        nan };
+	for (const auto gate : gates)
+	{
+		for (const auto up : { 1.0F, -1.0F, 1.0e38F })
+		{
+			for (const std::int64_t width : { 1, 7, 8, 9, 15, 16, 17 })
+			{
+				for (const std::int64_t stride : { 1, 2 })
+				{
+					SCOPED_TRACE(std::format("gate={} up={} width={} stride={}", gate, up, width, stride));
+					std::vector<float> gateData(width * stride, gate);
+					std::vector<float> upData(width * stride, up);
+					std::vector<float> output(width * stride, nan);
+					litenn_cpu_swiglu_bounded_f32(nullptr, gateData.data(), 0, 1, width, width * stride, stride,
+					                              nullptr, upData.data(), 0, 1, width, width * stride, stride, nullptr,
+					                              output.data(), 0, 1, width, width * stride, stride);
+					const auto expected = gate / (1.0F + std::exp(-gate)) * up;
+					for (std::int64_t lane = 0; lane < width; ++lane)
+					{
+						const auto actual = output[lane * stride];
+						if (std::isnan(expected))
+						{
+							EXPECT_TRUE(std::isnan(actual));
+						}
+						else if (std::isinf(expected) || expected == 0.0F)
+						{
+							EXPECT_EQ(actual, expected);
+							EXPECT_EQ(std::signbit(actual), std::signbit(expected));
+						}
+						else
+						{
+							EXPECT_NEAR(actual, expected,
+							            std::abs(expected) * 1.0e-6F + 4.0F * std::numeric_limits<float>::denorm_min());
+						}
+					}
+					if (stride == 2)
+					{
+						for (std::int64_t lane = 0; lane < width; ++lane)
+						{
+							EXPECT_TRUE(std::isnan(output[lane * stride + 1]));
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1817,7 +1900,7 @@ TEST(CompiledModuleTest, CPUSGDStepArtifactMatchesInterpreter)
 	const auto gradient = sg.AddParam(DataType::Float32, { 4 });
 	const auto update =
 	    sg.AddNode(SGDStepNode{ { parameter, 0 }, { gradient, 0 }, std::nullopt, 0.25, 0.0, 0.1, false },
-	               { OutputInfo{ DataType::Float32, { 4 } } });
+		           { OutputInfo{ DataType::Float32, { 4 } } });
 	sg.SetResults({ { update, 0 } });
 	graph.SetForward(graph.AddSubgraph(std::move(sg)));
 
@@ -2597,7 +2680,7 @@ TEST(CompiledModuleTest, DynamicRoPECacheInvalidatesAcrossPositions)
 	for (const auto position : { std::int64_t{ 3 }, std::int64_t{ 4 }, std::int64_t{ 3 } })
 	{
 		std::array<Tensor<CPU>, 2> inputs = { values,
-			                                  Tensor<CPU>({ static_cast<double>(position) }, { 1 }, DataType::Int64) };
+		                                      Tensor<CPU>({ static_cast<double>(position) }, { 1 }, DataType::Int64) };
 		const auto expected = interpreter.RunForward(plan, inputs);
 		const auto actual = compiled.RunTensors(inputs);
 		ASSERT_EQ(actual.size(), 1u);
@@ -2651,7 +2734,7 @@ TEST(CompiledModuleTest, NarrowMatMulRowTileMatchesReference)
 	Graph graph;
 	const auto weightIndex = graph.AddVariable(Variable::Create(
 	    Tensor<CPU>({ 1.0, -2.0, 0.5, 3.0, -1.0, 0.25, 4.0, -1.5, 2.0, 0.75, -3.0, 1.0, 2.5, -0.5, 1.25 }, { 3, 5 },
-	                DataType::Float32)));
+		            DataType::Float32)));
 
 	Subgraph sg;
 	const auto input = sg.AddParam(DataType::Float32, { 16, 3 });
@@ -2956,7 +3039,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainMatchesInterpreter)
 	auto graph = BuildWideLinearChainGraph(kBatch);
 	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput },
-		                                              DataType::Float32) };
+	                                                  DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected =
@@ -3003,9 +3086,9 @@ TEST(CompiledModuleTest, CPUParallelThreadPoolSurvivesRapidParticipantCountChang
 	std::vector<float> bias(columns, 1.0F);
 	std::vector<float> output(rows * columns);
 	constexpr std::array threadCounts{ std::uint64_t{ 0 }, std::uint64_t{ 16 }, std::uint64_t{ 4 },
-		                               std::uint64_t{ 8 }, std::uint64_t{ 2 },  std::uint64_t{ 0 } };
+	                                   std::uint64_t{ 8 }, std::uint64_t{ 2 },  std::uint64_t{ 0 } };
 	constexpr std::array waitPolicies{ CPUAOTWorkerWaitPolicy::Adaptive, CPUAOTWorkerWaitPolicy::LowPower,
-		                               CPUAOTWorkerWaitPolicy::Latency };
+	                                   CPUAOTWorkerWaitPolicy::Latency };
 
 	for (std::size_t iteration = 0; iteration < 4096; ++iteration)
 	{
@@ -3138,7 +3221,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainLoadsExternalRegions)
 	auto graph = BuildWideLinearChainGraph(kBatch);
 	auto inputData = MakePatternValues(kBatch * kInput, 0.01f);
 	std::array<Tensor<CPU>, 1> inputs = { Tensor<CPU>(std::span<const double>(inputData), { kBatch, kInput },
-		                                              DataType::Float32) };
+	                                                  DataType::Float32) };
 
 	Runtime::Interpreter<CPU> interpreter;
 	const auto expected =
@@ -3779,7 +3862,7 @@ TEST(CompiledModuleTest, CPUParallelLinearChainRejectsBroaderMalformedExternalTe
 	    separated,
 	    [&](std::vector<std::byte>& metadata, const ExternalTensorMetadataOffsets& offsets) {
 		    WriteU64LEForTest(metadata, offsets.byteOffset,
-		                      static_cast<std::uint64_t>(separated.Weights().size() + 64));
+			                  static_cast<std::uint64_t>(separated.Weights().size() + 64));
 	    },
 	    "byte range is out of bounds");
 }
