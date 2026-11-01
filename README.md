@@ -11,7 +11,11 @@ LiteNN
 
 - 静态计算图前端、Autograd、Interpreter 运行时
 - 基于 MLIR/LLVM 的 CPU AOT 编译与 CompiledModule 加载执行
-- 模型保存/加载、训练 API、MNIST 与 carrier 示例
+- 可选的 CUDA 与 Vulkan native 后端，按能力检查启用，fallback 显式可见
+- vNext 模型包与权重外置的 separated artifact
+- GGUF、Torch manifest、safetensors 与 LoRA 导入
+- 面向 Qwen2.5-Coder 14B GGUF 的 CPU AOT 生成路径，以 llama.cpp 作为对照基准
+- 训练 API，以及 MNIST、carrier、GGUF、SDXL 等示例
 - 可安装的 CMake 包导出，支持 `find_package(LiteNN)`
 
 ## 文档
@@ -64,6 +68,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/install_git_hooks.ps1
 cmake -S . -B build -DLITENN_ENABLE_MLIR=ON -DCMAKE_PREFIX_PATH="<llvm-cmake-dir>;<mlir-cmake-dir>"
 cmake --build build
 ```
+
+CI 固定使用一个 LLVM 发行版，版本号由 [ci.yml](.github/workflows/ci.yml) 的 `LLVM_MAJOR` 决定。
 
 ## 临时产物管理
 

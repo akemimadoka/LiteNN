@@ -18,7 +18,7 @@ LiteNN 使用语义化版本号 `MAJOR.MINOR.PATCH`，但在 `1.0.0` 之前采�
 - C++ named module：`import LiteNN;` 对应的公开 surface 与 runtime ABI。
 - CMake package surface：`LiteNN::LiteNN`、可选 `LiteNN::LiteNNCompiler`、组件名、导出路径。
 - Conan recipe surface：选项名、默认值、package layout、cmake package integration。
-- Graph model serialization：`SaveModel/LoadModel` 的 on-disk binary format。
+- vNext 模型包：`SaveVNextModelPackage` / `LoadVNextModelPackage` 的 manifest 与目录布局。
 - CompiledModule image ABI：rodata header、metadata schema、instruction image compatibility checks。
 
 ## 弃用策略
@@ -31,16 +31,15 @@ LiteNN 当前没有正式的 API deprecation pipeline；从现在开始采用以
 
 如果某项接口由于安全性、数据损坏风险或严重 ABI 缺陷必须直接撤回，必须在 changelog 的 Compatibility Notes 中单独说明。
 
-## Graph 模型序列化规则
+## vNext 模型包规则
 
-`SaveModel/LoadModel` 的格式版本必须按以下原则演进：
+raw Graph archive（`SaveModel` / `LoadModel`）已移除，持久化模型统一使用 vNext 模型包。manifest 携带 `VNextVersionSet`，包含 `manifest`、`opSet`、`dtypeSet`、`layoutSet`、`quantizationSet`、`artifactABI` 六个版本分量，演进规则如下：
 
-- 新增可选字段或向后兼容 metadata：提升 format minor version 或在现有 version 下引入显式 feature flag。
-- 改变已有字段语义、删除字段、改变 Node payload 编码：提升 format major version。
-- 新 reader 应尽量兼容旧 writer；旧 reader 不要求兼容新 writer。
+- 用 `VNextABIVersionBumpRuleFor()` 判断每类变更要提升的分量，`DescribeVNextABIVersionBumpRules()` 列出全部规则。
+- tensor binding、external region、backend requirement、runtime state、runtime schedule 和 artifact entry 的变更都提升 `artifactABI`。
 - 每次格式变更都必须更新架构文档、`docs/Versioning.md` 和 changelog。
 
-如果未来需要跨版本迁移工具，优先提供“旧格式读入 -> Graph -> 新格式写出”的显式升级路径，而不是在 Loader 中静默重写。
+如果未来需要跨版本迁移工具，优先提供“旧格式读入 -> ExecutableModule -> 新格式写出”的显式升级路径，而不是在 Loader 中静默重写。
 
 ## CompiledModule image 规则
 

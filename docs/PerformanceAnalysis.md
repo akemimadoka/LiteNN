@@ -1,5 +1,8 @@
 # LiteNN AOT 性能分析报告
 
+> 说明：第 1–4 节的基线数据来自 2026-05-10，保留用于追溯，后续优化后已不代表当前性能；第 5 节的勾选状态随实现更新。
+> 最新横向对比见 [PerformanceBenchmark_2026-06-18.md](PerformanceBenchmark_2026-06-18.md)，Qwen decode 见 [文档索引](README.md)。
+>
 > 目标：在 LiteNN AOT 与 PyTorch（单线程）已有的"约 2 倍差距"基础上，
 > 系统性地排查瓶颈、给出可量化证据、并列出按收益排序的可行优化方案。
 

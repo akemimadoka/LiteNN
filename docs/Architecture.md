@@ -535,7 +535,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 - [x] **Autograd 完整性回归**：系统覆盖广播梯度、变量梯度顺序、多变量、多输出、共享 callee、CondNode/WhileNode、Concat/Slice、Reduce、FusedOpNode 相关组合。`AutogradRegressionTest` 覆盖广播参数梯度 reduce 回原 shape、多输出 grad_output 累加到共享输入，以及 `backward results = [grad_inputs..., grad_variables...]` 中 variable gradient 按 variableIndex 排序的约定；既有 `InterpreterTest`、`WhileNodeTest`、`ConcatSliceTest`、`FusionPassTest` 覆盖共享 callee、嵌套 call、Cond/While、Concat/Slice、Reduce 和 Autograd→Fusion 流水线。
 - [x] **错误信息与诊断上下文**：公共执行/编译入口在失败时携带可定位上下文。GraphValidator 错误包含 subgraphId/nodeId/node kind 与 expected/got dtype+shape；Interpreter 节点执行异常补充 `subgraphId/nodeId/node kind`；Interpreter 和 CompiledModule 输入校验补充 expected/got dtype+shape。Tensor/Device 内部错误仍保持底层异常，由公共入口包裹或由 GraphValidator 提前拦截。
 - [x] **线程安全边界**：明确 Graph、Interpreter、CompiledModule、MLIR context/JIT 初始化和销毁的线程模型。只读 Graph 可跨线程共享；每个线程必须使用独立 `Interpreter<D>`；同一个 `Interpreter<D>` 不支持并发 `RunForward` / `RunBackward`；`CompiledModule<CPU>::Run` 可在输入/输出 buffer 独立时并发调用。`ThreadSafetyTest` 覆盖只读 Graph + 独立 Interpreter，`CompiledModuleTest.ConcurrentRunUsesIndependentInputAndOutputBuffers` 覆盖 AOT Run 并发 smoke。
-- [ ] **CI 矩阵**：覆盖 Windows/Linux、Debug/Release、`LITENN_ENABLE_MLIR=ON/OFF`、MinGW/Clang/MSVC（如支持）。所有测试需纳入可复现的持续集成。（暂时推迟）
+- [ ] **CI 矩阵**：已覆盖 Linux GCC Release 下的 minimal runtime、importers、compiler/AOT、tools/examples 和 benchmark 五个 profile。Windows、Debug、Clang 和 GPU 后端仍未覆盖。
 - [x] **内存安全验证**：新增 `LITENN_ENABLE_SANITIZERS` / `LITENN_SANITIZERS` CMake 开关；GNU/Clang 构建可启用 ASAN/UBSAN/LSAN，MSVC 构建回退到 AddressSanitizer + Debug CRT heap diff。新增 `MemorySafetyTest` 长时间循环覆盖 Tensor 视图赋值/析构、PolymorphicDevice 拷贝/张量 round-trip，以及 `CompiledModule::Load` 对 image 字节的复制与生命周期隔离。
 
 ### P1：用户可用性
@@ -564,7 +564,7 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 - [x] **AOT 优化策略（阶段完成）**：已完成 host CPU/features、LLVM O3 pipeline、fast-math、vector dialect lowering、MatMul shape-specialized micro-kernel、MatMulBiasAdd/ReLU 融合。
 - [x] **CUDA native AOT MVP**：`Compiler<CUDA>` 已识别静态 shape、单 subgraph、`Float32` 单输入单输出 `UnaryOp::Negate/Abs/Sqrt/Exp/Log/Sin/Cos`、双输入单输出 `BinaryOp::Add/Subtract/Multiply/Divide/Max/Min`、同 rank 静态 broadcast 和二维 `Float32` MatMul；elementwise 生成 `CUDANative` PTX payload，MatMul 生成 cuBLAS library-call payload。`CompiledModule<CUDA>` 直接以 CUDA Tensor 指针 launch kernel 或调用 cuBLAS，不匹配图仍回退 CPU AOT bridge。
 - [x] **CUDA PTX 模板收敛（R0/R2/R3 完成）**：elementwise/broadcast PTX 已从 `CompiledModule.cpp` 拆到独立 `CUDANativeCodegen` 模块；当前 `UnaryOp::Negate/Abs/Sqrt/Exp/Log/Sin/Cos`、same-shape `BinaryOp::Add/Subtract/Multiply/Divide/Max/Min` 与 same-rank broadcast binary 已改为 `OpBuilder` 结构化生成 MLIR `gpu.module`/`gpu.func`，再 lowering 到 NVVM/LLVM IR，由 NVPTX 后端生成 PTX 并接入 CUDA native payload。`Abs/Sqrt/Exp/Log/Sin/Cos/Max/Min` 采用 NVVM intrinsic 或等价 LLVM op，避免 standalone PTX 依赖 libdevice 外部符号；手写 PTX 暂作为旧 op fallback 保留，后续继续扩展 reduce/fusion。详细拆分见 `docs/CUDAAOTRoadmap.md` 的 P2.5。
-- [ ] **AOT 优化策略（后续）**：继续补 K blocking、B panel packing、CPU feature aware tile policy、Graph/MLIR/ASM dump 和 regression stats。
+- [ ] **AOT 优化策略（后续）**：继续补 K blocking。B panel packing、CPU feature aware tile policy、Graph/MLIR dump 和 ASM 统计已完成，见 `docs/PerformanceAnalysis.md`。
 - [ ] **性能基准套件**：和 NumPy/PyTorch/ONNX Runtime 在小模型、MLP、CNN、控制流图上的 correctness 和吞吐对比。
 
 ### P2：工程发布与维护
@@ -615,5 +615,5 @@ LiteNN 当前已经具备静态 Graph、Pass 系统、Autograd、Interpreter、�
 - [ ] **JIT / Template Interpreter**：`Runtime/` 目录预留了扩展空间
 - [x] **CUDA Device 第一版**：新增 `LITENN_ENABLE_CUDA`，提供 `CUDA` device、`CUDADeviceCount()` / `IsCUDADeviceAvailable()`、CUDA Runtime 分配/释放/清零、CPU↔GPU/D2D 拷贝、dtype 转换、`Float32/Float64` 二维 MatMul cuBLAS 路径，以及 unary/binary/reduce/concat/slice CPU fallback；新增 `CUDADeviceTest.cpp` 覆盖 round-trip、cuBLAS MatMul、跨实例 copy 与 PolymorphicDevice 路径
 - [ ] **更多 Device**：Metal 等 GPU 后端；CUDA 后续需要补充原生 kernel、stream/allocator、异步执行与 AOT GPU codegen
-- [ ] **LiteNN.ixx module 导出**：完善 C++26 module 接口
+- [x] **LiteNN.ixx module 导出**：`import LiteNN;` 已随安装和导出元数据提供
 - [ ] **Interprocedural Specialization（封闭世界跨子图优化）**：Graph 本身是封闭世界，除前向/后向入口外的所有子图只需处理内部调用。对不适合 inline 的子图，可对所有 call site 的参数属性求交集，利用调用中共同的特征进行特化优化（部分求值、分支消除、更激进的常量折叠等）。类似 Dart type flow graph 的思路。预期最大收益点：AutogradPass 生成图的结构性冗余消除（零梯度路径剪枝、dead branch elimination）、WhileNode 引入后循环体的跨子图优化。建议在 InlinePass + ConstFoldPass 基础设施就绪、WhileNode 实现后评估 ROI
