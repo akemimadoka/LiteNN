@@ -3,6 +3,18 @@
 
 include "Dialect/LiteNNDialect.td"
 
+// LLVM 24 makes these SymbolOpInterface methods required and moves the stock
+// versions into SymbolName/SymbolVisibility traits that older releases lack.
+defvar LiteNN_SymbolMethods = [{
+    ::mlir::StringAttr getNameAttr() { return getSymNameAttr(); }
+    ::mlir::SymbolTable::Visibility getVisibility() {
+      return ::mlir::SymbolTable::getSymbolVisibility(getOperation());
+    }
+    void setVisibility(::mlir::SymbolTable::Visibility vis) {
+      ::mlir::SymbolTable::setSymbolVisibility(getOperation(), vis);
+    }
+}];
+
 //===----------------------------------------------------------------------===//
 // FuncOp — represents a Subgraph
 //===----------------------------------------------------------------------===//
@@ -22,7 +34,7 @@ def LiteNN_FuncOp : LiteNN_Op<"func", [
     OpBuilder<(ins "llvm::StringRef":$name, "mlir::FunctionType":$type)>
   ];
   let hasCustomAssemblyFormat = 1;
-  let extraClassDeclaration = [{
+  let extraClassDeclaration = LiteNN_SymbolMethods # [{
     //===------------------------------------------------------------------===//
     // FunctionOpInterface
     //===------------------------------------------------------------------===//
@@ -56,6 +68,7 @@ def LiteNN_VariableOp : LiteNN_Op<"variable", [Symbol]> {
     OptionalAttr<ElementsAttr>:$initial_value
   );
   let assemblyFormat = "$sym_name `:` $type (`=` $initial_value^)? attr-dict";
+  let extraClassDeclaration = LiteNN_SymbolMethods;
 }
 
 def LiteNN_GetVariableOp : LiteNN_Op<"get_variable", [Pure]> {
@@ -133,13 +146,13 @@ def LiteNN_CallOp : LiteNN_Op<"call", [
     OptionalAttr<DictArrayAttr>:$res_attrs
   );
   let results = (outs Variadic<AnyType>);
-  let assemblyFormat = "$callee `(` $operands `)` attr-dict `:` functional-type($operands, results)";
+  let assemblyFormat = "$callee `(` $operands `)` prop-dict attr-dict `:` functional-type($operands, results)";
   let extraClassDeclaration = [{
     mlir::CallInterfaceCallable getCallableForCallee() {
       return (*this)->getAttrOfType<mlir::SymbolRefAttr>("callee");
     }
     void setCalleeFromCallable(mlir::CallInterfaceCallable callee) {
-      (*this)->setAttr("callee", mlir::cast<mlir::SymbolRefAttr>(callee.get<mlir::SymbolRefAttr>()));
+      (*this)->setAttr("callee", mlir::cast<mlir::SymbolRefAttr>(callee));
     }
     mlir::Operation::operand_range getArgOperands() {
       return getOperands();

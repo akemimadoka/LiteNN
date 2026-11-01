@@ -3,6 +3,10 @@ on: [push, pull_request]
 permissions:
   contents: read
 
+env:
+  # Keep a released major: apt.llvm.org's unversioned channel follows trunk and breaks MLIR consumers without notice.
+  LLVM_MAJOR: "23"
+
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -12,27 +16,27 @@ jobs:
         include:
           - name: minimal-runtime
             preset: ci-minimal-runtime
-            cmake_prefix: ""
+            use_llvm: "false"
             run_tests: "true"
             run_benchmark: "false"
           - name: importers
             preset: ci-importers
-            cmake_prefix: ""
+            use_llvm: "false"
             run_tests: "true"
             run_benchmark: "false"
           - name: compiler-aot
             preset: ci-compiler-aot
-            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
+            use_llvm: "true"
             run_tests: "true"
             run_benchmark: "false"
           - name: tools-examples
             preset: ci-tools-examples
-            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
+            use_llvm: "true"
             run_tests: "true"
             run_benchmark: "false"
           - name: benchmarks
             preset: ci-benchmarks
-            cmake_prefix: "/usr/lib/llvm-24/lib/cmake/llvm;/usr/lib/llvm-24/lib/cmake/mlir"
+            use_llvm: "true"
             run_tests: "false"
             run_benchmark: "true"
 
@@ -49,18 +53,16 @@ jobs:
           wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | sudo tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
           echo 'deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ noble main' | sudo tee /etc/apt/sources.list.d/kitware.list >/dev/null
-          echo 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble main' | sudo tee /etc/apt/sources.list.d/llvm-toolchain.list >/dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${LLVM_MAJOR} main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain.list >/dev/null
           sudo apt update
-          sudo apt install g++-16 cmake llvm-24-dev libmlir-24-dev mlir-24-tools libzstd-dev libedit-dev ninja-build python3
+          sudo apt install g++-16 cmake "llvm-${LLVM_MAJOR}-dev" "libmlir-${LLVM_MAJOR}-dev" "mlir-${LLVM_MAJOR}-tools" libzstd-dev libedit-dev ninja-build python3
       - name: configure
         shell: bash
-        env:
-          LITENN_CMAKE_PREFIX_PATH: ${{ matrix.cmake_prefix }}
         run: |
           set -euo pipefail
           args=(-DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16)
-          if [[ -n "${LITENN_CMAKE_PREFIX_PATH}" ]]; then
-            args+=("-DCMAKE_PREFIX_PATH=${LITENN_CMAKE_PREFIX_PATH}")
+          if [[ "${{ matrix.use_llvm }}" == "true" ]]; then
+            args+=("-DCMAKE_PREFIX_PATH=/usr/lib/llvm-${LLVM_MAJOR}/lib/cmake/llvm;/usr/lib/llvm-${LLVM_MAJOR}/lib/cmake/mlir")
           fi
           /usr/bin/cmake --preset "${{ matrix.preset }}" "${args[@]}"
       - name: build
@@ -114,7 +116,7 @@ jobs:
           rm -rf .benchmark-baseline build-benchmark-baseline
           git worktree add --force --detach .benchmark-baseline "${{ steps.benchmark_baseline.outputs.sha }}"
           git -C .benchmark-baseline submodule update --init --recursive
-          /usr/bin/cmake -S .benchmark-baseline -B build-benchmark-baseline -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH="/usr/lib/llvm-23/lib/cmake/llvm;/usr/lib/llvm-23/lib/cmake/mlir"
+          /usr/bin/cmake -S .benchmark-baseline -B build-benchmark-baseline -G Ninja -DCMAKE_C_COMPILER=/usr/bin/gcc-16 -DCMAKE_CXX_COMPILER=/usr/bin/g++-16 -DCMAKE_BUILD_TYPE=Release -DLITENN_ENABLE_MLIR=ON -DLITENN_BUILD_BENCHMARKS=ON -DCMAKE_PREFIX_PATH="/usr/lib/llvm-${LLVM_MAJOR}/lib/cmake/llvm;/usr/lib/llvm-${LLVM_MAJOR}/lib/cmake/mlir"
           /usr/bin/cmake --build build-benchmark-baseline --parallel --target litenn_bench
           ./build-benchmark-baseline/benchmark/litenn_bench \
             --benchmark_out=benchmark-baseline.json \
